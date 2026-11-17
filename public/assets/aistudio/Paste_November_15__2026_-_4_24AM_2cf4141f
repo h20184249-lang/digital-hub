@@ -1,0 +1,1210 @@
+DIGITAL HUB — ULTIMATE MASTER BUILD PROMPT
+
+VERSION 3.0 — COMPLETE A TO Z DIGITAL MARKETPLACE
+
+Premium E-Commerce + Digital Services + Advertisement Network + Payment System + Private Admin Dashboard
+
+You are an elite full-stack software development team consisting of:
+
+- Senior Full-Stack Developer
+- UI/UX Designer
+- React and TypeScript Engineer
+- Backend Developer
+- Firebase Database Architect
+- Cybersecurity Engineer
+- E-Commerce Specialist
+- QA and Testing Engineer
+
+Your mission is to build a complete, professional, scalable digital services marketplace named DIGITAL HUB.
+
+This must be a real, functional, database-connected commercial website.
+
+Do not create only a landing page, static demo, frontend mockup, or fake dashboard.
+
+Build the entire application with working customer features, product management, payment verification, advertisements, order tracking, and a secure administrator dashboard.
+
+01. BRAND IDENTITY
+
+Brand Name: DIGITAL HUB
+
+Tagline: Your Complete Digital Services Marketplace.
+
+Business Type: Digital Services Marketplace and Online Store.
+
+Primary Market: Bangladesh.
+
+Currency: Bangladeshi Taka (BDT / ৳).
+
+Default Language: Bangla.
+
+Secondary Language: English.
+
+Create a professional DIGITAL HUB logo with an attractive digital-inspired icon.
+
+Use the brand identity consistently throughout the website.
+
+02. DESIGN SYSTEM — VERY IMPORTANT
+
+Use my uploaded Mango Topup-style orange and white mobile website screenshot as the primary design reference.
+
+Do not use the previous dark navy and purple design.
+
+Create a premium orange-and-white marketplace interface.
+
+COLOR PALETTE:
+
+- Primary Orange: #FF8500
+- Secondary Orange: #FF9B19
+- Background: #F3F6FF
+- Card Background: #FFFFFF
+- Primary Text: #172033
+- Secondary Text: #777777
+- Success: Green
+- Error: Red
+
+DESIGN REQUIREMENTS:
+
+- Clean white cards.
+- Orange gradients.
+- Rounded corners.
+- Soft card shadows.
+- Professional product images.
+- Attractive typography.
+- Modern icons.
+- Smooth animations.
+- Beautiful section dividers.
+- Responsive product grids.
+- Professional bottom navigation.
+- Consistent spacing.
+
+MOBILE DESIGN:
+Create a mobile-first experience inspired by the supplied reference.
+
+Top header:
+
+- DIGITAL HUB logo.
+- Wallet balance.
+- Customer profile picture.
+
+Homepage:
+
+- Large promotional slider.
+- Quick-access orange service buttons.
+- FLASH SALE section.
+- HOT PRODUCT section.
+- Featured products.
+- Advertisement banners.
+- Advertisement player.
+- Special offers.
+- Latest services.
+
+Bottom navigation:
+
+1. Home
+2. My Orders
+3. Add Money
+4. My Wallet
+5. My Account
+
+Add a floating customer support button.
+
+DESKTOP DESIGN:
+Create a wider professional layout with:
+
+- Full navigation bar.
+- Hero slider.
+- Category navigation.
+- Product grids.
+- Advertisement placements.
+- Footer.
+
+The desktop and mobile versions must share the same brand identity.
+
+03. COMPLETE WEBSITE NAVIGATION
+
+Create these main pages:
+
+1. Home
+2. All Services
+3. Telegram Store
+4. VIP Groups
+5. Telegram Stars
+6. AI Marketplace
+7. Software Store
+8. Digital Products
+9. Graphic Design
+10. Social Media Services
+11. Gaming Store
+12. Offers
+13. Advertisements
+14. My Orders
+15. Add Money
+16. My Wallet
+17. My Account
+18. Support
+19. About Us
+20. Contact Us
+21. Privacy Policy
+22. Terms and Conditions
+23. Refund Policy
+
+Every navigation item must work.
+
+04. COMPLETE DIGITAL SERVICE MARKETPLACE
+
+Create the following service categories.
+
+A. TELEGRAM SERVICES
+
+- Telegram Premium.
+- Telegram Premium Gifts.
+- Telegram Stars.
+- Telegram Subscription Packages.
+- Other authorized Telegram services.
+
+Allow different subscription durations where officially available.
+
+B. TELEGRAM VIP COMMUNITY
+
+- VIP Telegram Groups.
+- Private Telegram Channels.
+- Premium Communities.
+- Exclusive Memberships.
+- Learning Groups.
+- Membership Renewal.
+
+Display:
+
+- Membership duration.
+- Price.
+- Benefits.
+- Rules.
+- Availability.
+- Join instructions.
+
+Only sell groups and memberships that I own or am authorized to distribute.
+
+C. AI TOOLS MARKETPLACE
+
+- AI Writing Tools.
+- AI Image Generation Tools.
+- AI Video Tools.
+- AI Productivity Tools.
+- AI Business Tools.
+- Authorized AI subscriptions.
+
+D. SOFTWARE STORE
+
+- Authorized Software Licenses.
+- Design Software.
+- Productivity Software.
+- Editing Tools.
+- Developer Tools.
+- Digital Software Products.
+
+E. GRAPHIC DESIGN SERVICES
+
+- Logo Design.
+- Banner Design.
+- YouTube Thumbnail.
+- Facebook Cover.
+- Social Media Posts.
+- Business Card Design.
+- Custom Design.
+
+F. SOCIAL MEDIA SERVICES
+
+- Social Media Branding.
+- Content Creation.
+- Promotional Design.
+- Marketing Consultation.
+- Page Design.
+- Legitimate Promotional Services.
+
+G. DIGITAL PRODUCTS
+
+- E-books.
+- Templates.
+- Design Resources.
+- Digital Assets.
+- Downloadable Products.
+- Educational Materials.
+
+H. GAMING STORE
+
+- Authorized Game Top-ups.
+- Gaming Digital Products.
+- Gaming Memberships.
+- Gaming Services.
+
+Each product must include:
+
+- Product name.
+- Product image.
+- Category.
+- Full description.
+- Price.
+- Original price.
+- Discount percentage.
+- Delivery time.
+- Availability.
+- Purchase button.
+- Add to Cart button.
+- Customer instructions.
+- Terms and conditions.
+
+Do not invent products, prices, official partnerships, or automated delivery integrations.
+
+The administrator must be able to create unlimited additional categories and products.
+
+05. HOMEPAGE AND PRODUCT SECTIONS
+
+Create a complete homepage with:
+
+1. Premium Header.
+2. Wallet Balance.
+3. Profile Avatar.
+4. Promotional Image Slider.
+5. Quick Service Buttons.
+6. Telegram Services.
+7. FLASH SALE.
+8. HOT PRODUCT.
+9. TRENDING SERVICES.
+10. BEST SELLERS.
+11. NEW ARRIVALS.
+12. AI MARKETPLACE.
+13. SOFTWARE STORE.
+14. DIGITAL PRODUCTS.
+15. VIP COMMUNITY.
+16. ADVERTISEMENT BANNERS.
+17. ADVERTISEMENT PLAYER.
+18. SPECIAL OFFERS.
+19. CUSTOMER REVIEWS.
+20. WHY CHOOSE US.
+21. FAQ.
+22. CUSTOMER SUPPORT.
+23. Professional Footer.
+
+All homepage content must be editable from the administrator dashboard.
+
+06. ADVANCED ADVERTISEMENT MANAGEMENT SYSTEM
+
+This is one of the most important features.
+
+Integrate my previously supplied advertisement destinations into the website.
+
+EXISTING ADVERTISEMENT URLS:
+
+ADVERTISEMENT 01:
+https://asiafilm.org/4/3bd80e4a46fc298c2401cc0798e0e870
+
+ADVERTISEMENT 02:
+https://asiafilm.org/4/4afe6519d68bdd1362edcd80ecfa3057
+
+ADVERTISEMENT 03:
+https://asiafilm.org/4/0c01dd0141ed410962c5b4a9eb0a86c8
+
+ADVERTISEMENT 04:
+https://auctionr.org/4/93b175fb00b5407f2dfa6456ae852e7c
+
+ADVERTISEMENT 05:
+https://asiafilm.org/4/2f2c61836d6e9328ab3485b65d8b3fae
+
+ADVERTISEMENT 06:
+https://arwf.org/4/268e1645e2ede4000fc614
+
+IMPORTANT:
+Preserve these URLs exactly.
+
+Do not replace the URLs with invented links.
+
+Create a flexible advertisement system that supports additional URLs added later.
+
+ADVERTISEMENT TYPES:
+
+- Banner Ads.
+- Image Ads.
+- Sponsored Cards.
+- Promotional Cards.
+- External Advertisement Links.
+- Valid Video Advertisements.
+- Advertisement Player Cards.
+
+ADVERTISEMENT PLACEMENTS:
+
+- Homepage Top Banner.
+- Homepage Middle Banner.
+- Homepage Bottom Banner.
+- Between Product Sections.
+- Product Details Page.
+- Service Details Page.
+- Customer Dashboard.
+- Dedicated Advertisement Page.
+
+ADVERTISEMENT PLAYER:
+
+Create a dedicated section where multiple advertisement cards are displayed.
+
+Each card should have:
+
+- Advertisement image.
+- Advertisement title.
+- Description.
+- Play or Visit button.
+- Destination URL.
+- Active status.
+
+When the user presses the button, open the associated advertisement destination safely.
+
+For genuine video URLs, support video playback.
+
+Do not pretend that an ordinary redirect URL is a video file.
+
+ADVERTISEMENT SEQUENCE:
+
+- Support multiple advertisements.
+- Allow administrator-controlled order.
+- Display all enabled ads.
+- Allow ads to be paused or activated.
+- Support scheduled ads.
+- Allow individual placements.
+
+ADMIN ADVERTISEMENT CONTROLS:
+
+- Add Advertisement.
+- Edit Advertisement.
+- Delete Advertisement.
+- Change URL.
+- Upload Banner Image.
+- Change Advertisement Title.
+- Change Description.
+- Change Display Position.
+- Change Priority.
+- Activate or Deactivate.
+- Set Start Date.
+- Set End Date.
+- View Clicks.
+- View Impressions.
+- View CTR.
+
+ADVERTISEMENT ANALYTICS:
+
+Show:
+
+- Total Impressions.
+- Total Clicks.
+- Click-through Rate.
+- Active Advertisements.
+- Advertisement Performance.
+
+Do not claim advertising income unless the advertising provider confirms actual earnings.
+
+Never use forced popups, deceptive redirects, unauthorized scripts, or hidden downloads.
+
+07. PAYMENT SYSTEM — BANGLADESH
+
+Configure my payment methods as follows.
+
+bKash Personal:
+01727936180
+
+Nagad Personal:
+01727936180
+
+Rocket Personal:
+01799792541
+
+Currency: BDT (৳).
+
+Display payment methods during checkout and Add Money.
+
+Create an attractive payment selection interface.
+
+PAYMENT WORKFLOW:
+
+1. Customer selects a service or adds money.
+2. Customer chooses bKash, Nagad, or Rocket.
+3. Display the correct payment number.
+4. Display clear Send Money instructions.
+5. Customer completes payment externally.
+6. Customer submits sender number.
+7. Customer enters Transaction ID.
+8. Customer can upload a payment receipt.
+9. Create a pending verification record.
+10. Admin checks the real transaction.
+11. Admin approves or rejects.
+12. Customer receives a notification.
+
+PAYMENT STATUS:
+
+- Awaiting Payment.
+- Verification Pending.
+- Approved.
+- Rejected.
+- Refunded.
+
+SECURITY:
+
+- Never approve payments automatically based only on screenshots.
+- Never trust a customer-entered transaction ID as proof of payment.
+- Prevent duplicate transaction submissions.
+- Record payment verification history.
+- Allow admin to add rejection reasons.
+- Protect payment information.
+- Never create fake payment success.
+
+Keep all payment details configurable from the Admin Dashboard.
+
+Design the backend so authorized payment gateway integration can be added in the future.
+
+Do not claim that personal payment numbers have automatic payment gateway API functionality.
+
+08. CUSTOMER AUTHENTICATION
+
+Implement:
+
+- Customer Registration.
+- Customer Login.
+- Logout.
+- Google Sign-In.
+- Email Authentication.
+- Password Reset.
+- Account Verification.
+- Profile Editing.
+- Profile Picture.
+- Secure Session Management.
+
+Avoid paid SMS OTP in the initial version.
+
+09. CUSTOMER DASHBOARD
+
+Create a beautiful customer dashboard.
+
+Display:
+
+- Welcome Message.
+- Customer Name.
+- Profile Image.
+- Account Information.
+- Total Orders.
+- Pending Orders.
+- Completed Orders.
+- Rejected Orders.
+- Wallet Balance.
+- Promotional Credits.
+- Referral Information.
+- Notifications.
+- Support Tickets.
+
+Create dedicated pages for:
+
+- My Profile.
+- My Orders.
+- Payment History.
+- My Wallet.
+- Add Money.
+- Referral Center.
+- My Coupons.
+- Notifications.
+- Support.
+- Account Settings.
+
+Customers must only access their own information.
+
+10. SHOPPING CART AND CHECKOUT
+
+Implement a complete shopping system.
+
+Features:
+
+- Add to Cart.
+- Remove from Cart.
+- Update Quantity.
+- Cart Summary.
+- Product Pricing.
+- Discount Coupons.
+- Delivery Instructions.
+- Customer Notes.
+- Checkout.
+- Payment Selection.
+- Order Confirmation.
+
+Generate a unique order ID.
+
+Prevent duplicate orders.
+
+Display an order confirmation page after successful order creation.
+
+11. ADD MONEY SYSTEM
+
+Create a dedicated Add Money page.
+
+Customer can:
+
+1. Enter an amount.
+2. Select a payment method.
+3. View payment instructions.
+4. Send money.
+5. Submit Transaction ID.
+6. Upload receipt.
+7. Wait for verification.
+
+After administrator approval, update the promotional or account balance according to the configured wallet rules.
+
+Keep real monetary funds and promotional credits clearly separated.
+
+Maintain a complete transaction ledger.
+
+Do not allow customers to create money or change their own balances.
+
+12. MY WALLET
+
+Create a professional wallet page.
+
+Display:
+
+- Available Balance.
+- Promotional Credits.
+- Total Added Money.
+- Total Spent.
+- Transaction History.
+- Pending Transactions.
+
+Use secure, server-controlled balance updates.
+
+Do not enable cash withdrawals in the initial version unless a separately verified payout system is configured.
+
+13. REFERRAL AND AFFILIATE SYSTEM
+
+Every customer receives a unique referral code.
+
+Features:
+
+- Referral Link.
+- Referral Code.
+- Copy Referral Link.
+- Referral History.
+- Total Referrals.
+- Qualified Referrals.
+- Reward History.
+- Configurable Commission.
+
+Admin can configure reward conditions.
+
+Prevent:
+
+- Self-referrals.
+- Duplicate rewards.
+- Fake accounts.
+- Fraudulent transactions.
+
+Only grant rewards after qualifying conditions are met.
+
+14. COUPON AND DISCOUNT SYSTEM
+
+Create a complete coupon management system.
+
+Admin can:
+
+- Create Coupon.
+- Edit Coupon.
+- Delete Coupon.
+- Set Fixed Discount.
+- Set Percentage Discount.
+- Set Expiration.
+- Set Minimum Order.
+- Set Usage Limit.
+- Enable or Disable.
+
+Customers can apply valid coupons during checkout.
+
+15. ORDER MANAGEMENT
+
+Create a complete order management system.
+
+Every order must include:
+
+- Unique Order ID.
+- Customer ID.
+- Product Details.
+- Product Quantity.
+- Total Amount.
+- Payment Method.
+- Transaction ID.
+- Order Date.
+- Payment Status.
+- Delivery Status.
+- Admin Notes.
+
+ORDER STATUSES:
+
+- Pending Payment.
+- Verification Pending.
+- Paid.
+- Processing.
+- Completed.
+- Rejected.
+- Cancelled.
+
+Customers can track orders.
+
+Admin can update order statuses and add delivery instructions.
+
+16. PRODUCT DELIVERY SYSTEM
+
+Support two delivery methods.
+
+A. MANUAL DELIVERY:
+
+Admin receives the order, verifies payment, and manually delivers the service.
+
+B. AUTHORIZED AUTOMATIC DELIVERY:
+
+Support future integration with official and authorized service APIs.
+
+Display delivery instructions and completion status.
+
+Never pretend that a service has been delivered when it has not.
+
+17. CUSTOMER NOTIFICATION SYSTEM
+
+Create notifications for:
+
+- Registration.
+- New Order.
+- Payment Submission.
+- Payment Approval.
+- Payment Rejection.
+- Order Processing.
+- Order Completion.
+- Referral Reward.
+- Coupon.
+- Promotional Announcement.
+
+Show notification badges and unread counts.
+
+Use in-app notifications initially.
+
+Keep email or push notification integration optional.
+
+18. CUSTOMER SUPPORT SYSTEM
+
+Create a professional support center.
+
+Features:
+
+- Contact Form.
+- Support Tickets.
+- Customer Messages.
+- Admin Replies.
+- Ticket Status.
+- Order ID Reference.
+- Complaint History.
+- FAQ.
+
+Allow configurable:
+
+- WhatsApp Support Link.
+- Telegram Support Link.
+- Facebook Page Link.
+
+Do not invent contact links.
+
+19. REVIEWS AND RATINGS
+
+Customers who have completed eligible orders can submit:
+
+- Product Rating.
+- Written Review.
+- Optional Image.
+
+Admin can:
+
+- Approve Reviews.
+- Hide Reviews.
+- Delete Inappropriate Reviews.
+
+Do not generate fake customer testimonials.
+
+20. PRIVATE ADMIN DASHBOARD
+
+Create a separate, fully functional, secure administrator dashboard.
+
+Suggested route:
+/admin
+
+This route must be protected.
+
+Only authorized administrator accounts can access it.
+
+ADMIN DESIGN:
+
+Use the same orange and white brand identity.
+
+Create a professional sidebar and responsive mobile admin navigation.
+
+ADMIN DASHBOARD OVERVIEW:
+
+Display:
+
+- Total Customers.
+- New Customers.
+- Total Products.
+- Total Orders.
+- Pending Orders.
+- Completed Orders.
+- Pending Payments.
+- Total Verified Revenue.
+- Advertisement Impressions.
+- Advertisement Clicks.
+- Sales Analytics.
+- Recent Orders.
+- Recent Payments.
+
+ADMIN SIDEBAR:
+
+1. Dashboard Overview.
+2. Customer Management.
+3. Product Management.
+4. Category Management.
+5. Order Management.
+6. Payment Verification.
+7. Add Money Requests.
+8. Wallet Management.
+9. Advertisement Management.
+10. Banner Management.
+11. Advertisement Analytics.
+12. Referral Management.
+13. Coupon Management.
+14. Support Tickets.
+15. Reviews Management.
+16. Website Content.
+17. Reports.
+18. Website Settings.
+19. Admin Security.
+20. Logout.
+
+ADMIN PRODUCT MANAGEMENT:
+
+- Add Products.
+- Edit Products.
+- Delete Products.
+- Upload Images.
+- Set Prices.
+- Set Discounts.
+- Change Availability.
+- Manage Categories.
+- Feature Products.
+- Manage Delivery Instructions.
+
+ADMIN CUSTOMER MANAGEMENT:
+
+- View Customers.
+- Search Customers.
+- View Customer Profiles.
+- View Customer Order History.
+- Suspend Accounts.
+- Reactivate Accounts.
+
+Never reveal passwords or private authentication credentials.
+
+ADMIN ORDER MANAGEMENT:
+
+- View All Orders.
+- Search Order ID.
+- Filter by Status.
+- Filter by Date.
+- Update Order Status.
+- Add Delivery Notes.
+- View Payment Details.
+
+ADMIN PAYMENT MANAGEMENT:
+
+- Review Payment Requests.
+- Verify Transaction IDs.
+- Review Receipts.
+- Approve Payments.
+- Reject Payments.
+- Add Rejection Reasons.
+- View Payment History.
+
+ADMIN ADVERTISEMENT MANAGEMENT:
+
+- Add Unlimited Advertisements.
+- Edit Advertisement URLs.
+- Delete Advertisements.
+- Upload Banner Images.
+- Change Advertisement Titles.
+- Manage Advertisement Player.
+- Manage Placement.
+- Manage Sequence.
+- View Analytics.
+- Enable and Disable Advertisements.
+
+ADMIN WEBSITE MANAGEMENT:
+
+- Change Website Logo.
+- Change Homepage Banner.
+- Manage Promotional Slider.
+- Change Homepage Sections.
+- Manage Categories.
+- Edit Support Links.
+- Edit Payment Instructions.
+- Publish Announcements.
+- Manage FAQs.
+- Edit Terms and Policies.
+
+ADMIN REPORTS:
+
+- Daily Sales.
+- Weekly Sales.
+- Monthly Sales.
+- Total Verified Revenue.
+- Product Performance.
+- Customer Growth.
+- Payment Reports.
+- Advertisement Analytics.
+- Referral Reports.
+
+Allow CSV export.
+
+21. ADMIN AUTHENTICATION AND SECURITY
+
+This is a critical requirement.
+
+Create a secure administrator authentication system.
+
+- No public administrator registration.
+- No hardcoded admin password.
+- No frontend-only security.
+- No public role escalation.
+- Server-side admin authorization.
+- Protected admin API routes.
+- Firestore security rules.
+- Verified admin roles.
+- Audit logs.
+- Input validation.
+- Secure sessions.
+- Rate limiting where supported.
+
+Create an initial administrator setup guide.
+
+Ask me to provide my administrator email through secure environment configuration.
+
+Never invent an administrator email or password.
+
+Never expose private secrets in frontend code.
+
+22. FIREBASE DATABASE STRUCTURE
+
+Use Firebase Authentication and Cloud Firestore.
+
+Create these collections:
+
+users
+admins
+products
+categories
+orders
+payments
+walletTransactions
+walletAccounts
+advertisements
+adClicks
+adImpressions
+banners
+referrals
+referralRewards
+coupons
+notifications
+supportTickets
+reviews
+siteSettings
+auditLogs
+
+Use secure database ownership rules.
+
+Protect all sensitive operations.
+
+Use server-side validation for financial and administrative changes.
+
+Use Firestore indexes when required.
+
+Do not expose other customers' data.
+
+23. WEBSITE SETTINGS
+
+Admin must be able to manage:
+
+- Website Name.
+- Logo.
+- Favicon.
+- Contact Information.
+- Payment Numbers.
+- Social Links.
+- Support Links.
+- Homepage Banners.
+- Footer Content.
+- Language Settings.
+- Announcement Bar.
+- Promotional Content.
+- SEO Information.
+
+24. SEO AND PERFORMANCE
+
+Implement:
+
+- SEO-Friendly URLs.
+- Page Titles.
+- Meta Descriptions.
+- Open Graph.
+- Sitemap.
+- Robots.txt.
+- Optimized Images.
+- Lazy Loading.
+- Responsive Images.
+- Fast Loading.
+- Accessible Components.
+
+25. TECHNICAL STACK
+
+Use:
+
+Frontend:
+
+- React.
+- TypeScript.
+- Tailwind CSS or clean responsive CSS.
+- Lucide Icons.
+
+Backend:
+
+- Node.js.
+- Secure server-side APIs.
+
+Database:
+
+- Firebase Authentication.
+- Cloud Firestore.
+
+Security:
+
+- Firebase Security Rules.
+- Server-side authorization.
+- Environment Variables.
+
+Hosting:
+
+- Google AI Studio supported deployment or another suitable free-tier hosting service.
+
+Use free-tier-compatible options first.
+
+Do not activate paid services automatically.
+
+26. FREE DEVELOPMENT REQUIREMENTS
+
+My initial development budget is ZERO.
+
+Use:
+
+- Free development tools.
+- Free-tier database services.
+- Free-tier hosting where eligible.
+- Free subdomain.
+- Manual payment verification.
+- In-app notifications.
+
+Do not require:
+
+- Paid domain.
+- Paid hosting.
+- Paid SMS.
+- Paid API.
+- Paid payment gateway.
+- Paid subscription integrations.
+
+If a feature cannot operate without a paid service, explain why and provide a free-compatible alternative where possible.
+
+Do not activate billing without my explicit approval.
+
+27. SECURITY AND BUSINESS RULES
+
+These rules are mandatory:
+
+1. Never generate fake payment confirmations.
+2. Never generate fake revenue.
+3. Never fabricate customer statistics.
+4. Never expose private customer information.
+5. Never expose admin credentials.
+6. Never allow customers to approve their own payments.
+7. Never allow customers to edit their wallet balance.
+8. Never create fake product delivery.
+9. Never execute arbitrary advertising scripts.
+10. Never sell unauthorized subscriptions or accounts.
+11. Keep an audit log of important administrator actions.
+12. Verify all financial actions server-side.
+
+28. COMPLETE TESTING
+
+Before deployment, test:
+
+CUSTOMER:
+
+- Registration.
+- Login.
+- Logout.
+- Profile.
+- Product browsing.
+- Search.
+- Shopping cart.
+- Checkout.
+- Payment submission.
+- Order tracking.
+- Notifications.
+- Referral.
+
+PAYMENT:
+
+- bKash number.
+- Nagad number.
+- Rocket number.
+- Transaction submission.
+- Duplicate transaction protection.
+- Admin approval.
+- Admin rejection.
+
+ADVERTISEMENT:
+
+- All supplied URLs.
+- Banner display.
+- Advertisement player.
+- Click tracking.
+- Impression tracking.
+- Advertisement ordering.
+- Enable and Disable.
+
+ADMIN:
+
+- Admin Login.
+- Dashboard Overview.
+- Customer Management.
+- Product Management.
+- Order Management.
+- Payment Verification.
+- Advertisement Management.
+- Reports.
+- Settings.
+- Security Permissions.
+
+MOBILE:
+
+- Android Chrome.
+- Responsive layouts.
+- Navigation.
+- Product cards.
+- Checkout.
+- Dashboard.
+
+Fix all compilation errors, broken routes, database errors, security issues, and nonfunctional buttons.
+
+29. DEVELOPMENT EXECUTION PLAN
+
+Build the project in these stages:
+
+PHASE 1:
+Complete brand identity, orange-white design system, homepage, navigation, and mobile responsiveness.
+
+PHASE 2:
+Service categories, product catalog, product details, and search.
+
+PHASE 3:
+Firebase authentication, customer accounts, and customer dashboard.
+
+PHASE 4:
+Shopping cart, checkout, and order creation.
+
+PHASE 5:
+bKash, Nagad, Rocket manual payment and verification.
+
+PHASE 6:
+Wallet, Add Money, transaction ledger, and promotional credits.
+
+PHASE 7:
+Advertisement management, supplied advertisement URLs, banners, and analytics.
+
+PHASE 8:
+Referral system, coupons, rewards, and notifications.
+
+PHASE 9:
+Complete private administrator dashboard.
+
+PHASE 10:
+Reports, settings, security, and testing.
+
+PHASE 11:
+Deployment and launch preparation.
+
+Do not skip phases.
+
+Preserve existing project files and working features during updates.
+
+Do not overwrite the existing application with a static prototype.
+
+If a technical limitation prevents a feature from being completed, explain the limitation honestly and provide the next implementation step.
+
+30. FINAL DELIVERY REQUIREMENTS
+
+Deliver a complete DIGITAL HUB digital services marketplace.
+
+The finished application must have:
+
+- Premium orange-white design.
+- Full responsive homepage.
+- Complete digital services store.
+- Product management.
+- Customer registration and login.
+- Customer dashboard.
+- Shopping cart.
+- Checkout.
+- bKash payment instructions.
+- Nagad payment instructions.
+- Rocket payment instructions.
+- Manual payment verification.
+- Add Money system.
+- Wallet and transaction history.
+- Order management.
+- Order tracking.
+- Advertisement management.
+- Advertisement player.
+- Banner management.
+- Referral system.
+- Coupon system.
+- Notification system.
+- Customer support.
+- Private Admin Dashboard.
+- Secure Firebase database.
+- Secure authorization.
+- SEO.
+- Mobile optimization.
+
+The administrator must be able to control the entire marketplace from one dashboard.
+
+The customer must be able to use the website without accessing administrator functionality.
+
+FINAL INSTRUCTION:
+
+Start building DIGITAL HUB now.
+
+First inspect the existing project and the uploaded design reference.
+
+Then implement the complete application in organized phases.
+
+Do not stop after writing a development plan.
+
+Do not stop after creating the homepage.
+
+Build the actual working application.
+
+If any external credentials, Firebase setup, permissions, or paid services are required, explain exactly what I need to do and wait for my confirmation.
+
+My goal is to launch DIGITAL HUB as a professional, trustworthy, scalable digital marketplace with a zero-budget initial development setup.

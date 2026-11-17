@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: "Hind Siliguri", "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+    --font-display: "Plus Jakarta Sans", "Hind Siliguri", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    --dh-orange: #FF8500;
+    --dh-orange-light: #FF9B19;
+    --dh-bg: #F3F6FF;
+    --dh-card: #FFFFFF;
+    --dh-text: #172033;
+    --dh-muted: #777777;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    background-color: #F3F6FF;
+    color: #172033;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono-num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.dh-card {
+  background-color: #FFFFFF;
+  border: 1px solid #E6ECFA;
+  box-shadow: 0 4px 18px rgba(23, 32, 51, 0.045);
+}
+
+.dh-card-hover {
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.dh-card-hover:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 133, 0, 0.45);
+  box-shadow: 0 10px 26px rgba(255, 133, 0, 0.1);
+}
+
+.dh-orange-gradient {
+  background: linear-gradient(135deg, #FF8500 0%, #FF9B19 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dh-card-hover:hover {
+    transform: none;
+  }
+}

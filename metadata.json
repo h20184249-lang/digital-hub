@@ -1,0 +1,6 @@
+{
+  "name": "DIGITAL HUB",
+  "description": "DIGITAL HUB — Your Complete Digital Services Marketplace. Premium digital subscriptions, Telegram services, graphic design, social media marketing, advertisement management, and verified manual mobile payment processing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

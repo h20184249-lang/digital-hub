@@ -1,0 +1,1445 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Health connection check
+    match /test/connection {
+      allow get: if true;
+    }
+
+    // Core Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified()
+        && request.auth.token.email != null
+        && request.auth.token.email == 'ftake810@gmail.com';
+    }
+
+    function isListedAdmin() {
+      return isVerified()
+        && request.auth.token.email != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['super_admin', 'admin']
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email == request.auth.token.email;
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedAdmin()
+        || (
+          isVerified()
+          && request.auth.token.email != null
+          && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+          && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'super_admin'
+          && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email == request.auth.token.email
+        );
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || isListedAdmin();
+    }
+
+    function isActiveUser(uid) {
+      return !exists(/databases/$(database)/documents/users/$(uid))
+        || get(/databases/$(database)/documents/users/$(uid)).data.status == 'active';
+    }
+
+    function isNonEmptyStr(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isOptStr(data, key, maxLen) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isOptNum(data, key, minVal, maxVal) {
+      return !(key in data) || ((data[key] is int || data[key] is float) && data[key] >= minVal && data[key] <= maxVal);
+    }
+
+    // Entity Validators
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'referralCode', 'promotionalCredits', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'role', 'phone', 'photoUrl', 'referralCode', 'referredBy', 'promotionalCredits', 'language', 'status', 'sessionRevokedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && isNonEmptyStr(data.displayName, 1, 120)
+        && isNonEmptyStr(data.email, 3, 200)
+        && (!('role' in data) || data.role in ['admin', 'user'])
+        && isOptStr(data, 'phone', 30)
+        && isOptStr(data, 'photoUrl', 250000)
+        && isNonEmptyStr(data.referralCode, 4, 24)
+        && data.referralCode.matches('^[a-zA-Z0-9_\\-]+$')
+        && isOptStr(data, 'referredBy', 24)
+        && (data.promotionalCredits is int || data.promotionalCredits is float)
+        && data.promotionalCredits >= 0
+        && data.promotionalCredits <= 1000000
+        && (!('language' in data) || data.language in ['bn', 'en'])
+        && data.status in ['active', 'suspended']
+        && isOptNum(data, 'sessionRevokedAt', 0, 9999999999999)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'addedBy', 'createdAt'])
+        && isValidId(data.uid)
+        && isNonEmptyStr(data.email, 3, 200)
+        && data.role in ['super_admin', 'admin']
+        && isOptStr(data, 'addedBy', 128)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['id', 'slug', 'nameBn', 'nameEn', 'sortOrder', 'active', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'slug', 'nameBn', 'nameEn', 'descriptionBn', 'descriptionEn', 'imageUrl', 'sortOrder', 'active', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isNonEmptyStr(data.slug, 1, 64)
+        && isNonEmptyStr(data.nameBn, 1, 120)
+        && isNonEmptyStr(data.nameEn, 1, 120)
+        && isOptStr(data, 'descriptionBn', 500)
+        && isOptStr(data, 'descriptionEn', 500)
+        && isOptStr(data, 'imageUrl', 200000)
+        && (data.sortOrder is int || data.sortOrder is float)
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['id', 'categoryId', 'titleBn', 'titleEn', 'descriptionBn', 'descriptionEn', 'priceBdt', 'availability', 'deliveryDurationBn', 'deliveryDurationEn', 'imageUrl', 'active', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'categoryId', 'subcategoryBn', 'subcategoryEn', 'brandKey', 'titleBn', 'titleEn', 'descriptionBn', 'descriptionEn', 'priceBdt', 'originalPriceBdt', 'discountPercent', 'packages', 'availability', 'stockCount', 'orderFormType', 'deliveryDurationBn', 'deliveryDurationEn', 'validityBn', 'validityEn', 'instructionsBn', 'instructionsEn', 'termsBn', 'termsEn', 'benefitsBn', 'benefitsEn', 'sectionTag', 'imageUrl', 'bannerUrl', 'customLogoUrl', 'featured', 'sortOrder', 'active', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.categoryId)
+        && isOptStr(data, 'subcategoryBn', 100)
+        && isOptStr(data, 'subcategoryEn', 100)
+        && isOptStr(data, 'brandKey', 40)
+        && isNonEmptyStr(data.titleBn, 1, 160)
+        && isNonEmptyStr(data.titleEn, 1, 160)
+        && isNonEmptyStr(data.descriptionBn, 1, 1500)
+        && isNonEmptyStr(data.descriptionEn, 1, 1500)
+        && (data.priceBdt is int || data.priceBdt is float)
+        && data.priceBdt >= 1
+        && data.priceBdt <= 10000000
+        && isOptNum(data, 'originalPriceBdt', 0, 10000000)
+        && isOptNum(data, 'discountPercent', 0, 95)
+        && (!('packages' in data) || (data.packages is list && data.packages.size() <= 200 && (data.packages.size() == 0 || (data.packages[0] is map && 'id' in data.packages[0] && 'priceBdt' in data.packages[0]))))
+        && data.availability in ['in_stock', 'limited', 'out_of_stock']
+        && isOptNum(data, 'stockCount', 0, 1000000)
+        && (!('orderFormType' in data) || data.orderFormType in ['freefire', 'pubg_uid', 'telegram', 'giftcard', 'social', 'subscription', 'design'])
+        && isNonEmptyStr(data.deliveryDurationBn, 1, 100)
+        && isNonEmptyStr(data.deliveryDurationEn, 1, 100)
+        && isOptStr(data, 'validityBn', 200)
+        && isOptStr(data, 'validityEn', 200)
+        && isOptStr(data, 'instructionsBn', 1000)
+        && isOptStr(data, 'instructionsEn', 1000)
+        && isOptStr(data, 'termsBn', 1000)
+        && isOptStr(data, 'termsEn', 1000)
+        && isOptStr(data, 'benefitsBn', 1000)
+        && isOptStr(data, 'benefitsEn', 1000)
+        && (!('sectionTag' in data) || data.sectionTag in ['flash_sale', 'hot_product', 'trending', 'best_seller', 'new_arrival', 'standard'])
+        && isNonEmptyStr(data.imageUrl, 1, 200000)
+        && isOptStr(data, 'bannerUrl', 200000)
+        && isOptStr(data, 'customLogoUrl', 200000)
+        && (!('featured' in data) || data.featured is bool)
+        && isOptNum(data, 'sortOrder', 0, 1000000)
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['id', 'orderNumber', 'customerId', 'productId', 'totalPriceBdt', 'paymentMethod', 'transactionId', 'senderNumber', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'orderNumber', 'customerId', 'customerEmail', 'customerName', 'productId', 'productTitleBn', 'productTitleEn', 'selectedPackageName', 'itemsSummary', 'quantity', 'couponCode', 'discountBdt', 'totalPriceBdt', 'paymentMethod', 'transactionId', 'senderNumber', 'deliveryNote', 'referenceAttachmentUrl', 'status', 'rejectionReason', 'adminNote', 'cashbackBdt', 'cashbackAwarded', 'referralProcessed', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isNonEmptyStr(data.orderNumber, 4, 40)
+        && isValidId(data.customerId)
+        && isOptStr(data, 'customerEmail', 200)
+        && isOptStr(data, 'customerName', 120)
+        && isValidId(data.productId)
+        && isOptStr(data, 'productTitleBn', 200)
+        && isOptStr(data, 'productTitleEn', 200)
+        && isOptStr(data, 'selectedPackageName', 160)
+        && isOptStr(data, 'itemsSummary', 1000)
+        && (!('quantity' in data) || ((data.quantity is int || data.quantity is float) && data.quantity >= 1 && data.quantity <= 1000))
+        && isOptStr(data, 'couponCode', 32)
+        && isOptNum(data, 'discountBdt', 0, 10000000)
+        && (data.totalPriceBdt is int || data.totalPriceBdt is float)
+        && data.totalPriceBdt >= 1
+        && data.totalPriceBdt <= 10000000
+        && data.paymentMethod in ['bkash', 'nagad', 'rocket', 'wallet']
+        && isNonEmptyStr(data.transactionId, 4, 64)
+        && data.transactionId.matches('^[a-zA-Z0-9_\\-]+$')
+        && isNonEmptyStr(data.senderNumber, 4, 24)
+        && isOptStr(data, 'deliveryNote', 1200)
+        && isOptStr(data, 'referenceAttachmentUrl', 350000)
+        && data.status in ['Pending Payment', 'Verification Pending', 'Paid', 'Payment Approved', 'Processing', 'Completed', 'Rejected', 'Cancelled']
+        && isOptStr(data, 'rejectionReason', 400)
+        && isOptStr(data, 'adminNote', 500)
+        && isOptNum(data, 'cashbackBdt', 0, 100000)
+        && (!('cashbackAwarded' in data) || data.cashbackAwarded is bool)
+        && (!('referralProcessed' in data) || data.referralProcessed is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPayment(data) {
+      return data.keys().hasAll(['id', 'orderId', 'customerId', 'method', 'receiverNumber', 'senderNumber', 'transactionId', 'amountBdt', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'orderId', 'orderNumber', 'customerId', 'purpose', 'method', 'receiverNumber', 'senderNumber', 'transactionId', 'amountBdt', 'receiptDataUrl', 'status', 'rejectionReason', 'verifiedBy', 'verifiedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.orderId)
+        && isOptStr(data, 'orderNumber', 40)
+        && isValidId(data.customerId)
+        && (!('purpose' in data) || data.purpose in ['order', 'add_money'])
+        && data.method in ['bkash', 'nagad', 'rocket']
+        && isNonEmptyStr(data.receiverNumber, 6, 24)
+        && isNonEmptyStr(data.senderNumber, 6, 24)
+        && isNonEmptyStr(data.transactionId, 4, 64)
+        && data.transactionId.matches('^[a-zA-Z0-9_\\-]+$')
+        && (data.amountBdt is int || data.amountBdt is float)
+        && data.amountBdt >= 1
+        && data.amountBdt <= 10000000
+        && isOptStr(data, 'receiptDataUrl', 350000)
+        && data.status in ['Awaiting Payment', 'Verification Pending', 'Approved', 'Rejected', 'Refunded']
+        && isOptStr(data, 'rejectionReason', 400)
+        && isOptStr(data, 'verifiedBy', 128)
+        && (!('verifiedAt' in data) || data.verifiedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWalletAccount(data) {
+      return data.keys().hasAll(['uid', 'availableBalanceBdt', 'promotionalCreditsBdt', 'totalAddedBdt', 'totalSpentBdt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'availableBalanceBdt', 'promotionalCreditsBdt', 'totalAddedBdt', 'totalSpentBdt', 'coinsAvailable', 'coinsPending', 'coinsLifetimeEarned', 'coinsRedeemed', 'lastTxId', 'updatedAt'])
+        && isValidId(data.uid)
+        && (data.availableBalanceBdt is int || data.availableBalanceBdt is float)
+        && data.availableBalanceBdt >= 0
+        && data.availableBalanceBdt <= 10000000
+        && (data.promotionalCreditsBdt is int || data.promotionalCreditsBdt is float)
+        && data.promotionalCreditsBdt >= 0
+        && data.promotionalCreditsBdt <= 10000000
+        && (data.totalAddedBdt is int || data.totalAddedBdt is float)
+        && data.totalAddedBdt >= 0
+        && (data.totalSpentBdt is int || data.totalSpentBdt is float)
+        && data.totalSpentBdt >= 0
+        && isOptNum(data, 'coinsAvailable', 0, 10000000)
+        && isOptNum(data, 'coinsPending', 0, 10000000)
+        && isOptNum(data, 'coinsLifetimeEarned', 0, 10000000)
+        && isOptNum(data, 'coinsRedeemed', 0, 10000000)
+        && isOptStr(data, 'lastTxId', 80)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWalletTransaction(data) {
+      return data.keys().hasAll(['id', 'userId', 'type', 'method', 'transactionId', 'amountBdt', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userEmail', 'type', 'method', 'senderNumber', 'transactionId', 'amountBdt', 'receiptDataUrl', 'status', 'note', 'rejectionReason', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isOptStr(data, 'userEmail', 200)
+        && data.type in ['deposit', 'purchase', 'promo_credit', 'refund', 'admin_adjustment', 'cashback', 'referral', 'rewarded_ad', 'watch_earn_coin_redeem', 'withdrawal', 'withdrawal_refund']
+        && data.method in ['bkash', 'nagad', 'rocket', 'wallet', 'system']
+        && isOptStr(data, 'senderNumber', 24)
+        && isNonEmptyStr(data.transactionId, 4, 64)
+        && data.transactionId.matches('^[a-zA-Z0-9_\\-]+$')
+        && (data.amountBdt is int || data.amountBdt is float)
+        && data.amountBdt >= 1
+        && data.amountBdt <= 10000000
+        && isOptStr(data, 'receiptDataUrl', 350000)
+        && data.status in ['Verification Pending', 'Approved', 'Rejected']
+        && isOptStr(data, 'note', 400)
+        && isOptStr(data, 'rejectionReason', 400)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTxRegistry(data) {
+      return data.keys().hasAll(['txId', 'orderId', 'customerId', 'createdAt'])
+        && data.keys().hasOnly(['txId', 'orderId', 'customerId', 'createdAt'])
+        && isNonEmptyStr(data.txId, 4, 64)
+        && data.txId.matches('^[a-zA-Z0-9_\\-]+$')
+        && isValidId(data.orderId)
+        && isValidId(data.customerId)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAdvertisement(data) {
+      return data.keys().hasAll(['id', 'code', 'titleBn', 'titleEn', 'targetUrl', 'mediaType', 'placement', 'priority', 'sortOrder', 'enabled', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'code', 'titleBn', 'titleEn', 'descriptionBn', 'descriptionEn', 'targetUrl', 'mediaType', 'adFormat', 'networkName', 'mediaUrl', 'thumbnailUrl', 'placement', 'priority', 'sortOrder', 'enabled', 'startDate', 'endDate', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isNonEmptyStr(data.code, 2, 20)
+        && isNonEmptyStr(data.titleBn, 1, 160)
+        && isNonEmptyStr(data.titleEn, 1, 160)
+        && isOptStr(data, 'descriptionBn', 500)
+        && isOptStr(data, 'descriptionEn', 500)
+        && isNonEmptyStr(data.targetUrl, 8, 500)
+        && data.targetUrl.matches('^https?://.*')
+        && data.mediaType in ['external', 'video']
+        && (!('adFormat' in data) || data.adFormat in ['banner', 'native', 'social_bar', 'direct_link', 'publisher_script'])
+        && isOptStr(data, 'networkName', 60)
+        && isOptStr(data, 'mediaUrl', 500)
+        && isOptStr(data, 'thumbnailUrl', 250000)
+        && data.placement in ['player', 'service_banner', 'product_page', 'dashboard_promo', 'ads_page', 'between_sections', 'social_bar', 'all']
+        && (data.priority is int || data.priority is float)
+        && (data.sortOrder is int || data.sortOrder is float)
+        && data.enabled is bool
+        && isOptStr(data, 'startDate', 40)
+        && isOptStr(data, 'endDate', 40)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdNetworkConfig(data) {
+      return data.keys().hasAll(['id', 'provider', 'name', 'adFormat', 'placement', 'approvalStatus', 'enabled', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'provider', 'name', 'adFormat', 'placement', 'publisherId', 'zoneId', 'scriptSrc', 'containerId', 'supportsIncentivizedRewards', 'approvalStatus', 'enabled', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.provider in ['adsense', 'adsterra', 'monetag', 'propellerads', 'custom_https']
+        && isNonEmptyStr(data.name, 1, 120)
+        && data.adFormat in ['banner', 'native', 'social_bar']
+        && data.placement in ['home_top', 'home_middle', 'home_bottom', 'between_sections', 'service_page', 'product_page', 'dashboard_promo', 'social_bar', 'all']
+        && isOptStr(data, 'publisherId', 120)
+        && isOptStr(data, 'zoneId', 120)
+        && isOptStr(data, 'scriptSrc', 500)
+        && (!('scriptSrc' in data) || data.scriptSrc == '' || (data.scriptSrc.matches('^https://.*') && !data.scriptSrc.matches('.*(asiafilm\\.org/4/|auctionr\\.org/4/|arwf\\.org/4/|bicea\\.org/22/).*')))
+        && isOptStr(data, 'containerId', 120)
+        && (!('supportsIncentivizedRewards' in data) || (data.supportsIncentivizedRewards is bool && (data.supportsIncentivizedRewards == false || data.provider != 'adsense')))
+        && data.approvalStatus in ['pending_approval', 'active', 'paused']
+        && data.enabled is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdRevenueEntry(data) {
+      return data.keys().hasAll(['id', 'networkName', 'periodLabel', 'verifiedAmountBdt', 'verifiedBy', 'createdAt'])
+        && data.keys().hasOnly(['id', 'networkName', 'periodLabel', 'verifiedAmountBdt', 'reportedUsd', 'referenceId', 'verifiedBy', 'createdAt'])
+        && isValidId(data.id)
+        && isNonEmptyStr(data.networkName, 1, 100)
+        && isNonEmptyStr(data.periodLabel, 1, 80)
+        && (data.verifiedAmountBdt is int || data.verifiedAmountBdt is float)
+        && data.verifiedAmountBdt >= 0
+        && data.verifiedAmountBdt <= 100000000
+        && isOptNum(data, 'reportedUsd', 0, 10000000)
+        && isOptStr(data, 'referenceId', 100)
+        && isValidId(data.verifiedBy)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidBanner(data) {
+      return data.keys().hasAll(['id', 'titleBn', 'titleEn', 'slot', 'targetUrl', 'sortOrder', 'priority', 'enabled', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'titleBn', 'titleEn', 'subtitleBn', 'subtitleEn', 'slot', 'targetUrl', 'imageUrl', 'mobileImageUrl', 'adCode', 'sortOrder', 'priority', 'enabled', 'startDate', 'endDate', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isNonEmptyStr(data.titleBn, 1, 160)
+        && isNonEmptyStr(data.titleEn, 1, 160)
+        && isOptStr(data, 'subtitleBn', 300)
+        && isOptStr(data, 'subtitleEn', 300)
+        && data.slot in ['home_top', 'home_middle', 'home_bottom', 'between_sections', 'service_page', 'product_page', 'dashboard_promo']
+        && isNonEmptyStr(data.targetUrl, 8, 500)
+        && data.targetUrl.matches('^https?://.*')
+        && isOptStr(data, 'imageUrl', 250000)
+        && isOptStr(data, 'mobileImageUrl', 250000)
+        && isOptStr(data, 'adCode', 20)
+        && (data.sortOrder is int || data.sortOrder is float)
+        && (data.priority is int || data.priority is float)
+        && data.enabled is bool
+        && isOptStr(data, 'startDate', 40)
+        && isOptStr(data, 'endDate', 40)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdEvent(data) {
+      return data.keys().hasAll(['id', 'adId', 'placement', 'userId', 'createdAt'])
+        && data.keys().hasOnly(['id', 'adId', 'placement', 'userId', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.adId)
+        && isNonEmptyStr(data.placement, 1, 40)
+        && isValidId(data.userId)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidReferral(data) {
+      return data.keys().hasAll(['id', 'referrerId', 'referredUserId', 'referralCode', 'rewardAmountBdt', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'referrerId', 'referredUserId', 'referredEmail', 'referralCode', 'rewardAmountBdt', 'invitedRewardBdt', 'eligibilityRule', 'suspiciousFlag', 'suspiciousReason', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.referrerId)
+        && isValidId(data.referredUserId)
+        && isOptStr(data, 'referredEmail', 200)
+        && isNonEmptyStr(data.referralCode, 4, 24)
+        && (data.rewardAmountBdt is int || data.rewardAmountBdt is float)
+        && data.rewardAmountBdt >= 0
+        && data.rewardAmountBdt <= 100000
+        && isOptNum(data, 'invitedRewardBdt', 0, 100000)
+        && (!('eligibilityRule' in data) || data.eligibilityRule in ['verified_signup', 'first_paid_order', 'first_rewarded_ad'])
+        && (!('suspiciousFlag' in data) || data.suspiciousFlag is bool)
+        && isOptStr(data, 'suspiciousReason', 300)
+        && data.status in ['pending', 'qualified', 'credited', 'revoked', 'flagged']
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidReferralReward(data) {
+      return data.keys().hasAll(['id', 'referralId', 'userId', 'amountBdt', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'referralId', 'userId', 'amountBdt', 'status', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.referralId)
+        && isValidId(data.userId)
+        && (data.amountBdt is int || data.amountBdt is float)
+        && data.amountBdt >= 0
+        && data.status in ['credited', 'revoked']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCoupon(data) {
+      return data.keys().hasAll(['id', 'code', 'discountType', 'discountValue', 'minOrderBdt', 'usageLimit', 'usedCount', 'active', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'code', 'discountType', 'discountValue', 'minOrderBdt', 'usageLimit', 'usedCount', 'expiresAt', 'active', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isNonEmptyStr(data.code, 2, 32)
+        && data.code.matches('^[A-Z0-9_\\-]+$')
+        && data.discountType in ['fixed', 'percent']
+        && (data.discountValue is int || data.discountValue is float)
+        && data.discountValue >= 1
+        && (data.minOrderBdt is int || data.minOrderBdt is float)
+        && data.minOrderBdt >= 0
+        && (data.usageLimit is int || data.usageLimit is float)
+        && data.usageLimit >= 1
+        && (data.usedCount is int || data.usedCount is float)
+        && data.usedCount >= 0
+        && isOptStr(data, 'expiresAt', 40)
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReview(data) {
+      return data.keys().hasAll(['id', 'productId', 'orderId', 'userId', 'authorName', 'rating', 'comment', 'approved', 'createdAt'])
+        && data.keys().hasOnly(['id', 'productId', 'orderId', 'userId', 'authorName', 'rating', 'comment', 'approved', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.productId)
+        && isValidId(data.orderId)
+        && isValidId(data.userId)
+        && isNonEmptyStr(data.authorName, 1, 100)
+        && (data.rating is int || data.rating is float)
+        && data.rating >= 1 && data.rating <= 5
+        && isNonEmptyStr(data.comment, 3, 1000)
+        && data.approved is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['id', 'userId', 'titleBn', 'titleEn', 'messageBn', 'messageEn', 'type', 'read', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'titleBn', 'titleEn', 'messageBn', 'messageEn', 'type', 'read', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isNonEmptyStr(data.titleBn, 1, 160)
+        && isNonEmptyStr(data.titleEn, 1, 160)
+        && isNonEmptyStr(data.messageBn, 1, 600)
+        && isNonEmptyStr(data.messageEn, 1, 600)
+        && data.type in ['order', 'payment', 'promo', 'support', 'wallet']
+        && data.read is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSupportTicket(data) {
+      return data.keys().hasAll(['id', 'userId', 'subject', 'message', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userEmail', 'subject', 'message', 'orderNumber', 'status', 'adminReply', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isOptStr(data, 'userEmail', 200)
+        && isNonEmptyStr(data.subject, 2, 160)
+        && isNonEmptyStr(data.message, 4, 2000)
+        && isOptStr(data, 'orderNumber', 40)
+        && data.status in ['open', 'in_progress', 'resolved', 'closed']
+        && isOptStr(data, 'adminReply', 2000)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSiteSettings(data) {
+      return data.keys().hasAll(['id', 'siteName', 'bkashNumber', 'nagadNumber', 'rocketNumber', 'referralBonusBdt', 'adsEnabled', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'siteName', 'taglineBn', 'taglineEn', 'announcementBn', 'announcementEn', 'bkashNumber', 'nagadNumber', 'rocketNumber', 'bkashType', 'nagadType', 'rocketType', 'bkashEnabled', 'nagadEnabled', 'rocketEnabled', 'bkashLogoUrl', 'nagadLogoUrl', 'rocketLogoUrl', 'bkashNoteBn', 'bkashNoteEn', 'nagadNoteBn', 'nagadNoteEn', 'rocketNoteBn', 'rocketNoteEn', 'referralBonusBdt', 'invitedUserRewardBdt', 'referralEnabled', 'referralMinOrderBdt', 'referralEligibility', 'cashbackEnabled', 'cashbackPercent', 'cashbackMinOrderBdt', 'cashbackMaxPerOrderBdt', 'rewardedAdEnabled', 'rewardedAdAmountBdt', 'rewardedAdCooldownMinutes', 'rewardedAdDailyLimit', 'watchEarnEnabled', 'watchEarnCoinsPerAd', 'watchEarnCoinsPerBdt', 'watchEarnDailyCoinLimit', 'watchEarnMinRedeemCoins', 'adsEnabled', 'maintenanceMode', 'supportContact', 'whatsappLink', 'telegramLink', 'telegramChannelLink', 'facebookLink', 'aboutBn', 'aboutEn', 'termsBn', 'termsEn', 'privacyBn', 'privacyEn', 'refundBn', 'refundEn', 'updatedAt'])
+        && isValidId(data.id)
+        && isNonEmptyStr(data.siteName, 1, 80)
+        && isOptStr(data, 'taglineBn', 200)
+        && isOptStr(data, 'taglineEn', 200)
+        && isOptStr(data, 'announcementBn', 300)
+        && isOptStr(data, 'announcementEn', 300)
+        && isNonEmptyStr(data.bkashNumber, 10, 20)
+        && isNonEmptyStr(data.nagadNumber, 10, 20)
+        && isNonEmptyStr(data.rocketNumber, 10, 20)
+        && (!('bkashType' in data) || data.bkashType in ['Personal', 'Merchant', 'Agent'])
+        && (!('nagadType' in data) || data.nagadType in ['Personal', 'Merchant', 'Agent'])
+        && (!('rocketType' in data) || data.rocketType in ['Personal', 'Merchant', 'Agent'])
+        && (!('bkashEnabled' in data) || data.bkashEnabled is bool)
+        && (!('nagadEnabled' in data) || data.nagadEnabled is bool)
+        && (!('rocketEnabled' in data) || data.rocketEnabled is bool)
+        && isOptStr(data, 'bkashLogoUrl', 200000)
+        && isOptStr(data, 'nagadLogoUrl', 200000)
+        && isOptStr(data, 'rocketLogoUrl', 200000)
+        && isOptStr(data, 'bkashNoteBn', 300)
+        && isOptStr(data, 'bkashNoteEn', 300)
+        && isOptStr(data, 'nagadNoteBn', 300)
+        && isOptStr(data, 'nagadNoteEn', 300)
+        && isOptStr(data, 'rocketNoteBn', 300)
+        && isOptStr(data, 'rocketNoteEn', 300)
+        && (data.referralBonusBdt is int || data.referralBonusBdt is float)
+        && data.referralBonusBdt >= 0
+        && isOptNum(data, 'invitedUserRewardBdt', 0, 100000)
+        && (!('referralEnabled' in data) || data.referralEnabled is bool)
+        && isOptNum(data, 'referralMinOrderBdt', 0, 1000000)
+        && (!('referralEligibility' in data) || data.referralEligibility in ['verified_signup', 'first_paid_order', 'first_rewarded_ad'])
+        && (!('cashbackEnabled' in data) || data.cashbackEnabled is bool)
+        && isOptNum(data, 'cashbackPercent', 0, 50)
+        && isOptNum(data, 'cashbackMinOrderBdt', 0, 1000000)
+        && isOptNum(data, 'cashbackMaxPerOrderBdt', 0, 100000)
+        && (!('rewardedAdEnabled' in data) || data.rewardedAdEnabled is bool)
+        && isOptNum(data, 'rewardedAdAmountBdt', 0, 500)
+        && isOptNum(data, 'rewardedAdCooldownMinutes', 1, 1440)
+        && isOptNum(data, 'rewardedAdDailyLimit', 1, 50)
+        && (!('watchEarnEnabled' in data) || data.watchEarnEnabled is bool)
+        && isOptNum(data, 'watchEarnCoinsPerAd', 1, 1000)
+        && isOptNum(data, 'watchEarnCoinsPerBdt', 1, 10000)
+        && isOptNum(data, 'watchEarnDailyCoinLimit', 10, 100000)
+        && isOptNum(data, 'watchEarnMinRedeemCoins', 10, 100000)
+        && data.adsEnabled is bool
+        && (!('maintenanceMode' in data) || data.maintenanceMode is bool)
+        && isOptStr(data, 'supportContact', 160)
+        && isOptStr(data, 'whatsappLink', 300)
+        && isOptStr(data, 'telegramLink', 300)
+        && isOptStr(data, 'telegramChannelLink', 300)
+        && isOptStr(data, 'facebookLink', 300)
+        && isOptStr(data, 'aboutBn', 3000)
+        && isOptStr(data, 'aboutEn', 3000)
+        && isOptStr(data, 'termsBn', 4000)
+        && isOptStr(data, 'termsEn', 4000)
+        && isOptStr(data, 'privacyBn', 4000)
+        && isOptStr(data, 'privacyEn', 4000)
+        && isOptStr(data, 'refundBn', 4000)
+        && isOptStr(data, 'refundEn', 4000)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAccountDeletionRequest(data) {
+      return data.keys().hasAll(['id', 'userId', 'userEmail', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userEmail', 'reason', 'status', 'adminNote', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isNonEmptyStr(data.userEmail, 3, 200)
+        && isOptStr(data, 'reason', 500)
+        && data.status in ['pending', 'reviewed', 'completed', 'rejected']
+        && isOptStr(data, 'adminNote', 400)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWithdrawal(data) {
+      return data.keys().hasAll(['id', 'userId', 'userEmail', 'method', 'accountNumber', 'amountBdt', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userEmail', 'method', 'accountNumber', 'amountBdt', 'status', 'payoutReference', 'adminNote', 'rejectionReason', 'processedBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isNonEmptyStr(data.userEmail, 3, 200)
+        && data.method in ['bkash', 'nagad', 'rocket']
+        && isNonEmptyStr(data.accountNumber, 6, 24)
+        && (data.amountBdt is int || data.amountBdt is float)
+        && data.amountBdt >= 50
+        && data.amountBdt <= 1000000
+        && data.status in ['Pending', 'Approved', 'Rejected']
+        && isOptStr(data, 'payoutReference', 120)
+        && isOptStr(data, 'adminNote', 400)
+        && isOptStr(data, 'rejectionReason', 400)
+        && isOptStr(data, 'processedBy', 128)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnnouncement(data) {
+      return data.keys().hasAll(['id', 'titleBn', 'titleEn', 'messageBn', 'messageEn', 'type', 'createdBy', 'active', 'createdAt'])
+        && data.keys().hasOnly(['id', 'titleBn', 'titleEn', 'messageBn', 'messageEn', 'type', 'createdBy', 'active', 'createdAt'])
+        && isValidId(data.id)
+        && isNonEmptyStr(data.titleBn, 1, 160)
+        && isNonEmptyStr(data.titleEn, 1, 160)
+        && isNonEmptyStr(data.messageBn, 1, 1000)
+        && isNonEmptyStr(data.messageEn, 1, 1000)
+        && data.type in ['info', 'promo', 'policy', 'maintenance']
+        && isNonEmptyStr(data.createdBy, 1, 128)
+        && data.active is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidRewardedAdClaim(data) {
+      return data.keys().hasAll(['id', 'userId', 'networkId', 'networkName', 'amountBdt', 'claimDate', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userEmail', 'networkId', 'networkName', 'amountBdt', 'claimDate', 'status', 'rejectionReason', 'creditedBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isOptStr(data, 'userEmail', 200)
+        && isValidId(data.networkId)
+        && isNonEmptyStr(data.networkName, 1, 120)
+        && (data.amountBdt is int || data.amountBdt is float)
+        && data.amountBdt > 0
+        && data.amountBdt <= 500
+        && isNonEmptyStr(data.claimDate, 10, 10)
+        && data.claimDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.status in ['Pending Credit', 'Credited', 'Rejected']
+        && isOptStr(data, 'rejectionReason', 400)
+        && isOptStr(data, 'creditedBy', 128)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['id', 'actorUid', 'action', 'targetCollection', 'targetId', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['id', 'actorUid', 'actorEmail', 'action', 'targetCollection', 'targetId', 'summary', 'createdAt'])
+        && isValidId(data.id)
+        && isValidId(data.actorUid)
+        && isOptStr(data, 'actorEmail', 200)
+        && isNonEmptyStr(data.action, 2, 100)
+        && isNonEmptyStr(data.targetCollection, 1, 60)
+        && isNonEmptyStr(data.targetId, 1, 128)
+        && isNonEmptyStr(data.summary, 1, 500)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidReferralCode(data) {
+      return data.keys().hasAll(['code', 'userId', 'createdAt'])
+        && data.keys().hasOnly(['code', 'userId', 'createdAt'])
+        && isNonEmptyStr(data.code, 4, 24)
+        && data.code.matches('^[A-Z0-9_\\-]+$')
+        && isValidId(data.userId)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidManagedAdUnit(data) {
+      return data.keys().hasAll(['id', 'enabled', 'placements', 'showOnMobile', 'showOnDesktop', 'priority', 'rotationSeconds', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'enabled', 'placements', 'showOnMobile', 'showOnDesktop', 'priority', 'rotationSeconds', 'supportsRewardedVerification', 'updatedAt'])
+        && isValidId(data.id)
+        && data.enabled is bool
+        && data.placements is list
+        && data.placements.size() <= 12
+        && data.showOnMobile is bool
+        && data.showOnDesktop is bool
+        && (data.priority is int || data.priority is float)
+        && data.priority >= 1 && data.priority <= 999
+        && (data.rotationSeconds is int || data.rotationSeconds is float)
+        && data.rotationSeconds >= 5 && data.rotationSeconds <= 300
+        && (!('supportsRewardedVerification' in data) || data.supportsRewardedVerification is bool)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdViewingSession(data) {
+      return data.keys().hasAll(['id', 'userId', 'unitId', 'provider', 'sessionToken', 'status', 'coinsAwarded', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userEmail', 'unitId', 'provider', 'sessionToken', 'status', 'coinsAwarded', 'providerEventId', 'failureReason', 'createdAt', 'verifiedAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isOptStr(data, 'userEmail', 200)
+        && isNonEmptyStr(data.unitId, 1, 40)
+        && isNonEmptyStr(data.provider, 1, 40)
+        && isNonEmptyStr(data.sessionToken, 8, 128)
+        && data.status in ['awaiting_callback', 'credited', 'verification_failed']
+        && (data.coinsAwarded is int || data.coinsAwarded is float)
+        && data.coinsAwarded >= 0 && data.coinsAwarded <= 1000
+        && isOptStr(data, 'providerEventId', 120)
+        && isOptStr(data, 'failureReason', 400)
+        && data.createdAt is timestamp
+        && (!('verifiedAt' in data) || data.verifiedAt is timestamp)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdRewardTransaction(data) {
+      return data.keys().hasAll(['id', 'sessionId', 'userId', 'provider', 'coins', 'bdtEquivalent', 'type', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'sessionId', 'userId', 'userEmail', 'provider', 'coins', 'bdtEquivalent', 'type', 'status', 'note', 'createdAt'])
+        && isValidId(data.id)
+        && isNonEmptyStr(data.sessionId, 1, 80)
+        && isValidId(data.userId)
+        && isOptStr(data, 'userEmail', 200)
+        && isNonEmptyStr(data.provider, 1, 40)
+        && (data.coins is int || data.coins is float)
+        && data.coins > 0 && data.coins <= 1000000
+        && (data.bdtEquivalent is int || data.bdtEquivalent is float)
+        && data.bdtEquivalent >= 0 && data.bdtEquivalent <= 100000
+        && data.type in ['coin_credit', 'coin_redemption']
+        && data.status in ['Pending Credit', 'Credited', 'Rejected']
+        && isOptStr(data, 'note', 400)
+        && data.createdAt is timestamp;
+    }
+
+    // Collection Rules
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isVerified() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isVerified()
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming())
+        && incoming().uid == request.auth.uid
+        && (!('role' in incoming()) || incoming().role == 'user' || (isAdmin() && incoming().role == 'admin'))
+        && incoming().promotionalCredits == 0
+        && incoming().status == 'active'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerified()
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().referralCode == existing().referralCode
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            request.auth.uid == userId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'photoUrl', 'language', 'sessionRevokedAt', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isAdmin() || (isVerified() && request.auth.uid == adminId));
+      allow list: if isAdmin();
+      allow create: if isValidId(adminId)
+        && isSuperAdmin()
+        && isValidAdminRecord(incoming())
+        && incoming().uid == adminId
+        && incoming().email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$')
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(adminId)
+        && isSuperAdmin()
+        && isValidAdminRecord(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$')
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(adminId) && isSuperAdmin() && adminId != request.auth.uid;
+    }
+
+    match /categories/{categoryId} {
+      allow get: if isValidId(categoryId);
+      allow list: if true;
+      allow create: if isValidId(categoryId)
+        && isAdmin()
+        && isValidCategory(incoming())
+        && incoming().id == categoryId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(categoryId)
+        && isAdmin()
+        && isValidCategory(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(categoryId) && isAdmin();
+    }
+
+    match /products/{productId} {
+      allow get: if isValidId(productId);
+      allow list: if true;
+      allow create: if isValidId(productId)
+        && isAdmin()
+        && isValidProduct(incoming())
+        && incoming().id == productId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(productId)
+        && isAdmin()
+        && isValidProduct(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(productId) && isAdmin();
+    }
+
+    match /txRegistry/{txId} {
+      allow get: if isValidId(txId) && isVerified() && (resource == null || existing().customerId == request.auth.uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(txId)
+        && isVerified()
+        && isValidTxRegistry(incoming())
+        && incoming().txId == txId
+        && incoming().customerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && !exists(/databases/$(database)/documents/txRegistry/$(txId));
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /walletAccounts/{userId} {
+      allow get: if isValidId(userId) && isVerified() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isVerified()
+        && isValidWalletAccount(incoming())
+        && incoming().uid == userId
+        && (isAdmin() || incoming().updatedAt == request.time)
+        && (
+          isAdmin() ||
+          (
+            request.auth.uid == userId &&
+            incoming().availableBalanceBdt == 0 &&
+            incoming().promotionalCreditsBdt == 0 &&
+            incoming().totalAddedBdt == 0 &&
+            incoming().totalSpentBdt == 0 &&
+            (!('coinsAvailable' in incoming()) || incoming().coinsAvailable == 0) &&
+            (!('coinsPending' in incoming()) || incoming().coinsPending == 0) &&
+            (!('coinsLifetimeEarned' in incoming()) || incoming().coinsLifetimeEarned == 0) &&
+            (!('coinsRedeemed' in incoming()) || incoming().coinsRedeemed == 0)
+          )
+        );
+      allow update: if isValidId(userId)
+        && isVerified()
+        && isValidWalletAccount(incoming())
+        && incoming().uid == existing().uid
+        && (isAdmin() || incoming().updatedAt == request.time)
+        && (
+          isAdmin() ||
+          (
+            // Customer can ONLY atomically debit their own verified balance during a wallet purchase or pending withdrawal
+            request.auth.uid == userId &&
+            isActiveUser(userId) &&
+            'lastTxId' in incoming() &&
+            isValidId(incoming().lastTxId) &&
+            incoming().promotionalCreditsBdt == existing().promotionalCreditsBdt &&
+            incoming().totalAddedBdt == existing().totalAddedBdt &&
+            incoming().get('coinsAvailable', 0) == existing().get('coinsAvailable', 0) &&
+            incoming().get('coinsPending', 0) == existing().get('coinsPending', 0) &&
+            incoming().get('coinsLifetimeEarned', 0) == existing().get('coinsLifetimeEarned', 0) &&
+            incoming().get('coinsRedeemed', 0) == existing().get('coinsRedeemed', 0) &&
+            incoming().availableBalanceBdt >= 0 &&
+            incoming().availableBalanceBdt < existing().availableBalanceBdt &&
+            existsAfter(/databases/$(database)/documents/walletTransactions/$(incoming().lastTxId)) &&
+            getAfter(/databases/$(database)/documents/walletTransactions/$(incoming().lastTxId)).data.amountBdt == (existing().availableBalanceBdt - incoming().availableBalanceBdt) &&
+            (
+              (
+                getAfter(/databases/$(database)/documents/walletTransactions/$(incoming().lastTxId)).data.type == 'purchase' &&
+                incoming().totalSpentBdt == existing().totalSpentBdt + (existing().availableBalanceBdt - incoming().availableBalanceBdt)
+              ) ||
+              (
+                getAfter(/databases/$(database)/documents/walletTransactions/$(incoming().lastTxId)).data.type == 'withdrawal' &&
+                incoming().totalSpentBdt == existing().totalSpentBdt &&
+                existsAfter(/databases/$(database)/documents/withdrawals/$(incoming().lastTxId)) &&
+                getAfter(/databases/$(database)/documents/withdrawals/$(incoming().lastTxId)).data.amountBdt == (existing().availableBalanceBdt - incoming().availableBalanceBdt)
+              )
+            )
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /walletTransactions/{txDocId} {
+      allow get: if isValidId(txDocId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(txDocId)
+        && isVerified()
+        && isValidWalletTransaction(incoming())
+        && incoming().id == txDocId
+        && (
+          isAdmin() ||
+          (
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time &&
+            (
+              (
+                isActiveUser(request.auth.uid) &&
+                incoming().userId == request.auth.uid &&
+                incoming().type == 'deposit' &&
+                incoming().method in ['bkash', 'nagad', 'rocket'] &&
+                incoming().status == 'Verification Pending' &&
+                existsAfter(/databases/$(database)/documents/txRegistry/$(incoming().transactionId))
+              ) ||
+              (
+                isActiveUser(request.auth.uid) &&
+                incoming().userId == request.auth.uid &&
+                incoming().type == 'purchase' &&
+                incoming().method == 'wallet' &&
+                incoming().status == 'Approved' &&
+                existsAfter(/databases/$(database)/documents/walletAccounts/$(request.auth.uid)) &&
+                getAfter(/databases/$(database)/documents/walletAccounts/$(request.auth.uid)).data.lastTxId == txDocId
+              ) ||
+              (
+                isActiveUser(request.auth.uid) &&
+                incoming().userId == request.auth.uid &&
+                incoming().type == 'withdrawal' &&
+                incoming().method in ['bkash', 'nagad', 'rocket'] &&
+                incoming().status == 'Verification Pending' &&
+                existsAfter(/databases/$(database)/documents/walletAccounts/$(request.auth.uid)) &&
+                getAfter(/databases/$(database)/documents/walletAccounts/$(request.auth.uid)).data.lastTxId == txDocId &&
+                existsAfter(/databases/$(database)/documents/withdrawals/$(txDocId))
+              )
+            )
+          )
+        );
+      allow update: if isValidId(txDocId)
+        && isAdmin()
+        && isValidWalletTransaction(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().type == existing().type
+        && incoming().method == existing().method
+        && incoming().transactionId == existing().transactionId
+        && incoming().amountBdt == existing().amountBdt
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isVerified() && (existing().customerId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.customerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(orderId)
+        && isVerified()
+        && isActiveUser(request.auth.uid)
+        && isValidOrder(incoming())
+        && incoming().id == orderId
+        && incoming().customerId == request.auth.uid
+        && (!('cashbackAwarded' in incoming()) || incoming().cashbackAwarded == false)
+        && (!('referralProcessed' in incoming()) || incoming().referralProcessed == false)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/products/$(incoming().productId))
+        && (
+          (
+            incoming().paymentMethod in ['bkash', 'nagad', 'rocket'] &&
+            incoming().status == 'Verification Pending' &&
+            existsAfter(/databases/$(database)/documents/txRegistry/$(incoming().transactionId))
+          ) ||
+          (
+            incoming().paymentMethod == 'wallet' &&
+            incoming().status == 'Processing' &&
+            existsAfter(/databases/$(database)/documents/walletTransactions/$(incoming().transactionId)) &&
+            getAfter(/databases/$(database)/documents/walletTransactions/$(incoming().transactionId)).data.userId == request.auth.uid &&
+            getAfter(/databases/$(database)/documents/walletTransactions/$(incoming().transactionId)).data.type == 'purchase' &&
+            getAfter(/databases/$(database)/documents/walletTransactions/$(incoming().transactionId)).data.amountBdt == incoming().totalPriceBdt
+          )
+        );
+      allow update: if isValidId(orderId)
+        && isVerified()
+        && isValidOrder(incoming())
+        && incoming().id == existing().id
+        && incoming().customerId == existing().customerId
+        && incoming().productId == existing().productId
+        && incoming().totalPriceBdt == existing().totalPriceBdt
+        && incoming().transactionId == existing().transactionId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().customerId == request.auth.uid &&
+            !(existing().status in ['Completed', 'Rejected', 'Cancelled']) &&
+            existing().status in ['Pending Payment', 'Verification Pending'] &&
+            incoming().status == 'Cancelled' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /payments/{paymentId} {
+      allow get: if isValidId(paymentId) && isVerified() && (existing().customerId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.customerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(paymentId)
+        && isVerified()
+        && isValidPayment(incoming())
+        && incoming().id == paymentId
+        && incoming().customerId == request.auth.uid
+        && incoming().status == 'Verification Pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/txRegistry/$(incoming().transactionId));
+      allow update: if isValidId(paymentId)
+        && isAdmin()
+        && isValidPayment(incoming())
+        && incoming().id == existing().id
+        && incoming().orderId == existing().orderId
+        && incoming().customerId == existing().customerId
+        && incoming().transactionId == existing().transactionId
+        && incoming().amountBdt == existing().amountBdt
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'rejectionReason', 'verifiedBy', 'verifiedAt', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /advertisements/{adId} {
+      allow get: if isValidId(adId);
+      allow list: if true;
+      allow create: if isValidId(adId)
+        && isAdmin()
+        && isValidAdvertisement(incoming())
+        && incoming().id == adId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(adId)
+        && isAdmin()
+        && isValidAdvertisement(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(adId) && isAdmin();
+    }
+
+    match /banners/{bannerId} {
+      allow get: if isValidId(bannerId);
+      allow list: if true;
+      allow create: if isValidId(bannerId)
+        && isAdmin()
+        && isValidBanner(incoming())
+        && incoming().id == bannerId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(bannerId)
+        && isAdmin()
+        && isValidBanner(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(bannerId) && isAdmin();
+    }
+
+    match /adClicks/{clickId} {
+      allow get: if isValidId(clickId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(clickId)
+        && isVerified()
+        && isValidAdEvent(incoming())
+        && incoming().id == clickId
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/advertisements/$(incoming().adId));
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /adImpressions/{impressionId} {
+      allow get: if isValidId(impressionId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(impressionId)
+        && isVerified()
+        && isValidAdEvent(incoming())
+        && incoming().id == impressionId
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/advertisements/$(incoming().adId));
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /referrals/{referralId} {
+      allow get: if isValidId(referralId) && isVerified() && (existing().referrerId == request.auth.uid || existing().referredUserId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.referrerId == request.auth.uid || resource.data.referredUserId == request.auth.uid || isAdmin());
+      allow create: if isValidId(referralId)
+        && isVerified()
+        && isValidReferral(incoming())
+        && incoming().id == referralId
+        && incoming().createdAt == request.time
+        && (!('updatedAt' in incoming()) || incoming().updatedAt == request.time)
+        && (
+          isAdmin() ||
+          (
+            isActiveUser(request.auth.uid) &&
+            incoming().referredUserId == request.auth.uid &&
+            incoming().referrerId != request.auth.uid &&
+            incoming().status in ['pending', 'qualified', 'flagged'] &&
+            (
+              !exists(/databases/$(database)/documents/siteSettings/global) ||
+              (
+                incoming().rewardAmountBdt <= get(/databases/$(database)/documents/siteSettings/global).data.referralBonusBdt &&
+                (!('invitedRewardBdt' in incoming()) || incoming().invitedRewardBdt <= get(/databases/$(database)/documents/siteSettings/global).data.get('invitedUserRewardBdt', 0))
+              )
+            )
+          )
+        );
+      allow update: if isValidId(referralId)
+        && isAdmin()
+        && isValidReferral(incoming())
+        && incoming().id == existing().id
+        && incoming().referrerId == existing().referrerId
+        && incoming().referredUserId == existing().referredUserId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /referralRewards/{rewardId} {
+      allow get: if isValidId(rewardId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(rewardId)
+        && isAdmin()
+        && isValidReferralReward(incoming())
+        && incoming().id == rewardId
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(rewardId)
+        && isAdmin()
+        && isValidReferralReward(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+    }
+
+    match /coupons/{couponId} {
+      allow get: if isValidId(couponId) && (resource == null || existing().active == true || isAdmin());
+      allow list: if resource.data.active == true || isAdmin();
+      allow create: if isValidId(couponId)
+        && isAdmin()
+        && isValidCoupon(incoming())
+        && incoming().id == couponId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(couponId)
+        && isAdmin()
+        && isValidCoupon(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(couponId) && isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      allow get: if isValidId(reviewId) && (existing().approved == true || (isVerified() && existing().userId == request.auth.uid) || isAdmin());
+      allow list: if resource.data.approved == true || (isVerified() && resource.data.userId == request.auth.uid) || isAdmin();
+      allow create: if isValidId(reviewId)
+        && isVerified()
+        && isValidReview(incoming())
+        && incoming().id == reviewId
+        && incoming().userId == request.auth.uid
+        && incoming().approved == false
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/orders/$(incoming().orderId))
+        && get(/databases/$(database)/documents/orders/$(incoming().orderId)).data.customerId == request.auth.uid
+        && get(/databases/$(database)/documents/orders/$(incoming().orderId)).data.status == 'Completed';
+      allow update: if isValidId(reviewId)
+        && isAdmin()
+        && isValidReview(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(reviewId) && isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(notificationId)
+        && isVerified()
+        && isValidNotification(incoming())
+        && incoming().id == notificationId
+        && incoming().createdAt == request.time
+        && (
+          isAdmin() ||
+          (incoming().userId == request.auth.uid && incoming().type in ['order', 'payment', 'support', 'wallet'] && incoming().read == false)
+        );
+      allow update: if isValidId(notificationId)
+        && isVerified()
+        && isValidNotification(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && (
+          isAdmin() ||
+          (existing().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['read']))
+        );
+      allow delete: if isValidId(notificationId) && isAdmin();
+    }
+
+    match /supportTickets/{ticketId} {
+      allow get: if isValidId(ticketId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(ticketId)
+        && isVerified()
+        && isValidSupportTicket(incoming())
+        && incoming().id == ticketId
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'open'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(ticketId)
+        && isVerified()
+        && isValidSupportTicket(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid &&
+            !(existing().status in ['resolved', 'closed']) &&
+            incoming().status in [existing().status, 'closed'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['message', 'status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(ticketId) && isAdmin();
+    }
+
+    match /siteSettings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create: if isValidId(settingId)
+        && isAdmin()
+        && isValidSiteSettings(incoming())
+        && incoming().id == settingId
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(settingId)
+        && isAdmin()
+        && isValidSiteSettings(incoming())
+        && incoming().id == existing().id
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /adNetworks/{networkId} {
+      allow get: if isValidId(networkId);
+      allow list: if true;
+      allow create: if isValidId(networkId)
+        && isAdmin()
+        && isValidAdNetworkConfig(incoming())
+        && incoming().id == networkId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(networkId)
+        && isAdmin()
+        && isValidAdNetworkConfig(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(networkId) && isAdmin();
+    }
+
+    match /adRevenueEntries/{entryId} {
+      allow get: if isValidId(entryId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(entryId)
+        && isAdmin()
+        && isValidAdRevenueEntry(incoming())
+        && incoming().id == entryId
+        && incoming().verifiedBy == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(entryId) && isAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(logId)
+        && isAdmin()
+        && isValidAuditLog(incoming())
+        && incoming().id == logId
+        && incoming().actorUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /withdrawals/{withdrawalId} {
+      allow get: if isValidId(withdrawalId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(withdrawalId)
+        && isVerified()
+        && isActiveUser(request.auth.uid)
+        && isValidWithdrawal(incoming())
+        && incoming().id == withdrawalId
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'Pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/walletTransactions/$(withdrawalId))
+        && getAfter(/databases/$(database)/documents/walletTransactions/$(withdrawalId)).data.type == 'withdrawal'
+        && getAfter(/databases/$(database)/documents/walletTransactions/$(withdrawalId)).data.amountBdt == incoming().amountBdt;
+      allow update: if isValidId(withdrawalId)
+        && isAdmin()
+        && isValidWithdrawal(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().amountBdt == existing().amountBdt
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /announcements/{announcementId} {
+      allow get: if isValidId(announcementId) && isVerified();
+      allow list: if isVerified();
+      allow create: if isValidId(announcementId)
+        && isAdmin()
+        && isValidAnnouncement(incoming())
+        && incoming().id == announcementId
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(announcementId)
+        && isAdmin()
+        && isValidAnnouncement(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(announcementId) && isAdmin();
+    }
+
+    match /rewardedAdClaims/{claimId} {
+      allow get: if isValidId(claimId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(claimId)
+        && isVerified()
+        && isActiveUser(request.auth.uid)
+        && isValidRewardedAdClaim(incoming())
+        && incoming().id == claimId
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'Pending Credit'
+        && (!('rejectionReason' in incoming()) || incoming().rejectionReason == '')
+        && (!('creditedBy' in incoming()) || incoming().creditedBy == '')
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          !exists(/databases/$(database)/documents/siteSettings/global) ||
+          incoming().amountBdt <= get(/databases/$(database)/documents/siteSettings/global).data.get('rewardedAdAmountBdt', 50)
+        )
+        && exists(/databases/$(database)/documents/adNetworks/$(incoming().networkId))
+        && get(/databases/$(database)/documents/adNetworks/$(incoming().networkId)).data.enabled == true
+        && get(/databases/$(database)/documents/adNetworks/$(incoming().networkId)).data.supportsIncentivizedRewards == true
+        && get(/databases/$(database)/documents/adNetworks/$(incoming().networkId)).data.provider != 'adsense';
+      allow update: if isValidId(claimId)
+        && isAdmin()
+        && isValidRewardedAdClaim(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().amountBdt == existing().amountBdt
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /accountDeletionRequests/{requestId} {
+      allow get: if isValidId(requestId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(requestId)
+        && isVerified()
+        && isValidAccountDeletionRequest(incoming())
+        && incoming().id == requestId
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(requestId)
+        && isAdmin()
+        && isValidAccountDeletionRequest(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /referralCodes/{code} {
+      allow get: if isValidId(code) && isVerified();
+      allow list: if isAdmin();
+      allow create: if isValidId(code)
+        && isVerified()
+        && isValidReferralCode(incoming())
+        && incoming().code == code
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && !exists(/databases/$(database)/documents/referralCodes/$(code));
+      allow update, delete: if isAdmin();
+    }
+
+    match /advertisingUnits/{unitId} {
+      allow get: if isValidId(unitId);
+      allow list: if true;
+      allow create: if isValidId(unitId)
+        && isAdmin()
+        && isValidManagedAdUnit(incoming())
+        && incoming().id == unitId
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(unitId)
+        && isAdmin()
+        && isValidManagedAdUnit(incoming())
+        && incoming().id == existing().id
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(unitId) && isAdmin();
+    }
+
+    match /adViewingSessions/{sessionId} {
+      allow get: if isValidId(sessionId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(sessionId)
+        && isVerified()
+        && isActiveUser(request.auth.uid)
+        && isValidAdViewingSession(incoming())
+        && incoming().id == sessionId
+        && incoming().userId == request.auth.uid
+        && incoming().coinsAwarded == 0
+        && !('verifiedAt' in incoming())
+        && !('providerEventId' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().status in ['awaiting_callback', 'verification_failed'];
+      allow update: if isValidId(sessionId)
+        && isVerified()
+        && isValidAdViewingSession(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid &&
+            existing().status == 'awaiting_callback' &&
+            incoming().status == 'verification_failed' &&
+            incoming().coinsAwarded == 0 &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'failureReason', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /adRewardTransactions/{txId} {
+      allow get: if isValidId(txId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(txId)
+        && isVerified()
+        && isValidAdRewardTransaction(incoming())
+        && incoming().id == txId
+        && incoming().createdAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isActiveUser(request.auth.uid) &&
+            incoming().userId == request.auth.uid &&
+            incoming().type == 'coin_redemption' &&
+            incoming().provider == 'SYSTEM' &&
+            incoming().sessionId.matches('^credem_.*') &&
+            incoming().bdtEquivalent <= 10000 &&
+            incoming().status == 'Pending Credit'
+          )
+        );
+      allow update: if isValidId(txId)
+        && isAdmin()
+        && isValidAdRewardTransaction(incoming())
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+    }
+  }
+}

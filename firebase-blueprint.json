@@ -1,0 +1,807 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Customer account profile stored in Firestore",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "phone": { "type": "string", "maxLength": 30 },
+        "photoUrl": { "type": "string", "maxLength": 250000 },
+        "referralCode": { "type": "string", "minLength": 4, "maxLength": 24, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referredBy": { "type": "string", "maxLength": 24 },
+        "promotionalCredits": { "type": "number" },
+        "language": { "type": "string", "enum": ["bn", "en"] },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "sessionRevokedAt": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email", "referralCode", "promotionalCredits", "status", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Authorized administrator registry entry",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "role": { "type": "string", "enum": ["super_admin", "admin"] },
+        "addedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Digital service marketplace category",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "slug": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "nameBn": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "nameEn": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "descriptionBn": { "type": "string", "maxLength": 500 },
+        "descriptionEn": { "type": "string", "maxLength": 500 },
+        "imageUrl": { "type": "string", "maxLength": 200000 },
+        "sortOrder": { "type": "number" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "slug", "nameBn", "nameEn", "sortOrder", "active", "createdAt", "updatedAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Digital product or service offered in DIGITAL HUB",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "categoryId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subcategoryBn": { "type": "string", "maxLength": 100 },
+        "subcategoryEn": { "type": "string", "maxLength": 100 },
+        "brandKey": { "type": "string", "maxLength": 40 },
+        "titleBn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "titleEn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "descriptionBn": { "type": "string", "minLength": 1, "maxLength": 1500 },
+        "descriptionEn": { "type": "string", "minLength": 1, "maxLength": 1500 },
+        "priceBdt": { "type": "number" },
+        "originalPriceBdt": { "type": "number" },
+        "discountPercent": { "type": "number" },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "nameBn": { "type": "string" },
+              "nameEn": { "type": "string" },
+              "priceBdt": { "type": "number" },
+              "originalPriceBdt": { "type": "number" },
+              "tag": { "type": "string" }
+            }
+          }
+        },
+        "availability": { "type": "string", "enum": ["in_stock", "limited", "out_of_stock"] },
+        "stockCount": { "type": "number" },
+        "orderFormType": { "type": "string", "enum": ["freefire", "pubg_uid", "telegram", "giftcard", "social", "subscription", "design"] },
+        "deliveryDurationBn": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "deliveryDurationEn": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "validityBn": { "type": "string", "maxLength": 200 },
+        "validityEn": { "type": "string", "maxLength": 200 },
+        "instructionsBn": { "type": "string", "maxLength": 1000 },
+        "instructionsEn": { "type": "string", "maxLength": 1000 },
+        "termsBn": { "type": "string", "maxLength": 1000 },
+        "termsEn": { "type": "string", "maxLength": 1000 },
+        "benefitsBn": { "type": "string", "maxLength": 1000 },
+        "benefitsEn": { "type": "string", "maxLength": 1000 },
+        "sectionTag": { "type": "string", "enum": ["flash_sale", "hot_product", "trending", "best_seller", "new_arrival", "standard"] },
+        "imageUrl": { "type": "string", "maxLength": 200000 },
+        "bannerUrl": { "type": "string", "maxLength": 200000 },
+        "customLogoUrl": { "type": "string", "maxLength": 200000 },
+        "featured": { "type": "boolean" },
+        "sortOrder": { "type": "number" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "categoryId", "titleBn", "titleEn", "descriptionBn", "descriptionEn", "priceBdt", "availability", "deliveryDurationBn", "deliveryDurationEn", "imageUrl", "active", "createdAt", "updatedAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer digital service order",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderNumber": { "type": "string", "minLength": 4, "maxLength": 40 },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerEmail": { "type": "string", "maxLength": 200 },
+        "customerName": { "type": "string", "maxLength": 120 },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productTitleBn": { "type": "string", "maxLength": 200 },
+        "productTitleEn": { "type": "string", "maxLength": 200 },
+        "selectedPackageName": { "type": "string", "maxLength": 160 },
+        "itemsSummary": { "type": "string", "maxLength": 1000 },
+        "quantity": { "type": "number" },
+        "couponCode": { "type": "string", "maxLength": 32 },
+        "discountBdt": { "type": "number" },
+        "totalPriceBdt": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["bkash", "nagad", "rocket", "wallet"] },
+        "transactionId": { "type": "string", "minLength": 4, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderNumber": { "type": "string", "minLength": 4, "maxLength": 24 },
+        "deliveryNote": { "type": "string", "maxLength": 1200 },
+        "referenceAttachmentUrl": { "type": "string", "maxLength": 350000 },
+        "status": {
+          "type": "string",
+          "enum": ["Pending Payment", "Verification Pending", "Paid", "Payment Approved", "Processing", "Completed", "Rejected", "Cancelled"]
+        },
+        "rejectionReason": { "type": "string", "maxLength": 400 },
+        "adminNote": { "type": "string", "maxLength": 500 },
+        "cashbackBdt": { "type": "number" },
+        "cashbackAwarded": { "type": "boolean" },
+        "referralProcessed": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orderNumber", "customerId", "productId", "totalPriceBdt", "paymentMethod", "transactionId", "senderNumber", "status", "createdAt", "updatedAt"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Manual mobile financial service payment submission and verification record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderNumber": { "type": "string", "maxLength": 40 },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "purpose": { "type": "string", "enum": ["order", "add_money"] },
+        "method": { "type": "string", "enum": ["bkash", "nagad", "rocket"] },
+        "receiverNumber": { "type": "string", "minLength": 6, "maxLength": 24 },
+        "senderNumber": { "type": "string", "minLength": 6, "maxLength": 24 },
+        "transactionId": { "type": "string", "minLength": 4, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "amountBdt": { "type": "number" },
+        "receiptDataUrl": { "type": "string", "maxLength": 350000 },
+        "status": { "type": "string", "enum": ["Awaiting Payment", "Verification Pending", "Approved", "Rejected", "Refunded"] },
+        "rejectionReason": { "type": "string", "maxLength": 400 },
+        "verifiedBy": { "type": "string", "maxLength": 128 },
+        "verifiedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orderId", "customerId", "method", "receiverNumber", "senderNumber", "transactionId", "amountBdt", "status", "createdAt", "updatedAt"]
+    },
+    "WalletAccount": {
+      "title": "WalletAccount",
+      "description": "Server/admin controlled customer wallet balances",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "availableBalanceBdt": { "type": "number" },
+        "promotionalCreditsBdt": { "type": "number" },
+        "totalAddedBdt": { "type": "number" },
+        "totalSpentBdt": { "type": "number" },
+        "coinsAvailable": { "type": "number" },
+        "coinsPending": { "type": "number" },
+        "coinsLifetimeEarned": { "type": "number" },
+        "coinsRedeemed": { "type": "number" },
+        "lastTxId": { "type": "string", "maxLength": 80 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "availableBalanceBdt", "promotionalCreditsBdt", "totalAddedBdt", "totalSpentBdt", "updatedAt"]
+    },
+    "WalletTransaction": {
+      "title": "WalletTransaction",
+      "description": "Immutable wallet deposit, purchase, and reward ledger",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 200 },
+        "type": {
+          "type": "string",
+          "enum": ["deposit", "purchase", "promo_credit", "refund", "admin_adjustment", "cashback", "referral", "rewarded_ad", "watch_earn_coin_redeem", "withdrawal", "withdrawal_refund"]
+        },
+        "method": { "type": "string", "enum": ["bkash", "nagad", "rocket", "wallet", "system"] },
+        "senderNumber": { "type": "string", "maxLength": 24 },
+        "transactionId": { "type": "string", "minLength": 4, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "amountBdt": { "type": "number" },
+        "receiptDataUrl": { "type": "string", "maxLength": 350000 },
+        "status": { "type": "string", "enum": ["Verification Pending", "Approved", "Rejected"] },
+        "note": { "type": "string", "maxLength": 400 },
+        "rejectionReason": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "type", "method", "transactionId", "amountBdt", "status", "createdAt", "updatedAt"]
+    },
+    "TxRegistry": {
+      "title": "TxRegistry",
+      "description": "Unique Transaction ID lock preventing duplicate payment submissions",
+      "type": "object",
+      "properties": {
+        "txId": { "type": "string", "minLength": 4, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["txId", "orderId", "customerId", "createdAt"]
+    },
+    "Advertisement": {
+      "title": "Advertisement",
+      "description": "Managed advertisement card/player entry with verified destination URL",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "minLength": 2, "maxLength": 20 },
+        "titleBn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "titleEn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "descriptionBn": { "type": "string", "maxLength": 500 },
+        "descriptionEn": { "type": "string", "maxLength": 500 },
+        "targetUrl": { "type": "string", "minLength": 8, "maxLength": 500 },
+        "mediaType": { "type": "string", "enum": ["external", "video"] },
+        "mediaUrl": { "type": "string", "maxLength": 500 },
+        "thumbnailUrl": { "type": "string", "maxLength": 250000 },
+        "placement": { "type": "string", "enum": ["player", "service_banner", "product_page", "dashboard_promo", "ads_page", "between_sections", "all"] },
+        "priority": { "type": "number" },
+        "sortOrder": { "type": "number" },
+        "enabled": { "type": "boolean" },
+        "startDate": { "type": "string", "maxLength": 40 },
+        "endDate": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "code", "titleBn", "titleEn", "targetUrl", "mediaType", "placement", "priority", "sortOrder", "enabled", "createdAt", "updatedAt"]
+    },
+    "Banner": {
+      "title": "Banner",
+      "description": "Homepage and marketplace rotating banner slot",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "titleBn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "titleEn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "subtitleBn": { "type": "string", "maxLength": 300 },
+        "subtitleEn": { "type": "string", "maxLength": 300 },
+        "slot": { "type": "string", "enum": ["home_top", "home_middle", "home_bottom", "between_sections", "service_page", "product_page", "dashboard_promo"] },
+        "targetUrl": { "type": "string", "minLength": 8, "maxLength": 500 },
+        "imageUrl": { "type": "string", "maxLength": 250000 },
+        "mobileImageUrl": { "type": "string", "maxLength": 250000 },
+        "adCode": { "type": "string", "maxLength": 20 },
+        "sortOrder": { "type": "number" },
+        "priority": { "type": "number" },
+        "enabled": { "type": "boolean" },
+        "startDate": { "type": "string", "maxLength": 40 },
+        "endDate": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "titleBn", "titleEn", "slot", "targetUrl", "sortOrder", "priority", "enabled", "createdAt", "updatedAt"]
+    },
+    "AdClick": {
+      "title": "AdClick",
+      "description": "Recorded advertisement click event",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "placement": { "type": "string", "maxLength": 40 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "adId", "placement", "userId", "createdAt"]
+    },
+    "AdImpression": {
+      "title": "AdImpression",
+      "description": "Recorded advertisement impression event",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "placement": { "type": "string", "maxLength": 40 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "adId", "placement", "userId", "createdAt"]
+    },
+    "Referral": {
+      "title": "Referral",
+      "description": "Customer referral record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referrerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referredUserId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referredEmail": { "type": "string", "maxLength": 200 },
+        "referralCode": { "type": "string", "maxLength": 24 },
+        "rewardAmountBdt": { "type": "number" },
+        "invitedRewardBdt": { "type": "number" },
+        "eligibilityRule": { "type": "string", "enum": ["verified_signup", "first_paid_order", "first_rewarded_ad"] },
+        "suspiciousFlag": { "type": "boolean" },
+        "suspiciousReason": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["pending", "qualified", "credited", "revoked", "flagged"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "referrerId", "referredUserId", "referralCode", "rewardAmountBdt", "status", "createdAt"]
+    },
+    "ReferralReward": {
+      "title": "ReferralReward",
+      "description": "Verified referral payout or credit award record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referralId": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "amountBdt": { "type": "number" },
+        "status": { "type": "string", "enum": ["credited", "revoked"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "referralId", "userId", "amountBdt", "status", "createdAt"]
+    },
+    "Coupon": {
+      "title": "Coupon",
+      "description": "Discount coupon managed by administrators",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "discountType": { "type": "string", "enum": ["fixed", "percent"] },
+        "discountValue": { "type": "number" },
+        "minOrderBdt": { "type": "number" },
+        "usageLimit": { "type": "number" },
+        "usedCount": { "type": "number" },
+        "expiresAt": { "type": "string", "maxLength": 40 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "code", "discountType", "discountValue", "minOrderBdt", "usageLimit", "usedCount", "active", "createdAt", "updatedAt"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Verified customer review for completed orders",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productId": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "rating": { "type": "number" },
+        "comment": { "type": "string", "minLength": 3, "maxLength": 1000 },
+        "approved": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "productId", "orderId", "userId", "authorName", "rating", "comment", "approved", "createdAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User payment, order, and promotional status notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "titleBn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "titleEn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "messageBn": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "messageEn": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "type": { "type": "string", "enum": ["order", "payment", "promo", "support", "wallet"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "titleBn", "titleEn", "messageBn", "messageEn", "type", "read", "createdAt"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Customer support inquiry ticket",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 200 },
+        "subject": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "message": { "type": "string", "minLength": 4, "maxLength": 2000 },
+        "orderNumber": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "enum": ["open", "in_progress", "resolved", "closed"] },
+        "adminReply": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "subject", "message", "status", "createdAt", "updatedAt"]
+    },
+    "SiteSettings": {
+      "title": "SiteSettings",
+      "description": "Marketplace global settings, CMS content, support links, and payment numbers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "siteName": { "type": "string", "maxLength": 80 },
+        "taglineBn": { "type": "string", "maxLength": 200 },
+        "taglineEn": { "type": "string", "maxLength": 200 },
+        "announcementBn": { "type": "string", "maxLength": 300 },
+        "announcementEn": { "type": "string", "maxLength": 300 },
+        "bkashNumber": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "nagadNumber": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "rocketNumber": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "bkashType": { "type": "string", "enum": ["Personal", "Merchant", "Agent"] },
+        "nagadType": { "type": "string", "enum": ["Personal", "Merchant", "Agent"] },
+        "rocketType": { "type": "string", "enum": ["Personal", "Merchant", "Agent"] },
+        "bkashEnabled": { "type": "boolean" },
+        "nagadEnabled": { "type": "boolean" },
+        "rocketEnabled": { "type": "boolean" },
+        "bkashLogoUrl": { "type": "string", "maxLength": 200000 },
+        "nagadLogoUrl": { "type": "string", "maxLength": 200000 },
+        "rocketLogoUrl": { "type": "string", "maxLength": 200000 },
+        "bkashNoteBn": { "type": "string", "maxLength": 300 },
+        "bkashNoteEn": { "type": "string", "maxLength": 300 },
+        "nagadNoteBn": { "type": "string", "maxLength": 300 },
+        "nagadNoteEn": { "type": "string", "maxLength": 300 },
+        "rocketNoteBn": { "type": "string", "maxLength": 300 },
+        "rocketNoteEn": { "type": "string", "maxLength": 300 },
+        "referralBonusBdt": { "type": "number" },
+        "invitedUserRewardBdt": { "type": "number" },
+        "referralEnabled": { "type": "boolean" },
+        "referralMinOrderBdt": { "type": "number" },
+        "referralEligibility": { "type": "string", "enum": ["verified_signup", "first_paid_order", "first_rewarded_ad"] },
+        "cashbackEnabled": { "type": "boolean" },
+        "cashbackPercent": { "type": "number" },
+        "cashbackMinOrderBdt": { "type": "number" },
+        "cashbackMaxPerOrderBdt": { "type": "number" },
+        "rewardedAdEnabled": { "type": "boolean" },
+        "rewardedAdAmountBdt": { "type": "number" },
+        "rewardedAdCooldownMinutes": { "type": "number" },
+        "rewardedAdDailyLimit": { "type": "number" },
+        "watchEarnEnabled": { "type": "boolean" },
+        "watchEarnCoinsPerAd": { "type": "number" },
+        "watchEarnCoinsPerBdt": { "type": "number" },
+        "watchEarnDailyCoinLimit": { "type": "number" },
+        "watchEarnMinRedeemCoins": { "type": "number" },
+        "adsEnabled": { "type": "boolean" },
+        "maintenanceMode": { "type": "boolean" },
+        "supportContact": { "type": "string", "maxLength": 160 },
+        "whatsappLink": { "type": "string", "maxLength": 300 },
+        "telegramLink": { "type": "string", "maxLength": 300 },
+        "telegramChannelLink": { "type": "string", "maxLength": 300 },
+        "facebookLink": { "type": "string", "maxLength": 300 },
+        "aboutBn": { "type": "string", "maxLength": 3000 },
+        "aboutEn": { "type": "string", "maxLength": 3000 },
+        "termsBn": { "type": "string", "maxLength": 4000 },
+        "termsEn": { "type": "string", "maxLength": 4000 },
+        "privacyBn": { "type": "string", "maxLength": 4000 },
+        "privacyEn": { "type": "string", "maxLength": 4000 },
+        "refundBn": { "type": "string", "maxLength": 4000 },
+        "refundEn": { "type": "string", "maxLength": 4000 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "siteName", "bkashNumber", "nagadNumber", "rocketNumber", "referralBonusBdt", "adsEnabled", "updatedAt"]
+    },
+    "AdNetworkConfig": {
+      "title": "AdNetworkConfig",
+      "description": "Official Ad Network Publisher Script configuration managed by admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "provider": { "type": "string", "enum": ["adsense", "adsterra", "monetag", "propellerads", "custom_https"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "adFormat": { "type": "string", "enum": ["banner", "native", "social_bar"] },
+        "placement": { "type": "string", "enum": ["home_top", "home_middle", "home_bottom", "between_sections", "service_page", "product_page", "dashboard_promo", "social_bar", "all"] },
+        "publisherId": { "type": "string", "maxLength": 120 },
+        "zoneId": { "type": "string", "maxLength": 120 },
+        "scriptSrc": { "type": "string", "maxLength": 500 },
+        "containerId": { "type": "string", "maxLength": 120 },
+        "supportsIncentivizedRewards": { "type": "boolean" },
+        "approvalStatus": { "type": "string", "enum": ["pending_approval", "active", "paused"] },
+        "enabled": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "provider", "name", "adFormat", "placement", "approvalStatus", "enabled", "createdAt", "updatedAt"]
+    },
+    "AdRevenueEntry": {
+      "title": "AdRevenueEntry",
+      "description": "Verified advertising revenue entry recorded from official publisher network reports",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "networkName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "periodLabel": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "verifiedAmountBdt": { "type": "number" },
+        "reportedUsd": { "type": "number" },
+        "referenceId": { "type": "string", "maxLength": 100 },
+        "verifiedBy": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "networkName", "periodLabel", "verifiedAmountBdt", "verifiedBy", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable administrator action audit log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "action": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "targetCollection": { "type": "string", "maxLength": 60 },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "summary": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "actorUid", "action", "targetCollection", "targetId", "summary", "createdAt"]
+    },
+    "WithdrawalRequest": {
+      "title": "WithdrawalRequest",
+      "description": "Customer withdrawal request from verified wallet balance",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 200 },
+        "method": { "type": "string", "enum": ["bkash", "nagad", "rocket"] },
+        "accountNumber": { "type": "string", "minLength": 6, "maxLength": 24 },
+        "amountBdt": { "type": "number" },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "payoutReference": { "type": "string", "maxLength": 120 },
+        "adminNote": { "type": "string", "maxLength": 400 },
+        "rejectionReason": { "type": "string", "maxLength": 400 },
+        "processedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "userEmail", "method", "accountNumber", "amountBdt", "status", "createdAt", "updatedAt"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Global platform announcement broadcast by owner admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "titleBn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "titleEn": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "messageBn": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "messageEn": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "type": { "type": "string", "enum": ["info", "promo", "policy", "maintenance"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "titleBn", "titleEn", "messageBn", "messageEn", "type", "createdBy", "active", "createdAt"]
+    },
+    "RewardedAdClaim": {
+      "title": "RewardedAdClaim",
+      "description": "User claim against explicitly permitted incentivized ad networks",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 200 },
+        "networkId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "networkName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "amountBdt": { "type": "number" },
+        "claimDate": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "status": { "type": "string", "enum": ["Pending Credit", "Credited", "Rejected"] },
+        "rejectionReason": { "type": "string", "maxLength": 400 },
+        "creditedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "networkId", "networkName", "amountBdt", "claimDate", "status", "createdAt", "updatedAt"]
+    },
+    "AccountDeletionRequest": {
+      "title": "AccountDeletionRequest",
+      "description": "User-initiated account deletion request queued for admin verification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 200 },
+        "reason": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "reviewed", "completed", "rejected"] },
+        "adminNote": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "userEmail", "status", "createdAt", "updatedAt"]
+    },
+    "ReferralCode": {
+      "title": "ReferralCode",
+      "description": "Unique referral code directory mapping code to referrer userId",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 4, "maxLength": 24, "pattern": "^[A-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "userId", "createdAt"]
+    },
+    "AdvertisingUnit": {
+      "title": "AdvertisingUnit",
+      "description": "Admin overrides for the 24 centralized advertising units",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "enabled": { "type": "boolean" },
+        "placements": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "showOnMobile": { "type": "boolean" },
+        "showOnDesktop": { "type": "boolean" },
+        "priority": { "type": "number" },
+        "rotationSeconds": { "type": "number" },
+        "supportsRewardedVerification": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "enabled", "placements", "showOnMobile", "showOnDesktop", "priority", "rotationSeconds", "updatedAt"]
+    },
+    "AdViewingSession": {
+      "title": "AdViewingSession",
+      "description": "Server-validated Watch & Earn ad viewing session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 200 },
+        "unitId": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "provider": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "sessionToken": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "status": { "type": "string", "enum": ["awaiting_callback", "credited", "verification_failed"] },
+        "coinsAwarded": { "type": "number" },
+        "providerEventId": { "type": "string", "maxLength": 120 },
+        "failureReason": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "verifiedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "unitId", "provider", "sessionToken", "status", "coinsAwarded", "createdAt", "updatedAt"]
+    },
+    "AdRewardTransaction": {
+      "title": "AdRewardTransaction",
+      "description": "Verified Watch & Earn coin awards and BDT redemption ledger",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sessionId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 200 },
+        "provider": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "coins": { "type": "number" },
+        "bdtEquivalent": { "type": "number" },
+        "type": { "type": "string", "enum": ["coin_credit", "coin_redemption"] },
+        "status": { "type": "string", "enum": ["Pending Credit", "Credited", "Rejected"] },
+        "note": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "sessionId", "userId", "provider", "coins", "bdtEquivalent", "type", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Customer profile records with PII restricted to owner and verified admins"
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Authorized administrator registry; public writes strictly forbidden"
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/Category" },
+      "description": "Marketplace service categories"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Digital services and product catalog"
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Customer orders with strict state lifecycle"
+    },
+    "/payments/{paymentId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "Manual payment verification records"
+    },
+    "/walletAccounts/{userId}": {
+      "schema": { "$ref": "#/entities/WalletAccount" },
+      "description": "Protected customer wallet balances"
+    },
+    "/walletTransactions/{txDocId}": {
+      "schema": { "$ref": "#/entities/WalletTransaction" },
+      "description": "Immutable wallet deposit and spend ledger"
+    },
+    "/txRegistry/{txId}": {
+      "schema": { "$ref": "#/entities/TxRegistry" },
+      "description": "Unique transaction ID registry for duplicate payment prevention"
+    },
+    "/advertisements/{adId}": {
+      "schema": { "$ref": "#/entities/Advertisement" },
+      "description": "Managed advertisement placements, native cards, social bar, and player entries"
+    },
+    "/banners/{bannerId}": {
+      "schema": { "$ref": "#/entities/Banner" },
+      "description": "Homepage and marketplace banner slots"
+    },
+    "/adNetworks/{networkId}": {
+      "schema": { "$ref": "#/entities/AdNetworkConfig" },
+      "description": "Official ad network publisher script configurations"
+    },
+    "/adRevenueEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/AdRevenueEntry" },
+      "description": "Verified advertising revenue statements recorded by administrators"
+    },
+    "/adClicks/{clickId}": {
+      "schema": { "$ref": "#/entities/AdClick" },
+      "description": "Advertisement click analytics events"
+    },
+    "/adImpressions/{impressionId}": {
+      "schema": { "$ref": "#/entities/AdImpression" },
+      "description": "Advertisement impression analytics events"
+    },
+    "/referrals/{referralId}": {
+      "schema": { "$ref": "#/entities/Referral" },
+      "description": "Customer referral records"
+    },
+    "/referralRewards/{rewardId}": {
+      "schema": { "$ref": "#/entities/ReferralReward" },
+      "description": "Verified referral reward payouts"
+    },
+    "/coupons/{couponId}": {
+      "schema": { "$ref": "#/entities/Coupon" },
+      "description": "Discount coupons managed by admin"
+    },
+    "/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/Review" },
+      "description": "Verified customer product reviews"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Customer notification center messages"
+    },
+    "/supportTickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/SupportTicket" },
+      "description": "Customer support tickets and admin replies"
+    },
+    "/siteSettings/{settingId}": {
+      "schema": { "$ref": "#/entities/SiteSettings" },
+      "description": "Marketplace payment numbers, CMS pages, and global settings"
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable admin audit log trail"
+    },
+    "/withdrawals/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/WithdrawalRequest" },
+      "description": "Customer wallet withdrawal requests and payout verification"
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/Announcement" },
+      "description": "Global platform announcements broadcast by owner"
+    },
+    "/rewardedAdClaims/{claimId}": {
+      "schema": { "$ref": "#/entities/RewardedAdClaim" },
+      "description": "Policy-compliant incentivized rewarded ad claims"
+    },
+    "/accountDeletionRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/AccountDeletionRequest" },
+      "description": "User account deletion requests managed with admin verification"
+    },
+    "/referralCodes/{code}": {
+      "schema": { "$ref": "#/entities/ReferralCode" },
+      "description": "Referral code lookup table mapping public referral codes to referrer UIDs"
+    },
+    "/advertisingUnits/{unitId}": {
+      "schema": { "$ref": "#/entities/AdvertisingUnit" },
+      "description": "Centralized 24 advertising unit configuration overrides managed by admin"
+    },
+    "/adViewingSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/AdViewingSession" },
+      "description": "Server-validated Watch & Earn ad viewing session audit records"
+    },
+    "/adRewardTransactions/{txId}": {
+      "schema": { "$ref": "#/entities/AdRewardTransaction" },
+      "description": "Watch & Earn coin earnings and BDT wallet redemption ledger"
+    }
+  }
+}

@@ -1,0 +1,296 @@
+DIGITAL HUB
+সম্পূর্ণ A–Z MASTER UPDATE SPECIFICATION
+Google AI Studio-তে আপলোড করে বিদ্যমান প্রজেক্ট আপডেট করার জন্য
+সংস্করণ: 1.0  |  প্রস্তুতির তারিখ: ১৫ নভেম্বর ২০২৬
+
+ডকুমেন্টের উদ্দেশ্য	গুরুত্বপূর্ণ নির্দেশনা
+এই ফাইলটি DIGITAL HUB-এর সম্পূর্ণ ফিচার, UI, ব্যবসার নিয়ম, বিজ্ঞাপন, পেমেন্ট, অ্যাডমিন, ডেটাবেস ও বাস্তবায়ন পরিকল্পনার মাস্টার স্পেসিফিকেশন।	Google AI Studio-তে বর্তমান প্রজেক্টের সঙ্গে এই DOCX আপলোড করে শেষে দেওয়া MASTER PROMPT পেস্ট করতে হবে।
+এটি নতুন করে সবকিছু মুছে বানানোর নির্দেশ নয়।	আগের কোড, ডেটা, লগইন, অ্যাড স্ক্রিপ্ট ও কার্যকর ফিচার পরীক্ষা না করে কোনো কিছু delete/replace করা যাবে না।
+
+প্রজেক্টের নাম: DIGITAL HUB
+ধরন: Digital products & top-up reseller marketplace + services/jobs marketplace + compliant ad monetization + user rewards platform
+মূল লক্ষ্য: গ্রাহক পণ্য/প্যাকেজ কিনবে, সার্ভিস অর্ডার করবে, প্রয়োজনীয় কাজ/রিওয়ার্ড ব্যবহার করবে; মালিক একটি সুরক্ষিত Admin Dashboard থেকে পুরো ব্যবসা নিয়ন্ত্রণ করবেন।
+1. AI Studio-র জন্য সর্বোচ্চ গুরুত্বপূর্ণ নিয়ম
+⦁	প্রথমে বর্তমান প্রজেক্টের সব ফাইল, framework, routes/pages, components, database/schema, authentication, storage, payment flow, ad scripts এবং deployment configuration audit করো।
+⦁	কোনো existing feature, user account, order, wallet balance, referral record, product, ad script বা database record মুছে ফেলবে না।
+⦁	প্রতিটি পরিবর্তনের আগে affected files এবং data migration plan দেখাও। নিরাপদ migration ছাড়া schema destructive change করা যাবে না।
+⦁	একবারে পুরো অ্যাপ rewrite নয়। ধাপে ধাপে update করো; প্রতিটি ধাপ শেষে build/test করো।
+⦁	যে API key, supplier credential, payment gateway credential, ad network script বা legal approval দেওয়া হয়নি, তা বানিয়ে লিখবে না। Placeholder/configuration field তৈরি করবে এবং Admin-কে সেট করার ব্যবস্থা দেবে।
+⦁	কোনো button শুধু দেখতে কাজ করে এমন হবে না। সব action বাস্তব backend/API/database operation-এর সঙ্গে যুক্ত হবে। Demo balance, fake order, fake earnings বা fabricated analytics production-এ দেখানো যাবে না।
+⦁	User এবং Admin-এর permissions server-side enforce করতে হবে; শুধু frontend-এ Admin menu hide করলেই নিরাপত্তা সম্পন্ন হয় না।
+⦁	সব user-facing লেখা বাংলা ও প্রয়োজনমতো English support করবে। Currency: BDT (৳), timezone: Asia/Dhaka।
+⦁	প্রথমে implementation plan + missing credentials/questions-এর তালিকা দেবে। তারপর safe phase-wise implementation শুরু করবে।
+2. ব্র্যান্ড, ডিজাইন ও UI/UX
+Brand name: DIGITAL HUB. MangoTopUp-এর মতো পরিষ্কার digital marketplace structure থেকে অনুপ্রেরণা নেওয়া যাবে, কিন্তু layout, logo, copy, assets ও branding নিজস্ব হবে; অন্য সাইটের source code বা copyrighted assets কপি করা যাবে না।
+⦁	রঙ: Orange + White primary theme; dark text, light neutral background; success/warning/error-এর accessible states।
+⦁	Mobile-first responsive design; Android mobile browser-এ দ্রুত, সহজ ও touch-friendly হতে হবে; desktop-এও সুন্দরভাবে adapt করবে।
+⦁	Homepage: top header/logo, search, login/profile, hero banner slider, category shortcuts, Hot Products, Flash Sale, popular top-ups, services, earning/reward section, trust/support footer।
+⦁	Product cards: original/authorized image, product title, short detail, package/price, availability, discount label (শুধু বাস্তব discount), details/order CTA।
+⦁	Bottom navigation (mobile): Home, Categories, Orders, Wallet, Profile। Admin navigation কেবল অনুমোদিত Admin-এর জন্য।
+⦁	সঠিক Telegram icon ও configured official Telegram link; bKash/Nagad/Rocket-এর official/authorized logo assets; সব image-এ alt text।
+⦁	Loading skeleton, empty state, error state, retry action, confirmation dialog, toast/notification এবং form validation যোগ করতে হবে।
+⦁	Accessibility: readable font, contrast, keyboard focus, screen-reader labels, যথেষ্ট button size।
+⦁	প্রতিটি page দ্রুত load হবে; image optimization, lazy loading, pagination এবং caching ব্যবহার করবে।
+3. User Account, Login ও Profile
+⦁	Email/Gmail-based signup/login; প্রয়োজন হলে phone number verification/OTP integration configurable থাকবে।
+⦁	Email verification, password reset, secure session management, logout from all devices এবং account deletion/request workflow।
+⦁	একটি user-এর unique internal ID; public display name আলাদা; email/phone private থাকবে।
+⦁	Profile: নাম, avatar, contact details, account created date, referral code, referral history, order history, wallet ledger, reward history, support tickets, notification preferences।
+⦁	একই account দিয়ে ফিরে এলে server থেকে balance, referral status, orders ও profile পুনরুদ্ধার হবে; local storage-কে authoritative database হিসেবে ব্যবহার করা যাবে না।
+⦁	Duplicate account/referral abuse, fake signup, automated bot এবং suspicious device/activity detection-এর basic safeguards।
+4. Admin Dashboard ও Access Security
+Admin dashboard শুধু মালিক/অনুমোদিত Admin দেখতে ও ব্যবহার করতে পারবেন। সাধারণ user কখনো Admin page, user list, supplier cost, profit, payment review বা global settings access করতে পারবে না।
+⦁	Admin role server-side database-এ সংরক্ষণ; নির্দিষ্ট owner email/ID allowlist server-side config-এ রাখতে হবে। Client-side email comparison একা যথেষ্ট নয়।
+⦁	Admin routes এবং API endpoints-এ role/permission check; unauthorized request-এ 401/403 response।
+⦁	Admin login-এর জন্য strong password, optional 2FA, session timeout, login attempt rate limit এবং audit log।
+⦁	Dashboard overview: total users, new users, orders, pending orders, gross sales, supplier cost, gross margin, completed withdrawals, ad network reported revenue (যদি API/report থাকে), pending tasks।
+⦁	User management: search/filter, view profile, suspend/activate, role management (owner-only), account notes; sensitive actions confirmation ও audit log সহ।
+⦁	Product/category/package management: create/edit/archive, image upload, price, stock/availability, supplier cost, sale price, margin, featured status।
+⦁	Order management: pending/paid/processing/completed/cancelled/refunded; supplier reference, proof, customer note, admin note, status timeline।
+⦁	Payment/withdrawal review: transaction ID, receipt, sender number, amount, verification status, rejection reason, payment reference।
+⦁	Ad management: network, placement, active toggle, script/code field, URL field, frequency cap, page targeting, device targeting, start/end date, test preview।
+⦁	CMS: homepage banners, slider, notices, FAQ, policy pages, Telegram/WhatsApp support links, footer, campaign/flash sale settings।
+⦁	Admin activity log: কে, কখন, কী পরিবর্তন করেছে; previous/new value where safe; exportable reports।
+5. Digital Products, Top-up ও Subscription Marketplace
+এই অংশটি MangoTopUp-এর মতো catalog/reseller workflow হবে। পণ্যের package, দাম, stock/availability এবং supplier cost Admin নিজে যোগ/পরিবর্তন করবেন। MangoTopUp বা অন্য supplier-এর live API/permission ছাড়া স্বয়ংক্রিয় integration দাবি করা যাবে না।
+Category	প্রাথমিকভাবে অন্তর্ভুক্ত পণ্য/সার্ভিস
+Game top-up	Free Fire Diamonds, Weekly/Monthly/Level Up Pass; PUBG UC; eFootball/PES; Roblox; EA FC; DLS 2026; Clash of Clans; Clash Royale
+Subscription	Telegram Premium, CapCut Premium, ChatGPT subscription, Netflix, Prime Video, Crunchyroll, Chorki, VPN, Good Shorts HUB
+Social media services	Facebook, TikTok, YouTube, Instagram-এর অনুমোদিত promotion/creator services; fake engagement বা platform policy ভঙ্গকারী service নয়
+Digital/creative services	Logo/banner/thumbnail design, video editing, social media design, অন্যান্য ডিজিটাল সার্ভিস
+Other catalog	Admin পরে নতুন category/product/package যোগ করতে পারবেন
+
+গুরুত্বপূর্ণ: উপরোক্ত তালিকা প্রাথমিক catalog scope; সব package/variant, দাম, delivery time, region restriction এবং availability supplier-এর বর্তমান তালিকা দেখে Admin verify করে publish করবেন। কোনো দাম অনুমান করে live করা যাবে না।
+5.1 Product ও Package data fields
+⦁	Product ID, category, product name, slug, description, supported region/platform, official/authorized image, gallery, terms, delivery estimate।
+⦁	Package ID/name, denomination/quantity/duration, supplier name, supplier SKU/reference, supplier cost (private), customer sale price (public), currency, availability/stock, active status।
+⦁	Profit calculation: gross margin = customer sale price − supplier cost; net profit = sale price − supplier cost − payment/provider fees − refunds/other recorded costs।
+⦁	Optional discount/original price, campaign badge, featured/hot product flag, display order, purchase limits।
+⦁	Supplier cost, supplier reference ও profit শুধুমাত্র Admin দেখবে; customer UI-তে কখনো supplier cost বা margin দেখাবে না।
+⦁	Product image official/authorized source থেকে upload বা licensed source ব্যবহার; unauthorized hotlink/copy নয়।
+5.2 Customer order journey
+1.	Customer category → product → package নির্বাচন করবে।
+2.	প্রয়োজনীয় game ID/player ID/server/region/account detail form-এ নেবে; product অনুযায়ী dynamic validation থাকবে।
+3.	Checkout-এ item, quantity, sale price, fees (যদি থাকে), total এবং terms দেখাবে।
+4.	Payment method নির্বাচন করে manual payment instructions দেখাবে; customer transaction ID এবং receipt/screenshot upload করবে।
+5.	Order প্রথমে Awaiting Payment Verification/Pending থাকবে; Admin payment verify না করা পর্যন্ত fulfilled হিসেবে গণ্য হবে না।
+6.	Payment verified হলে Processing; Admin supplier থেকে পণ্য কিনে delivery/activation করবে অথবা authorized API integration থাকলে API fulfillment করবে।
+7.	Admin completion proof/reference যোগ করে Completed করবে; customer notification পাবে।
+8.	ভুল Player ID, supplier failure, cancellation/refund policy আগে থেকে দৃশ্যমান থাকবে।
+5.3 Reseller business & profit control
+⦁	প্রতিটি package-এর supplier purchase cost Admin-only field।
+⦁	Admin selling price সেট করবেন; sale price supplier cost-এর চেয়ে বেশি হতে পারে, তবে final price Admin নির্ধারণ করবেন।
+⦁	Order completed হলে revenue, supplier cost, fee, refund এবং net profit ledger-এ আলাদা record হবে।
+⦁	Supplier order reference, purchase receipt/proof ও fulfillment notes সংরক্ষণ করতে হবে।
+⦁	Manual fulfillment default; supplier API key/endpoint/permission পাওয়া গেলে আলাদা secure integration phase।
+⦁	Supplier price পরিবর্তন হলে Admin update না করা পর্যন্ত customer price auto-change হবে না; optional alert/report দিতে পারে।
+6. Advertising System — সব ad placement ও পূর্বে দেওয়া URL
+বিজ্ঞাপনগুলো DIGITAL HUB-এর নির্ধারিত placement-এ দেখাতে হবে। বিজ্ঞাপন যেন login, checkout, payment, order tracking বা জরুরি navigation বাধাগ্রস্ত না করে। Ad network-এর terms, consent/privacy requirements, platform/browser rules এবং Bangladesh-এর প্রযোজ্য আইন মানতে হবে।
+6.1 পূর্বে পাওয়া Ad URL তালিকা
+⦁	https://asiafilm.org/4/3bd80e4a46fc298c2401cc0798e0e870
+⦁	https://asiafilm.org/4/4afe6519d68bdd1362edcd80ecfa3057
+⦁	https://asiafilm.org/4/0c01dd0141ed410962c5b4a9eb0a86c8
+⦁	https://auctionr.org/4/93b175fb00b5407f2dfa6456ae852e7c
+⦁	https://asiafilm.org/4/2f2c61836d6e9328ab3485b65d8b3fae
+⦁	https://arwf.org/4/268e1645e2ede4000fc614
+⦁	https://bicea.org/22/c4bf83d2d9461da3b65434ab9cb069b2
+এই তালিকায় আগের কথোপকথনে পাওয়া URL-গুলো রাখা হয়েছে। এগুলোকে ad network-এর verified script বলে ধরে নেওয়া যাবে না। URL-এর সঙ্গে আলাদা JavaScript/HTML ad code, publisher ID বা zone ID দেওয়া থাকলে সেটি হুবহু সংরক্ষণ করে Admin-এর Ad Code Library-তে রাখতে হবে। কোনো URL থেকে script নিজে অনুমান বা বানানো যাবে না।
+6.2 Ad placement types
+Placement	আচরণ/নিয়ম
+Homepage banner	Hero/banner section-এর নিচে বা নির্ধারিত ad slot; responsive size; একাধিক banner rotate করা যাবে।
+Category/product banner	Category বা product listing-এর মাঝখানে নির্ধারিত slot; content থেকে স্পষ্টভাবে আলাদা।
+Video/player ad area	একটি দৃশ্যমান player/ad card; user Play চাপলে configured ad destination/network flow চালু হবে। নকল video playback বা fake reward নয়।
+Interstitial/popup	শুধু policy-compliant frequency cap সহ; page load/checkout-এর সময় জোর করে নয়; close button স্পষ্ট।
+Footer/sidebar ad	Desktop sidebar বা page footer-এ optional ad slot; mobile-এ layout ভাঙবে না।
+Admin-defined custom slot	Admin slot name, page, placement, device, priority ও active status বেছে নিতে পারবেন।
+
+6.3 Ad management requirements
+⦁	প্রতিটি ad unit-এ network/provider, ad type, script/code, destination URL, zone/publisher ID, placement key, status, start/end schedule, priority, device/page targeting থাকবে।
+⦁	Admin add/edit/pause/delete/archive/test-preview করতে পারবেন; production code-এ script নিরাপদভাবে render হবে।
+⦁	একই ad বারবার দেখানো নিয়ন্ত্রণে frequency cap, session cap, cooldown ও rotation weights।
+⦁	Ad script third-party হওয়ায় sandbox/CSP/allowlist/security review; arbitrary unsafe inline script সরাসরি user input হিসেবে execute নয়।
+⦁	বিজ্ঞাপন clearly labelled হবে; deceptive download buttons, fake close buttons, forced redirect, auto-download বা hidden click তৈরি করা যাবে না।
+⦁	বিজ্ঞাপনে click বা সাধারণ banner view-এর জন্য user-কে reward দেওয়া যাবে না, যদি না network স্পষ্টভাবে incentivized/rewarded traffic অনুমোদন করে।
+⦁	Watch & Earn-এর জন্য কেবল network-এর অনুমোদিত rewarded-ad format এবং server-side verified completion callback ব্যবহার করতে হবে।
+⦁	Ad revenue dashboard-এ API/report না থাকলে ‘estimated/manual report’ হিসেবে দেখাবে; fake real-time earnings নয়।
+⦁	User privacy/consent, cookies/tracking disclosure ও ad personalization controls policy অনুযায়ী।
+6.4 Physical/offline banner advertising
+অনলাইন ad slot এবং বাস্তব প্রিন্ট করা banner/poster আলাদা কাজ। Physical banner-এর জন্য website-এ একটি Marketing Assets/Campaign section রাখা যেতে পারে, যেখানে print-ready artwork, QR code, website address, Telegram/WhatsApp contact ও campaign name থাকবে।
+⦁	Physical banner/poster design আলাদা export asset হবে; website ad script-এর সঙ্গে মিশিয়ে ফেলা যাবে না।
+⦁	প্রিন্ট করার আগে user/admin থেকে exact width × height, unit (inch/feet/mm), orientation, print shop bleed/safe margin এবং desired file format নিশ্চিত করতে হবে।
+⦁	QR code-এ DIGITAL HUB-এর verified HTTPS URL থাকবে; QR scan tracking থাকলে privacy notice দিতে হবে।
+⦁	Print design-এ কোনো supplier/ad network-এর logo ব্যবহার করলে তার permission/brand guideline মানতে হবে।
+7. Watch & Earn / Rewards Center
+⦁	Rewarded ad network অনুমোদন করলে user নির্দিষ্ট rewarded ad সম্পূর্ণ করার পরই reward পাবে; সাধারণ banner impression/click-এ coin নয়।
+⦁	Reward completion server-side callback/signature/transaction ID দিয়ে verify হবে; client-side timer বা JavaScript variable দিয়ে balance বাড়ানো যাবে না।
+⦁	Daily check-in, daily task, challenge ও campaign reward Admin-configurable; eligibility, limit, expiry এবং anti-abuse rules থাকবে।
+⦁	Reward ledger-এ user, amount, source, status, timestamp, unique transaction reference এবং reversal record থাকবে।
+⦁	Duplicate callback, replay attack, multiple account abuse, VPN/bot/fraud patterns-এর basic checks।
+⦁	Reward rate/coin conversion Admin settings-এ থাকবে; public conversion rate hide/show Admin নিয়ন্ত্রণ করবেন।
+⦁	Minimum withdrawal threshold Admin configurable; পূর্বে আলোচিত earning-site flow-তে 10,000 coins minimum-এর কথা ছিল—এটি initial setting হিসেবে রাখা যাবে, তবে launch-এর আগে Admin verify করবেন।
+8. Referral & Invite System
+⦁	প্রতিটি account-এর unique referral code/link; signup-এর সময় code apply হবে এবং server-side attribution save হবে।
+⦁	Referrer এবং referred user-এর reward rules Admin সেট করবেন; reward কখন unlock হবে (verified signup, first paid order, etc.) তা configurable।
+⦁	একই ব্যক্তি নিজের referral, duplicate device/account, fake email বা suspicious loop দিয়ে reward নিতে পারবে না।
+⦁	Referral dashboard: total invites, pending, qualified, rewarded, rejected এবং reward history।
+⦁	Referral attribution একবার bind হলে user ফিরে login করলেও স্থায়ী থাকবে; balance/account server database থেকে load হবে।
+⦁	Referral bonus-এর amount/coin এবং campaign expiry Admin configure করবেন; default bonus অনুমান করে publish করা যাবে না।
+9. Jobs Marketplace
+⦁	Users/Admin job post করতে পারবেন (Admin approval optional/configurable): title, description, skill, budget, deadline, requirements, attachment, category।
+⦁	Worker apply করবে; profile/portfolio/experience এবং proposal জমা দেবে।
+⦁	Client shortlist/accept/reject; accepted job-এর status: Open, Applied, Assigned, In Progress, Submitted, Revision, Approved, Completed, Disputed, Cancelled।
+⦁	Milestone/payment hold বা escrow feature কেবল বাস্তব payment/escrow integration ও legal review থাকলে চালু হবে; fake escrow balance নয়।
+⦁	Report/dispute workflow, evidence upload, admin moderation এবং audit history।
+10. Services Marketplace
+⦁	Logo/banner/thumbnail design, video editing, social media content, setup/consultation এবং Admin-added digital services।
+⦁	Service page-এ scope, deliverables, package, price, turnaround time, revisions, requirements, sample/portfolio ও terms থাকবে।
+⦁	Customer order + brief/attachment submit করবে; Admin/service provider কাজ assign করে progress update দেবে।
+⦁	Status timeline, delivery files, revision request, completion confirmation এবং support/dispute।
+⦁	যে service user-এর নিজের দক্ষতা/অনুমোদিত provider দিয়ে বাস্তবে deliver করা সম্ভব শুধু সেটাই publish করতে হবে।
+11. Wallet, Payments & Withdrawals
+Payment provider integration না থাকলে প্রথম পর্যায়ে manual verification flow ব্যবহার হবে। bKash/Nagad/Rocket-এর official API/gateway credentials ছাড়া auto-payment success দাবি করা যাবে না।
+11.1 Payment methods
+⦁	bKash, Nagad, Rocket এবং Admin-enabled bank/other method।
+⦁	প্রতিটি method-এর account number, account type, payment instructions, QR (if available), active status Admin settings-এ থাকবে।
+⦁	Customer amount পাঠিয়ে transaction ID, sender number এবং receipt/screenshot জমা দেবে।
+⦁	Admin transaction verify/reject করবে; rejection reason user দেখতে পাবে।
+11.2 Wallet ledger
+⦁	Wallet balance কখনো frontend-only state নয়; server-side ledger-এর sum/validated balance থেকে আসবে।
+⦁	প্রতিটি credit/debit-এ unique transaction ID, type, amount, source, related order/task, status, timestamp ও audit metadata থাকবে।
+⦁	Manual admin adjustment-এর জন্য reason বাধ্যতামূলক এবং audit log আবশ্যক।
+⦁	Double spending, race condition, duplicate webhook এবং negative balance prevention।
+⦁	Order payment, rewards, refunds, withdrawals আলাদা ledger entry হিসেবে থাকবে।
+11.3 Withdrawal workflow
+⦁	User minimum threshold পূরণ করলে withdrawal request submit করবে; method, account number/name, amount এবং confirmation।
+⦁	Status: Requested, Under Review, Approved, Processing, Paid, Rejected, Cancelled।
+⦁	Admin request verify করে payout manually সম্পন্ন করলে reference/proof যোগ করে Paid করবে।
+⦁	Rejected হলে কারণ এবং প্রয়োজনে পুনরায় submit করার নির্দেশ।
+⦁	Withdrawable balance request-এর সময় hold/lock হবে; rejected/cancelled হলে ledger-এ ফেরত যাবে; সবকিছু atomic transaction-এ।
+12. Notifications, Support & Communication
+⦁	In-app notification: signup, payment status, order status, delivery, referral reward, withdrawal, support response, campaign।
+⦁	Email notification optional; email provider config না থাকলে fake send success দেখানো যাবে না।
+⦁	Support center: FAQ, ticket creation, category, priority, attachment, conversation thread, status, Admin reply।
+⦁	Telegram/WhatsApp official support links Admin settings থেকে edit করা যাবে; সঠিক Telegram icon ব্যবহার।
+⦁	User notification read/unread, mark all read এবং notification preferences।
+13. Homepage CMS, Campaigns & Content
+⦁	Admin homepage hero slider/banner add/edit/reorder/schedule করতে পারবেন।
+⦁	Hot Products, Flash Sale, featured category, bonus event, announcement, coupon/promo code configurable।
+⦁	FAQ, About, Contact, Terms, Privacy Policy, Refund/Cancellation Policy এবং Ad/Reward Policy pages।
+⦁	Coupon rules: fixed/percentage discount, min order, max uses, per-user limit, expiry, eligible categories।
+⦁	Flash Sale-এ start/end time, stock/quantity limit এবং actual discounted price validate করতে হবে।
+14. Database & Technical Architecture
+বর্তমান project stack audit করে সেটির সঙ্গে সামঞ্জস্য রেখে implement করতে হবে। যদি Firebase ব্যবহার হয়, Firebase Auth + Firestore/Realtime Database + Storage + Cloud Functions/Security Rules; অন্য stack হলে সমমানের server-side architecture। Stack অনুমান করে rewrite নয়।
+Entity/Collection	প্রধান তথ্য
+users	id, auth_uid, email, display_name, role, status, created_at, referral_code
+user_profiles	user_id, phone, avatar, preferences, verified flags
+categories	id, name, slug, image, active, sort_order
+products	id, category_id, title, description, image, region, active, featured
+packages	id, product_id, label, quantity/duration, supplier_cost, sale_price, supplier_ref, availability
+orders	id, user_id, items, total, payment_status, fulfillment_status, customer_fields, timestamps
+payments	id, order_id, method, amount, trx_id, sender, receipt, verification_status
+suppliers	id, name, contact, API config reference (secret vault only), active
+wallet_ledger	id, user_id, direction, amount, source, reference, status, created_at
+withdrawals	id, user_id, amount, method, payout_details, status, admin_note, proof
+ads	id, provider, type, placement, code_ref, url, targeting, schedule, active, frequency
+ad_events	id, user_id/session, ad_id, event_type, verified, timestamp
+referrals	id, referrer_id, referred_id, code, status, reward_ref
+jobs	id, owner_id, title, budget, requirements, status, deadline
+job_applications	id, job_id, applicant_id, proposal, status
+services	id, title, packages, price, scope, active
+service_orders	id, user_id, service_id, brief, status, delivery
+support_tickets	id, user_id, subject, status, priority, assigned_admin
+notifications	id, user_id, type, title, body, read_at
+audit_logs	id, actor_id, action, target, before/after summary, timestamp
+
+⦁	All sensitive operations (wallet credit/debit, payment approval, order completion, withdrawal payout, referral reward) must execute server-side with authorization and idempotency.
+⦁	Use database indexes for user_id, status, created_at, order_id, product/category relationships and search fields.
+⦁	Use secure secret storage/environment variables; never expose API keys, supplier credentials or private ad credentials in client bundle.
+⦁	File uploads: type/size validation, safe filenames, access control, malware scanning where available, private receipts by default.
+⦁	Use pagination, query limits, rate limits, input validation, output encoding and protection against XSS/CSRF/SQL/NoSQL injection as relevant.
+⦁	Maintain backups/export strategy and documented rollback/migration plan before production changes.
+15. Reports & Business Analytics
+⦁	Sales: daily/weekly/monthly, category/product, payment method, order status।
+⦁	Profit: sale amount, supplier cost, fees, refund, net margin; only actual recorded values।
+⦁	Ad reports: network-reported impressions/clicks/revenue where available; manual imports clearly labelled।
+⦁	User/reward/referral reports: signup, active users, qualified referrals, reward liabilities, withdrawal queue।
+⦁	CSV export for orders, payments, ledger, products and reports with role restrictions।
+⦁	Date range, status, category, payment method filters; timezone Asia/Dhaka।
+16. Security, Compliance & Trust
+⦁	Least-privilege roles: Owner/Admin/Support/Operator (if needed) and User; each role permissions explicitly defined।
+⦁	Never store plaintext passwords or full payment credentials; use auth provider and secure secrets।
+⦁	Do not expose other users' profile, payment receipt, phone, wallet ledger or order details through public queries.
+⦁	Terms, privacy, refund, product delivery, subscription account sharing, regional restrictions and ad disclosures clearly visible.
+⦁	Do not sell unauthorized accounts, stolen credentials, fake engagement, or services violating platform terms/law.
+⦁	Rate limit login, OTP, checkout, referral claims, reward claims, uploads and support forms.
+⦁	Use HTTPS only, secure cookies/session, CSRF protection where applicable, CSP and allowlisted third-party scripts.
+⦁	Admin changes and financial operations must be auditable and reversible where appropriate.
+17. QA / Acceptance Checklist
+⦁	☐ Existing project audit completed and existing data/features preserved.
+⦁	☐ User signup/login/logout/password reset work; returning user data persists.
+⦁	☐ Admin-only routes and APIs reject normal users even if URL is typed manually.
+⦁	☐ Admin can create/edit/archive categories, products and packages; customer sees correct public price only.
+⦁	☐ Supplier cost and profit are hidden from customers and visible only to authorized Admin.
+⦁	☐ Customer can place order, submit payment proof, see status and receive completion notification.
+⦁	☐ Manual payment verification and withdrawal workflows have correct ledger accounting.
+⦁	☐ Ad placements render only in configured slots and respect close/frequency controls.
+⦁	☐ Ad URLs/scripts are stored exactly as supplied; missing script code is not fabricated.
+⦁	☐ Reward claims require verified rewarded-ad callback; banner clicks do not mint coins.
+⦁	☐ Referral attribution persists and self-referral/duplicate abuse is blocked.
+⦁	☐ Job and service order flows work end-to-end with real status updates.
+⦁	☐ Support ticket, notification, CMS banners and policy pages work.
+⦁	☐ Mobile/desktop responsive layout, loading/error/empty states and accessibility are tested.
+⦁	☐ Security rules, API authorization, rate limits, audit logs, backup and rollback are tested.
+⦁	☐ No fake buttons, demo-only balance, fake sales, fake revenue or fabricated product prices remain.
+18. Implementation Roadmap — phase by phase
+Phase	কাজ	শেষ হওয়ার শর্ত
+0. Audit & plan	Current code/database/ad/payment/auth audit; risk list; file map; migration plan	কিছু delete করার আগে user-কে findings ও plan দেখানো
+1. Core foundation	Auth, roles, security rules, database migrations, shared UI system	User/Admin permissions এবং data persistence verified
+2. Catalog & reseller	Categories, products, packages, supplier cost, sale price, order workflow	Customer order থেকে Admin fulfillment পর্যন্ত কাজ করে
+3. Payment & wallet	Manual payment verification, ledger, withdrawals, refunds	Financial ledger consistent; duplicate transaction blocked
+4. Ads & rewards	Ad slots, script library, banner/player/interstitial, rewarded callbacks	Policy-compliant ads; verified rewards only
+5. Referral/jobs/services	Referral, job board, service marketplace	All flows end-to-end tested
+6. CMS/support/reports	Homepage campaigns, tickets, notifications, analytics	Admin controls and exports work
+7. Production QA	Security review, performance, responsive, backups, deployment	Acceptance checklist passed; rollback plan ready
+
+19. যেসব তথ্য/credential ছাড়া AI Studio বানিয়ে ফেলতে পারবে না
+⦁	প্রতিটি ad network-এর পূর্ণ HTML/JavaScript code বা official tag; শুধু URL থাকলে সেটি যথেষ্ট নাও হতে পারে।
+⦁	Supplier account/API documentation/permission/API credentials; না থাকলে manual fulfillment রাখবে।
+⦁	Payment gateway API credentials; না থাকলে manual transaction ID + receipt verification রাখবে।
+⦁	Final package price, supplier cost, stock/availability, region and delivery terms; Admin যাচাই করে publish করবে।
+⦁	Physical banner-এর print size, orientation, bleed, output format এবং QR destination।
+⦁	Official Telegram/WhatsApp support destination এবং final policy/contact details।
+⦁	Rewarded ad network-এর incentivized traffic অনুমতি ও server-side completion callback specification।
+20. Google AI Studio-তে পেস্ট করার MASTER PROMPT
+তুমি এখন DIGITAL HUB-এর Senior Full-Stack Engineer, Product Architect, UI/UX Designer, Database Engineer এবং Security Reviewer হিসেবে কাজ করবে।
+
+আমি এই DOCX ফাইলটি project context হিসেবে upload করেছি। প্রথমে পুরো document পড়ো এবং আমার বর্তমান Google AI Studio project-এর সব existing source file, components, routes, database/schema, authentication, storage, ad scripts, payment flow এবং configuration audit করো।
+
+অত্যন্ত গুরুত্বপূর্ণ:
+1) Existing code, database data, users, orders, wallet balances, referrals, ad scripts বা working features কখনো অকারণে delete/replace করবে না।
+2) Blind rewrite করবে না। প্রথমে current architecture ও file map, existing feature list, missing feature list, security risks, data migration plan এবং phase-wise implementation plan দাও।
+3) কোনো destructive migration বা major rewrite-এর আগে exact impact ব্যাখ্যা করে আমার approval নেবে।
+4) এই document-এর সব requirement implement করার লক্ষ্য রাখবে; কোনো section বাদ পড়লে সেটি explicitly report করবে।
+5) DIGITAL HUB-কে orange-white, mobile-first, premium digital marketplace হিসেবে তৈরি করো; MangoTopUp-এর মতো পরিষ্কার catalog structure অনুপ্রেরণা হিসেবে নাও, কিন্তু নিজস্ব branding/assets ব্যবহার করো।
+6) Product catalog-এ Free Fire, PUBG, eFootball, Roblox, EA FC, DLS, COC/Clash Royale, Telegram Premium, CapCut, ChatGPT, Netflix/Prime/Chorki/Crunchyroll/VPN, social media ও digital services-এর category structure রাখো। Package, price, supplier cost, availability Admin-editable হবে। কোনো দাম বা package availability অনুমান করবে না।
+7) Customer order, manual payment proof, Admin verification, supplier purchase/fulfillment, completion notification এবং profit ledger end-to-end implement করো।
+8) Owner-only Admin Dashboard server-side role/permission দিয়ে secure করো। শুধু frontend-এ Admin menu hide করা যথেষ্ট নয়।
+9) সব ad URL/script হুবহু সংরক্ষণ করে Ad Code Library ও Admin-controlled placement তৈরি করো: homepage/category/product banner, video/player ad slot, policy-compliant popup/interstitial, footer/sidebar/custom slots। Missing script code বা network permission নিজে থেকে বানাবে না।
+10) Watch & Earn reward কেবল ad network অনুমোদিত rewarded format এবং verified server-side callback-এ দেবে। সাধারণ banner impression/click-এর জন্য coin দেবে না।
+11) Referral, jobs marketplace, services marketplace, wallet/ledger, bKash/Nagad/Rocket manual payment, withdrawal, support tickets, notifications, CMS, reports, audit logs ও security requirements document অনুযায়ী তৈরি করো।
+12) কোনো fake button, fake balance, fake order, fake earning, fake ad revenue বা demo-only flow production feature হিসেবে রাখবে না।
+13) API keys, supplier credentials, payment credentials ও secrets frontend-এ expose করবে না। প্রয়োজনীয় credential অনুপস্থিত হলে secure configuration field/placeholder তৈরি করে আমাকে কী দিতে হবে জানাও।
+14) প্রতিটি phase শেষে build/test চালিয়ে changed files, implemented features, remaining tasks এবং test results report করো।
+15) প্রথমে শুধু audit ও implementation plan দাও। আমার অনুমতি ছাড়া destructive change বা production deployment কোরো না।
+
+এখন document-এর Section 1 থেকে 20 পর্যন্ত requirement ধরে কাজ করো। প্রথম response-এ audit findings, current project architecture, existing features that will be preserved, missing features, risks, required credentials এবং phase-wise plan দাও।
+21. AI Studio-তে কীভাবে ব্যবহার করবে
+1.	Google AI Studio-তে তোমার DIGITAL HUB-এর existing project খুলবে।
+2.	এই DOCX ফাইলটি project/chat context-এ upload করবে (যে upload option তোমার interface-এ আছে)।
+3.	Section 20-এর MASTER PROMPT পুরোটা copy করে একই chat-এ paste করবে।
+4.	AI Studio-কে প্রথমে audit ও plan দিতে বলবে; প্রথম উত্তরে সরাসরি code rewrite করতে বলবে না।
+5.	Audit দেখে ঠিক থাকলে phase 1 থেকে এক ধাপ করে implement করতে বলবে। প্রতিটি phase শেষে preview/build/test করে নেবে।
+6.	যদি AI Studio কোনো ad script, API key, supplier credentials বা payment gateway details চায়, সেগুলো official provider dashboard থেকে সংগ্রহ করে secure config-এ দেবে; chat-এ public করে দেবে না।
+22. গুরুত্বপূর্ণ সীমাবদ্ধতা ও সততা
+এই specification-এ পূর্বের কথোপকথন থেকে উদ্ধার করা ৭টি ad URL যুক্ত করা হয়েছে। আগের কোনো আলাদা HTML/JavaScript ad code বা banner creative যদি কথোপকথনে URL আকারে না থেকে থাকে, তা এখানে পুনর্গঠন করা হয়নি; কারণ ভুল script বানালে revenue, security ও account policy ঝুঁকি হতে পারে। সেগুলো পাওয়া গেলে Ad Code Library-তে হুবহু যোগ করতে হবে।
+MangoTopUp-এর live package list/price বা supplier cost এই নথিতে hardcode করা হয়নি। এগুলো পরিবর্তনশীল; Admin বা supplier source থেকে verify করে publish করতে হবে।
+এই DOCX একটি বিস্তারিত implementation specification ও prompt; এটি নিজে কোনো deployed website, live payment gateway, supplier API বা ad network approval তৈরি করে না। বাস্তব backend credentials, policy approval এবং testing প্রয়োজন।
