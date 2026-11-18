@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { getApp, getApps, initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, reauthenticateWithPopup } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseAppletConfig from '../../firebase-applet-config.json';
@@ -19,7 +19,7 @@ function pickEnvOrFallback(envValue: string | undefined, fallback: string): stri
   return trimmed;
 }
 
-const resolvedFirebaseConfig = {
+export const resolvedFirebaseConfig = {
   ...firebaseAppletConfig,
   apiKey: pickEnvOrFallback(import.meta.env.VITE_FIREBASE_API_KEY, firebaseAppletConfig.apiKey),
   authDomain: pickEnvOrFallback(
@@ -49,7 +49,7 @@ const resolvedFirebaseConfig = {
   ),
 };
 
-const app = initializeApp(resolvedFirebaseConfig);
+const app = getApps().length > 0 ? getApp() : initializeApp(resolvedFirebaseConfig);
 
 export const db = getFirestore(app, resolvedFirebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);

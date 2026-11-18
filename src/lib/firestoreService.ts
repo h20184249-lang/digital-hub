@@ -525,82 +525,144 @@ export async function seedMarketplaceToFirestore(forceOverwrite = false): Promis
   }
 }
 
+const inFlightProfileEnsures = new Map<string, Promise<UserProfile | null>>();
+
 export async function ensureUserProfile(
   uid: string,
   email: string,
   displayName: string,
   language: 'bn' | 'en' = 'bn',
   referredByCode?: string
-): Promise<UserProfile> {
-  const userPath = `users/${uid}`;
-  try {
-    const userRef = doc(db, 'users', uid);
-    const walletRef = doc(db, 'walletAccounts', uid);
-    const [snap, walletSnap] = await Promise.all([getDoc(userRef), getDoc(walletRef)]);
-
-    if (!walletSnap.exists()) {
-      await setDoc(walletRef, {
-        uid,
-        availableBalanceBdt: 0,
-        promotionalCreditsBdt: 0,
-        totalAddedBdt: 0,
-        totalSpentBdt: 0,
-        updatedAt: serverTimestamp(),
-      });
-    }
-
-    if (snap.exists()) {
-      const existingProf = snap.data() as UserProfile;
-      const ownCode = (existingProf.referralCode || `DH${uid.slice(0, 6).toUpperCase()}`).toUpperCase();
-      setDoc(
-        doc(db, 'referralCodes', ownCode),
-        {
-          code: ownCode,
-          userId: uid,
-          createdAt: serverTimestamp(),
-        }
-      ).catch(() => {});
-      const refToLink = existingProf.referredBy || (referredByCode && referredByCode.toUpperCase() !== ownCode ? referredByCode.toUpperCase() : '');
-      if (refToLink) {
-        registerReferralServer(refToLink).catch(() => {});
-      }
-      return existingProf;
-    }
-
-    const code = `DH${uid.slice(0, 6).toUpperCase()}`;
-    const cleanReferredBy =
-      referredByCode && referredByCode.toUpperCase() !== code ? referredByCode.trim().toUpperCase().slice(0, 24) : '';
-
-    const normalizedEmail = email.trim().toLowerCase();
-    const isOwner = normalizedEmail === 'ftake810@gmail.com' && auth.currentUser?.emailVerified === true;
-
-    const newProfile: UserProfile = {
-      uid,
-      displayName: (displayName || email.split('@')[0] || 'Customer').slice(0, 120),
-      email: email.slice(0, 200),
-      role: isOwner ? 'admin' : 'user',
-      phone: '',
-      referralCode: code,
-      ...(cleanReferredBy ? { referredBy: cleanReferredBy } : {}),
-      promotionalCredits: 0,
-      language,
-      status: 'active',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    };
-    await setDoc(userRef, newProfile);
-    await setDoc(doc(db, 'referralCodes', code), {
-      code,
-      userId: uid,
-      createdAt: serverTimestamp(),
-    }).catch(() => {});
-    if (cleanReferredBy) {
-      registerReferralServer(cleanReferredBy).catch(() => {});
-    }
-    return newProfile;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, userPath);
+): Promise<UserProfile | null> {
+  if (!uid || !auth.currentUser || auth.currentUser.uid !== uid || !auth.currentUser.emailVerified) {
+    return null;
   }
+
+  const existingPromise = inFlightProfileEnsures.get(uid);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const run = (async (): Promise<UserProfile | null> => {
+    const userPath = `users/${uid}`;
+    try {
+      const normalizedEmail = (email || auth.currentUser?.email || '').trim().toLowerCase().slice(0, 200);
+      if (!normalizedEmail || normalizedEmail.length < 3) {
+        return null;
+      }
+
+      const userRef = doc(db, 'users', uid);
+      const walletRef = doc(db, 'walletAccounts', uid);
+      const [snap, walletSnap] = await Promise.all([
+        getDoc(userRef),
+        getDoc(walletRef).catch(() => null),
+      ]);
+
+      if (walletSnap && !walletSnap.exists()) {
+        await setDoc(walletRef, {
+          uid,
+          availableBalanceBdt: 0,
+          promotionalCreditsBdt: 0,
+          totalAddedBdt: 0,
+          totalSpentBdt: 0,
+          updatedAt: serverTimestamp(),
+        }).catch((walletErr) => {
+          console.warn('Non-fatal wallet account initialization error:', walletErr);
+        });
+      }
+
+      const safeUidPrefix = uid
+        .replace(/[^a-zA-Z0-9]/g, '')
+        .slice(0, 6)
+        .toUpperCase()
+        .padEnd(6, '0');
+      const fallbackCode = `DH${safeUidPrefix}`;
+
+      if (snap.exists()) {
+        const existingProf = snap.data() as UserProfile;
+        const ownCode = (existingProf.referralCode || fallbackCode).trim().toUpperCase();
+        if (/^[A-Z0-9_-]{4,24}$/.test(ownCode)) {
+          const refCodeRef = doc(db, 'referralCodes', ownCode);
+          getDoc(refCodeRef)
+            .then((refCodeSnap) => {
+              if (!refCodeSnap.exists()) {
+                return setDoc(refCodeRef, {
+                  code: ownCode,
+                  userId: uid,
+                  createdAt: serverTimestamp(),
+                });
+              }
+              return undefined;
+            })
+            .catch(() => {});
+        }
+        const refToLink =
+          existingProf.referredBy ||
+          (referredByCode && referredByCode.trim().toUpperCase() !== ownCode
+            ? referredByCode.trim().toUpperCase()
+            : '');
+        if (refToLink) {
+          registerReferralServer(refToLink).catch(() => {});
+        }
+        return existingProf;
+      }
+
+      const code = fallbackCode;
+      const cleanReferredBy =
+        referredByCode && referredByCode.trim().toUpperCase() !== code
+          ? referredByCode.trim().toUpperCase().slice(0, 24)
+          : '';
+
+      const isOwner = normalizedEmail === 'ftake810@gmail.com' && auth.currentUser?.emailVerified === true;
+      const cleanDisplayName = (
+        displayName.trim() ||
+        normalizedEmail.split('@')[0] ||
+        'Customer'
+      ).slice(0, 120);
+
+      const newProfile: UserProfile = {
+        uid,
+        displayName: cleanDisplayName,
+        email: normalizedEmail,
+        role: isOwner ? 'admin' : 'user',
+        phone: '',
+        referralCode: code,
+        ...(cleanReferredBy ? { referredBy: cleanReferredBy } : {}),
+        promotionalCredits: 0,
+        language,
+        status: 'active',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      await setDoc(userRef, newProfile);
+
+      const refCodeRef = doc(db, 'referralCodes', code);
+      getDoc(refCodeRef)
+        .then((refCodeSnap) => {
+          if (!refCodeSnap.exists()) {
+            return setDoc(refCodeRef, {
+              code,
+              userId: uid,
+              createdAt: serverTimestamp(),
+            });
+          }
+          return undefined;
+        })
+        .catch(() => {});
+
+      if (cleanReferredBy) {
+        registerReferralServer(cleanReferredBy).catch(() => {});
+      }
+      return newProfile;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, userPath);
+    } finally {
+      inFlightProfileEnsures.delete(uid);
+    }
+  })();
+
+  inFlightProfileEnsures.set(uid, run);
+  return run;
 }
 
 export interface BackendAuthSession {

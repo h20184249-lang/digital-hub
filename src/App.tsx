@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import {
   ArrowRight,
@@ -152,7 +152,9 @@ export default function App() {
   const [viewingSessions, setViewingSessions] = useState<AdViewingSession[]>([]);
   const [adRewardTransactions, setAdRewardTransactions] = useState<AdRewardTransaction[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [authRefreshNonce, setAuthRefreshNonce] = useState(0);
   const explicitAuthSignInRef = useRef(false);
+  const langRef = useRef<Language>(lang);
 
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
@@ -177,6 +179,7 @@ export default function App() {
     }
     return localStorage.getItem('dh_ref') || '';
   });
+  const capturedReferralRef = useRef<string>(capturedReferral);
   const [authInitialMode, setAuthInitialMode] = useState<'login' | 'register'>(() => {
     const isRegPath = window.location.pathname === '/register';
     const hasRef = Boolean(new URLSearchParams(window.location.search).get('ref'));
@@ -235,6 +238,70 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    langRef.current = lang;
+  }, [lang]);
+
+  useEffect(() => {
+    capturedReferralRef.current = capturedReferral;
+  }, [capturedReferral]);
+
+  const initializeVerifiedUserSession = useCallback(async (current: User) => {
+    const emailVerified = current.emailVerified;
+    const isOwnerEmail =
+      emailVerified && current.email?.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+    const [session, serverVerified] = await Promise.all([
+      syncBackendAuthSession(),
+      isOwnerEmail ? verifyOwnerAdminServer() : Promise.resolve(false),
+    ]);
+    const adminStatus = isOwnerEmail && (session?.role === 'admin' || serverVerified);
+    setIsAdmin(adminStatus);
+    if (emailVerified) {
+      setAuthModalOpen(false);
+    }
+
+    if (adminStatus) {
+      seedMarketplaceToFirestore(false).catch(() => {});
+    }
+
+    if (emailVerified) {
+      ensureUserProfile(
+        current.uid,
+        (current.email || '').trim().toLowerCase(),
+        current.displayName || current.email?.split('@')[0] || 'Customer',
+        langRef.current,
+        capturedReferralRef.current
+      )
+        .then(async (prof) => {
+          if (!prof) return;
+          if (prof.sessionRevokedAt) {
+            const tokenRes = await current.getIdTokenResult().catch(() => null);
+            const authTimeMs = tokenRes?.authTime ? Date.parse(tokenRes.authTime) : 0;
+            if (authTimeMs > 0 && authTimeMs < prof.sessionRevokedAt) {
+              await signOut(auth).catch(() => {});
+              showToast(
+                langRef.current === 'bn'
+                  ? 'নিরাপত্তার জন্য এই সেশনটি লগআউট করা হয়েছে।'
+                  : 'Session signed out due to logout-all request.'
+              );
+              return;
+            }
+          }
+          setProfile(prof);
+        })
+        .catch((profileErr) => {
+          console.warn('Non-fatal profile sync error after authentication:', profileErr);
+        });
+
+      if (explicitAuthSignInRef.current) {
+        explicitAuthSignInRef.current = false;
+        setRoute(adminStatus ? 'admin' : 'account');
+      } else if (!adminStatus) {
+        setRoute((prev) => (prev === 'admin' ? 'account' : prev));
+      }
+    }
+  }, []);
+
+  useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (current) => {
       setUser(current);
       if (!current) {
@@ -256,59 +323,10 @@ export default function App() {
         return;
       }
 
-      const emailVerified = current.emailVerified;
-      const isOwnerEmail =
-        emailVerified && current.email?.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
-      const [session, serverVerified] = await Promise.all([
-        syncBackendAuthSession(),
-        isOwnerEmail ? verifyOwnerAdminServer() : Promise.resolve(false),
-      ]);
-      const adminStatus = isOwnerEmail && (session?.role === 'admin' || serverVerified);
-      setIsAdmin(adminStatus);
-      if (emailVerified) {
-        setAuthModalOpen(false);
-      }
-
-      if (adminStatus) {
-        seedMarketplaceToFirestore(false).catch(() => {});
-      }
-
-      if (emailVerified) {
-        ensureUserProfile(
-          current.uid,
-          current.email || '',
-          current.displayName || current.email?.split('@')[0] || 'Customer',
-          lang,
-          capturedReferral
-        )
-          .then(async (prof) => {
-            if (prof?.sessionRevokedAt) {
-              const tokenRes = await current.getIdTokenResult().catch(() => null);
-              const authTimeMs = tokenRes?.authTime ? Date.parse(tokenRes.authTime) : 0;
-              if (authTimeMs > 0 && authTimeMs < prof.sessionRevokedAt) {
-                await signOut(auth).catch(() => {});
-                showToast(
-                  lang === 'bn'
-                    ? 'নিরাপত্তার জন্য এই সেশনটি লগআউট করা হয়েছে।'
-                    : 'Session signed out due to logout-all request.'
-                );
-                return;
-              }
-            }
-            setProfile(prof);
-          })
-          .catch(() => {});
-
-        if (explicitAuthSignInRef.current) {
-          explicitAuthSignInRef.current = false;
-          setRoute(adminStatus ? 'admin' : 'account');
-        } else if (!adminStatus) {
-          setRoute((prev) => (prev === 'admin' ? 'account' : prev));
-        }
-      }
+      await initializeVerifiedUserSession(current);
     });
     return () => unsub();
-  }, [capturedReferral, lang]);
+  }, [initializeVerifiedUserSession]);
 
   useEffect(() => {
     if (!user || !user.emailVerified) return;
@@ -338,7 +356,7 @@ export default function App() {
       u11();
       u12();
     };
-  }, [user]);
+  }, [user, authRefreshNonce]);
 
   useEffect(() => {
     const timer = setInterval(() => setHeroSlide((s) => (s + 1) % 3), 5500);
@@ -1495,21 +1513,34 @@ export default function App() {
         initialMode={authInitialMode}
         initialReferralCode={capturedReferral}
         onReferralCapture={(code) => {
+          capturedReferralRef.current = code;
           setCapturedReferral(code);
-          localStorage.setItem('dh_ref', code);
+          try {
+            localStorage.setItem('dh_ref', code);
+          } catch {
+            // Non-fatal
+          }
         }}
         onLoginSuccess={() => {
           explicitAuthSignInRef.current = true;
         }}
         needsVerification={Boolean(user && !user.emailVerified)}
+        pendingEmail={user && !user.emailVerified ? user.email || '' : ''}
         onRefreshVerification={async () => {
-          if (auth.currentUser) {
-            await auth.currentUser.reload();
-            if (auth.currentUser.emailVerified) {
-              explicitAuthSignInRef.current = true;
-              setAuthModalOpen(false);
-            }
+          const current = auth.currentUser;
+          if (!current) return false;
+          await current.reload();
+          if (current.emailVerified) {
+            // Force-refresh ID token so Firestore Security Rules immediately see email_verified == true
+            await current.getIdToken(true);
+            explicitAuthSignInRef.current = true;
+            setUser(auth.currentUser);
+            setAuthRefreshNonce((n) => n + 1);
+            await initializeVerifiedUserSession(current);
+            setAuthModalOpen(false);
+            return true;
           }
+          return false;
         }}
       />
 
