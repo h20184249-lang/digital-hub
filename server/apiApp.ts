@@ -178,6 +178,160 @@ async function getFirestoreDoc(
   return { ok: true, fields: data.fields };
 }
 
+async function getUnauthenticatedFirestoreDoc(
+  collectionPath: string,
+  docId: string
+): Promise<{ ok: boolean; exists: boolean; status: number; fields?: Record<string, unknown> }> {
+  const resp = await fetch(firestoreDocUrl(collectionPath, docId));
+  if (resp.status === 404) {
+    return { ok: true, exists: false, status: 404 };
+  }
+  if (!resp.ok) {
+    return { ok: false, exists: false, status: resp.status };
+  }
+  const data = (await resp.json()) as { fields?: Record<string, unknown> };
+  return { ok: true, exists: true, status: 200, fields: data.fields };
+}
+
+const BENGALI_DIGITS_MAP: Record<string, string> = {
+  '০': '0',
+  '১': '1',
+  '২': '2',
+  '৩': '3',
+  '৪': '4',
+  '৫': '5',
+  '৬': '6',
+  '৭': '7',
+  '৮': '8',
+  '৯': '9',
+};
+
+function normalizeBangladeshPhoneServer(raw: string): { e164: string; phoneHash: string } | null {
+  if (typeof raw !== 'string') return null;
+  const ascii = raw.replace(/[০-৯]/g, (d) => BENGALI_DIGITS_MAP[d] || d);
+  const cleaned = ascii.replace(/[\s\-().]/g, '').trim();
+  if (!cleaned) return null;
+
+  let e164 = '';
+  if (/^\+8801[3-9]\d{8}$/.test(cleaned)) {
+    e164 = cleaned;
+  } else if (/^8801[3-9]\d{8}$/.test(cleaned)) {
+    e164 = `+${cleaned}`;
+  } else if (/^01[3-9]\d{8}$/.test(cleaned)) {
+    e164 = `+88${cleaned}`;
+  } else if (/^1[3-9]\d{8}$/.test(cleaned)) {
+    e164 = `+880${cleaned}`;
+  } else {
+    return null;
+  }
+
+  const cfg = getFirebaseConfig();
+  const phoneHash = crypto
+    .createHash('sha256')
+    .update(`dh_bd_phone_v1:${cfg.projectId}:${e164}`)
+    .digest('hex');
+  return { e164, phoneHash };
+}
+
+function getPhoneIndexCipherKeys(): Buffer[] {
+  const cfg = getFirebaseConfig();
+  const keys: Buffer[] = [];
+  const envSecret = (process.env.PHONE_AUTH_INDEX_SECRET || '').trim();
+  if (isConfiguredEnvValue(envSecret)) {
+    keys.push(crypto.createHash('sha256').update(`dh_phone_secret:${envSecret}`).digest());
+  }
+  keys.push(
+    crypto
+      .createHash('sha256')
+      .update(`dh_phone_ref_key_v1:${cfg.projectId}:${cfg.apiKey}`)
+      .digest()
+  );
+  return keys;
+}
+
+function encryptPhoneAuthRef(email: string, e164Phone: string): string {
+  const [primaryKey] = getPhoneIndexCipherKeys();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', primaryKey, iv);
+  const plaintext = JSON.stringify({ email: email.trim().toLowerCase(), phone: e164Phone });
+  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `v1:${iv.toString('base64url')}.${authTag.toString('base64url')}.${encrypted.toString('base64url')}`;
+}
+
+function decryptPhoneAuthRef(payload: string): { email: string; phone: string } | null {
+  if (typeof payload !== 'string' || !payload.startsWith('v1:')) return null;
+  const parts = payload.slice(3).split('.');
+  if (parts.length !== 3) return null;
+  const [ivB64, tagB64, dataB64] = parts;
+  let iv: Buffer;
+  let tag: Buffer;
+  let encrypted: Buffer;
+  try {
+    iv = Buffer.from(ivB64, 'base64url');
+    tag = Buffer.from(tagB64, 'base64url');
+    encrypted = Buffer.from(dataB64, 'base64url');
+  } catch {
+    return null;
+  }
+
+  for (const key of getPhoneIndexCipherKeys()) {
+    try {
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAuthTag(tag);
+      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+      const parsed = JSON.parse(decrypted) as { email?: unknown; phone?: unknown };
+      if (typeof parsed.email === 'string' && parsed.email.includes('@')) {
+        return {
+          email: parsed.email.trim().toLowerCase(),
+          phone: typeof parsed.phone === 'string' ? parsed.phone : '',
+        };
+      }
+    } catch {
+      // Try next key in rotation chain
+    }
+  }
+  return null;
+}
+
+function maskEmailForDisplay(email: string): string {
+  const trimmed = email.trim().toLowerCase();
+  const atIndex = trimmed.indexOf('@');
+  if (atIndex <= 0) return '***';
+  const local = trimmed.slice(0, atIndex);
+  const domain = trimmed.slice(atIndex + 1);
+  if (local.length <= 2) {
+    return `${local[0]}***@${domain}`;
+  }
+  return `${local.slice(0, 2)}***${local.slice(-1)}@${domain}`;
+}
+
+function mapIdentityToolkitErrorToAuthCode(rawMessage: string): string {
+  const normalized = (rawMessage || '').trim().toUpperCase().split(' ')[0];
+  switch (normalized) {
+    case 'EMAIL_NOT_FOUND':
+      return 'auth/user-not-found';
+    case 'INVALID_PASSWORD':
+      return 'auth/wrong-password';
+    case 'INVALID_LOGIN_CREDENTIALS':
+      return 'auth/invalid-credential';
+    case 'USER_DISABLED':
+      return 'auth/user-disabled';
+    case 'OPERATION_NOT_ALLOWED':
+      return 'auth/operation-not-allowed';
+    case 'TOO_MANY_ATTEMPTS_TRY_LATER':
+      return 'auth/too-many-requests';
+    case 'INVALID_EMAIL':
+      return 'auth/invalid-email';
+    case 'EMAIL_EXISTS':
+      return 'auth/email-already-in-use';
+    case 'WEAK_PASSWORD':
+      return 'auth/weak-password';
+    default:
+      return 'auth/invalid-credential';
+  }
+}
+
 async function runFirestoreEqualQuery(
   collectionId: string,
   fieldPath: string,
@@ -1240,6 +1394,344 @@ export function createApiApp(): express.Express {
       freshAuth: isFreshAdminAuth(user, 900),
     });
   });
+
+  // Check whether a Bangladesh phone number (+8801XXXXXXXXX) is already registered
+  app.post('/api/auth/phone/check', async (req, res) => {
+    const body = req.body as { phone?: unknown };
+    const normalized = normalizeBangladeshPhoneServer(typeof body.phone === 'string' ? body.phone : '');
+    if (!normalized) {
+      res.status(400).json({
+        ok: false,
+        code: 'auth/invalid-phone-number',
+        error: 'Invalid Bangladesh phone number format. Use +8801XXXXXXXXX or 01XXXXXXXXX.',
+      });
+      return;
+    }
+
+    try {
+      const lookup = await getUnauthenticatedFirestoreDoc('phoneIndex', normalized.phoneHash);
+      if (!lookup.ok) {
+        res.status(503).json({
+          ok: false,
+          code: 'auth/network-request-failed',
+          error: 'Could not verify phone registration status right now.',
+        });
+        return;
+      }
+      res.json({
+        ok: true,
+        normalizedPhone: normalized.e164,
+        exists: lookup.exists,
+      });
+    } catch {
+      res.status(503).json({
+        ok: false,
+        code: 'auth/network-request-failed',
+        error: 'Phone lookup temporarily unavailable.',
+      });
+    }
+  });
+
+  // Register/link an encrypted phone auth index entry for an authenticated verified user
+  app.post('/api/auth/phone/index', async (req, res) => {
+    const user = await verifyBearerToken(req.headers.authorization);
+    if (!user || !user.emailVerified || !user.email) {
+      res.status(401).json({
+        ok: false,
+        code: 'auth/requires-recent-login',
+        error: 'Verified authentication token required to register phone login.',
+      });
+      return;
+    }
+
+    const body = req.body as { phone?: unknown };
+    const normalized = normalizeBangladeshPhoneServer(typeof body.phone === 'string' ? body.phone : '');
+    if (!normalized) {
+      res.status(400).json({
+        ok: false,
+        code: 'auth/invalid-phone-number',
+        error: 'Invalid Bangladesh phone number format.',
+      });
+      return;
+    }
+
+    try {
+      const existing = await getUnauthenticatedFirestoreDoc('phoneIndex', normalized.phoneHash);
+      if (!existing.ok) {
+        res.status(503).json({
+          ok: false,
+          code: 'auth/network-request-failed',
+          error: 'Failed to check existing phone index.',
+        });
+        return;
+      }
+
+      const now = new Date();
+      const encryptedRef = encryptPhoneAuthRef(user.email, normalized.e164);
+
+      if (existing.exists && existing.fields) {
+        const ownerUid = fromFirestoreString(existing.fields.uid);
+        if (ownerUid && ownerUid !== user.uid) {
+          res.status(409).json({
+            ok: false,
+            code: 'auth/phone-already-in-use',
+            error: 'This phone number is already registered with another account.',
+          });
+          return;
+        }
+        const updateRes = await patchFirestoreDoc(
+          'phoneIndex',
+          normalized.phoneHash,
+          { encryptedRef, updatedAt: now },
+          user.token
+        );
+        if (!updateRes.ok) {
+          res.status(updateRes.status).json({
+            ok: false,
+            error: 'Failed to update phone index.',
+          });
+          return;
+        }
+      } else {
+        const createRes = await createFirestoreDoc(
+          'phoneIndex',
+          normalized.phoneHash,
+          {
+            phoneHash: normalized.phoneHash,
+            uid: user.uid,
+            encryptedRef,
+            createdAt: now,
+            updatedAt: now,
+          },
+          user.token
+        );
+        if (!createRes.ok) {
+          res.status(createRes.status === 409 ? 409 : createRes.status).json({
+            ok: false,
+            code: createRes.status === 409 ? 'auth/phone-already-in-use' : 'auth/internal-error',
+            error: 'Failed to create phone login index.',
+          });
+          return;
+        }
+      }
+
+      res.json({ ok: true, normalizedPhone: normalized.e164 });
+    } catch {
+      res.status(503).json({
+        ok: false,
+        code: 'auth/network-request-failed',
+        error: 'Could not save phone login index.',
+      });
+    }
+  });
+
+  // Server-verified Phone + Password login against Firebase Identity Toolkit (zero email leakage on wrong password)
+  app.post(
+    '/api/auth/phone/login',
+    applyApiRateLimit('auth_phone_login', 12, 60000),
+    async (req, res) => {
+      const body = req.body as { phone?: unknown; password?: unknown };
+      const normalized = normalizeBangladeshPhoneServer(typeof body.phone === 'string' ? body.phone : '');
+      const password = typeof body.password === 'string' ? body.password : '';
+
+      if (!normalized) {
+        res.status(400).json({
+          ok: false,
+          code: 'auth/invalid-phone-number',
+          error: 'Invalid Bangladesh phone number.',
+        });
+        return;
+      }
+      if (password.length < 6 || password.length > 128) {
+        res.status(400).json({
+          ok: false,
+          code: 'auth/wrong-password',
+          error: 'Invalid password.',
+        });
+        return;
+      }
+
+      const cfg = getFirebaseConfig();
+      if (!cfg.apiKey) {
+        res.status(500).json({ ok: false, error: 'Firebase configuration missing.' });
+        return;
+      }
+
+      try {
+        const lookup = await getUnauthenticatedFirestoreDoc('phoneIndex', normalized.phoneHash);
+        if (!lookup.ok) {
+          res.status(503).json({
+            ok: false,
+            code: 'auth/network-request-failed',
+            error: 'Could not verify phone account right now.',
+          });
+          return;
+        }
+        if (!lookup.exists || !lookup.fields) {
+          res.status(404).json({
+            ok: false,
+            code: 'auth/user-not-found',
+            error: 'No account found with this phone number.',
+          });
+          return;
+        }
+
+        const encryptedRef = fromFirestoreString(lookup.fields.encryptedRef);
+        const decrypted = decryptPhoneAuthRef(encryptedRef);
+        if (!decrypted?.email) {
+          res.status(500).json({
+            ok: false,
+            code: 'auth/internal-error',
+            error: 'Phone account index could not be decrypted. Please sign in with email or Google.',
+          });
+          return;
+        }
+
+        // Verify password directly with Firebase Identity Toolkit before revealing auth email to client
+        const idResp = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(cfg.apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: decrypted.email,
+              password,
+              returnSecureToken: true,
+            }),
+          }
+        );
+
+        const idData = (await idResp.json().catch(() => ({}))) as {
+          email?: string;
+          localId?: string;
+          error?: { message?: string };
+        };
+
+        if (!idResp.ok) {
+          const authCode = mapIdentityToolkitErrorToAuthCode(idData.error?.message || '');
+          const status =
+            authCode === 'auth/too-many-requests'
+              ? 429
+              : authCode === 'auth/operation-not-allowed'
+                ? 400
+                : authCode === 'auth/user-disabled'
+                  ? 403
+                  : 401;
+          res.status(status).json({
+            ok: false,
+            code: authCode,
+            error: 'Phone login authentication failed.',
+          });
+          return;
+        }
+
+        res.json({
+          ok: true,
+          normalizedPhone: normalized.e164,
+          authEmail: decrypted.email,
+        });
+      } catch {
+        res.status(503).json({
+          ok: false,
+          code: 'auth/network-request-failed',
+          error: 'Authentication server temporarily unreachable.',
+        });
+      }
+    }
+  );
+
+  // Server-backed Phone Account Recovery (triggers real Firebase password reset link to verified recovery email)
+  app.post(
+    '/api/auth/phone/recover',
+    applyApiRateLimit('auth_phone_recover', 6, 60000),
+    async (req, res) => {
+      const body = req.body as { phone?: unknown };
+      const normalized = normalizeBangladeshPhoneServer(typeof body.phone === 'string' ? body.phone : '');
+      if (!normalized) {
+        res.status(400).json({
+          ok: false,
+          code: 'auth/invalid-phone-number',
+          error: 'Invalid Bangladesh phone number.',
+        });
+        return;
+      }
+
+      const cfg = getFirebaseConfig();
+      if (!cfg.apiKey) {
+        res.status(500).json({ ok: false, error: 'Firebase configuration missing.' });
+        return;
+      }
+
+      try {
+        const lookup = await getUnauthenticatedFirestoreDoc('phoneIndex', normalized.phoneHash);
+        if (!lookup.ok) {
+          res.status(503).json({
+            ok: false,
+            code: 'auth/network-request-failed',
+            error: 'Recovery lookup temporarily unavailable.',
+          });
+          return;
+        }
+        if (!lookup.exists || !lookup.fields) {
+          res.status(404).json({
+            ok: false,
+            code: 'auth/user-not-found',
+            error: 'No account found with this phone number.',
+          });
+          return;
+        }
+
+        const encryptedRef = fromFirestoreString(lookup.fields.encryptedRef);
+        const decrypted = decryptPhoneAuthRef(encryptedRef);
+        if (!decrypted?.email) {
+          res.status(500).json({
+            ok: false,
+            code: 'auth/internal-error',
+            error: 'Phone recovery reference could not be decoded.',
+          });
+          return;
+        }
+
+        const resetResp = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${encodeURIComponent(cfg.apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              requestType: 'PASSWORD_RESET',
+              email: decrypted.email,
+            }),
+          }
+        );
+
+        const resetData = (await resetResp.json().catch(() => ({}))) as {
+          error?: { message?: string };
+        };
+
+        if (!resetResp.ok) {
+          const authCode = mapIdentityToolkitErrorToAuthCode(resetData.error?.message || '');
+          res.status(authCode === 'auth/too-many-requests' ? 429 : 400).json({
+            ok: false,
+            code: authCode,
+            error: 'Could not send recovery email.',
+          });
+          return;
+        }
+
+        res.json({
+          ok: true,
+          normalizedPhone: normalized.e164,
+          maskedEmail: maskEmailForDisplay(decrypted.email),
+        });
+      } catch {
+        res.status(503).json({
+          ok: false,
+          code: 'auth/network-request-failed',
+          error: 'Recovery service temporarily unavailable.',
+        });
+      }
+    }
+  );
 
   // Owner-only user block/unblock with fresh re-authentication enforcement
   app.post('/api/admin/update-user-status', async (req, res) => {

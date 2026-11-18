@@ -1,25 +1,28 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  EmailAuthProvider,
-  linkWithCredential,
-  reauthenticateWithPopup,
+  createUserWithEmailAndPassword,
   sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
+  updateProfile,
   User,
 } from 'firebase/auth';
 import {
+  AlertCircle,
+  ArrowLeft,
   ArrowRight,
-  Check,
   CheckCircle2,
   Eye,
   EyeOff,
   KeyRound,
-  Lock,
+  Loader2,
+  LogIn,
   LogOut,
   Mail,
+  Phone,
   RefreshCw,
   ShieldCheck,
   UserCheck,
@@ -27,9 +30,18 @@ import {
   X,
 } from 'lucide-react';
 import { auth, googleProvider } from '../lib/firebase';
-import { ensureUserProfile, hasExistingUserProfile } from '../lib/firestoreService';
-import { Language } from '../types/marketplace';
-import { t } from '../lib/i18n';
+import {
+  authenticatePhoneServer,
+  checkPhoneRegisteredServer,
+  clearPendingAuthMeta,
+  ensureUserProfile,
+  hasExistingUserProfile,
+  normalizeBangladeshPhoneClient,
+  recoverPhoneAccountServer,
+  registerPhoneIndexServer,
+  savePendingAuthMeta,
+} from '../lib/firestoreService';
+import { AuthMethod, Language } from '../types/marketplace';
 import { DigitalHubLogo } from './DigitalHubLogo';
 
 interface AuthModalProps {
@@ -41,18 +53,14 @@ interface AuthModalProps {
   onReferralCapture: (code: string) => void;
   onLoginSuccess?: () => void;
   onPasswordSetupStateChange?: (active: boolean) => void;
-  onRegistrationComplete?: (user: User, isExistingAccount?: boolean) => Promise<void>;
+  onRegistrationComplete?: (
+    user: User,
+    isExistingAccount?: boolean,
+    meta?: { authMethod?: AuthMethod; phone?: string; displayName?: string }
+  ) => Promise<void>;
   needsVerification?: boolean;
   pendingEmail?: string;
   onRefreshVerification?: () => Promise<boolean>;
-}
-
-interface VerifiedGoogleCandidate {
-  uid: string;
-  email: string;
-  displayName: string;
-  photoURL: string;
-  hadExistingProfile: boolean;
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -94,245 +102,195 @@ function getFirebaseAuthErrorCode(err: unknown): string {
   return '';
 }
 
-function mapFirebaseAuthError(
+function mapAuthError(
   err: unknown,
-  context: 'login' | 'register' | 'link-password' | 'reset' | 'google' | 'verify',
+  context: 'google' | 'email-login' | 'email-register' | 'phone-login' | 'phone-register' | 'reset-email' | 'reset-phone' | 'verify',
   lang: Language
 ): { code: string; message: string } {
   const code = getFirebaseAuthErrorCode(err);
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
 
   switch (code) {
     case 'auth/email-already-in-use':
     case 'auth/credential-already-in-use':
       return {
-        code,
+        code: 'auth/email-already-in-use',
         message:
           lang === 'bn'
-            ? 'এই Gmail ঠিকানাটি ইতিমধ্যেই Digital Hub-এ নিবন্ধিত আছে। অনুগ্রহ করে লগইন করুন অথবা পাসওয়ার্ড রিসেট করুন।'
-            : 'This Gmail address is already registered on Digital Hub. Please sign in or reset your password.',
+            ? 'এই ইমেইল দিয়ে আগে থেকেই অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।'
+            : 'An account already exists with this email. Please log in instead.',
       };
-    case 'auth/provider-already-linked':
+    case 'auth/phone-already-in-use':
+      return {
+        code: 'auth/phone-already-in-use',
+        message:
+          lang === 'bn'
+            ? 'এই ফোন নম্বর দিয়ে আগে থেকেই অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে ফোন নম্বর ও পাসওয়ার্ড দিয়ে লগইন করুন।'
+            : 'An account already exists with this phone number. Please log in with your phone and password.',
+      };
+    case 'auth/invalid-phone-number':
       return {
         code,
         message:
           lang === 'bn'
-            ? 'এই অ্যাকাউন্টে ইতিমধ্যেই পাসওয়ার্ড সেট করা আছে। অনুগ্রহ করে লগইন করুন।'
-            : 'A Digital Hub password is already linked to this account. Please sign in.',
-      };
-    case 'auth/operation-not-allowed':
-      return {
-        code,
-        message:
-          context === 'link-password' || context === 'login'
-            ? lang === 'bn'
-              ? 'Firebase Console-এ Email/Password প্রোভাইডার এখনো চালু করা হয়নি। সাইট অ্যাডমিন Firebase Authentication → Sign-in method থেকে Email/Password চালু করলেই পাসওয়ার্ড লগইন কাজ করবে।'
-              : 'Email/Password sign-in provider is currently disabled in Firebase Console. Enable Email/Password under Firebase Authentication → Sign-in method to complete password setup.'
-            : lang === 'bn'
-              ? 'এই সাইন-ইন পদ্ধতিটি Firebase Console-এ বর্তমানে নিষ্ক্রিয় আছে।'
-              : 'This sign-in provider is currently disabled in Firebase Authentication Console.',
-      };
-    case 'auth/unauthorized-domain':
-      return {
-        code,
-        message:
-          lang === 'bn'
-            ? `এই ওয়েবসাইট ডোমেইনটি (${typeof window !== 'undefined' ? window.location.hostname : ''}) Firebase Authorized Domains-এ যুক্ত করা হয়নি। Firebase Console → Authentication → Settings → Authorized domains-এ ডোমেইনটি যোগ করুন।`
-            : `This domain (${typeof window !== 'undefined' ? window.location.hostname : ''}) is not listed in Firebase Authentication Authorized Domains. Add it in Firebase Console → Authentication → Settings → Authorized domains.`,
+            ? 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন (যেমন: 017XXXXXXXX বা +88017XXXXXXXX)।'
+            : 'Please enter a valid Bangladesh mobile number (e.g., 017XXXXXXXX or +88017XXXXXXXX).',
       };
     case 'auth/invalid-email':
       return {
         code,
         message:
           lang === 'bn'
-            ? 'অনুগ্রহ করে একটি সঠিক Gmail / ইমেইল ঠিকানা লিখুন।'
-            : 'Please enter a valid Gmail / email address.',
+            ? 'অনুগ্রহ করে একটি সঠিক ইমেইল ঠিকানা লিখুন।'
+            : 'Please enter a valid email address.',
       };
     case 'auth/weak-password':
       return {
         code,
         message:
           lang === 'bn'
-            ? 'পাসওয়ার্ডটি খুবই দুর্বল। কমপক্ষে ৬ অক্ষর (সুপারিশকৃত ৮+ অক্ষর, সংখ্যা ও চিহ্নসহ) ব্যবহার করুন।'
-            : 'Password is too weak. Use at least 6 characters (8+ with numbers and symbols recommended).',
+            ? 'পাসওয়ার্ড দুর্বল। কমপক্ষে ৬ অক্ষরের (অক্ষর ও সংখ্যাসহ) শক্তিশালী পাসওয়ার্ড ব্যবহার করুন।'
+            : 'Password is too weak. Use at least 6 characters with letters and numbers.',
       };
-    case 'auth/invalid-credential':
-    case 'auth/wrong-password':
     case 'auth/user-not-found':
       return {
         code,
         message:
-          context === 'reset'
+          context === 'phone-login' || context === 'reset-phone'
             ? lang === 'bn'
-              ? 'এই ইমেইল দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি।'
-              : 'No account was found with this email address.'
+              ? 'এই ফোন নম্বর দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট তৈরি করুন।'
+              : 'No account was found with this phone number. Please create a new account.'
             : lang === 'bn'
-              ? 'ইমেইল অথবা পাসওয়ার্ড সঠিক নয়। যদি আগে শুধু Google দিয়ে লগইন করে থাকেন, তবে Google লগইন ব্যবহার করুন অথবা "Google দিয়ে সাইনআপ" করে পাসওয়ার্ড সেট করুন।'
-              : 'Incorrect email or password. If you previously used Google only, sign in with Google or click "Sign Up with Google" to set a Digital Hub password.',
+              ? 'এই ইমেইল দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি। নতুন অ্যাকাউন্ট তৈরি করুন।'
+              : 'No account was found with this email address. Please create a new account.',
       };
-    case 'auth/user-disabled':
+    case 'auth/wrong-password':
       return {
         code,
         message:
           lang === 'bn'
-            ? 'এই অ্যাকাউন্টটি সাময়িকভাবে নিষ্ক্রিয় করা হয়েছে। সাপোর্টে যোগাযোগ করুন।'
-            : 'This account has been disabled. Please contact support.',
+            ? 'পাসওয়ার্ড সঠিক নয়। আবার চেষ্টা করুন অথবা "পাসওয়ার্ড ভুলে গেছেন?" ব্যবহার করুন।'
+            : 'Incorrect password. Please try again or use "Forgot Password?".',
       };
-    case 'auth/too-many-requests':
+    case 'auth/invalid-credential':
+      return {
+        code,
+        message:
+          context === 'phone-login'
+            ? lang === 'bn'
+              ? 'ফোন নম্বর অথবা পাসওয়ার্ড সঠিক নয়। আবার পরীক্ষা করে চেষ্টা করুন।'
+              : 'Incorrect phone number or password. Please check and try again.'
+            : lang === 'bn'
+              ? 'ইমেইল অথবা পাসওয়ার্ড সঠিক নয়। আগে Google দিয়ে অ্যাকাউন্ট খুলে থাকলে Google বাটন দিয়ে লগইন করুন।'
+              : 'Incorrect email or password. If you previously signed up with Google, use the Google button.',
+      };
+    case 'auth/unauthorized-domain':
       return {
         code,
         message:
           lang === 'bn'
-            ? 'অনেকবার চেষ্টা করা হয়েছে। অনুগ্রহ করে কিছুক্ষণ পর আবার চেষ্টা করুন।'
-            : 'Too many attempts. Please wait a few minutes and try again.',
-      };
-    case 'auth/network-request-failed':
-      return {
-        code,
-        message:
-          lang === 'bn'
-            ? 'নেটওয়ার্ক সংযোগে সমস্যা হয়েছে। আপনার ইন্টারনেট পরীক্ষা করে আবার চেষ্টা করুন।'
-            : 'Network error. Please check your internet connection and try again.',
-      };
-    case 'auth/popup-closed-by-user':
-    case 'auth/cancelled-popup-request':
-      return {
-        code,
-        message:
-          lang === 'bn'
-            ? 'Google অ্যাকাউন্ট নির্বাচন পপআপটি বন্ধ করা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'
-            : 'Google account selection popup was closed before completing. Please try again.',
+            ? `এই ডোমেইনটি (${hostname}) Firebase Auth Authorized Domains-এ যুক্ত করা হয়নি। Firebase Console → Authentication → Settings → Authorized domains-এ ডোমেইনটি যোগ করুন।`
+            : `This domain (${hostname}) is not authorized in Firebase Authentication. Add it in Firebase Console → Authentication → Settings → Authorized domains.`,
       };
     case 'auth/popup-blocked':
       return {
         code,
         message:
           lang === 'bn'
-            ? 'আপনার ব্রাউজার Google পপআপ ব্লক করেছে। অনুগ্রহ করে ব্রাউজারে পপআপ অনুমতি দিয়ে আবার চেষ্টা করুন।'
-            : 'Your browser blocked the Google Sign-In popup. Please allow popups and try again.',
+            ? 'আপনার ব্রাউজার Google পপআপ ব্লক করেছে। পপআপ অনুমতি দিন অথবা নিচের বাটনে ক্লিক করে সরাসরি Google-এ চালিয়ে যান।'
+            : 'Your browser blocked the Google popup. Allow popups or click the button below to continue via redirect.',
       };
-    case 'auth/requires-recent-login':
+    case 'auth/popup-closed-by-user':
+    case 'auth/cancelled-popup-request':
+      return {
+        code: 'auth/popup-closed-by-user',
+        message:
+          lang === 'bn'
+            ? 'Google লগইন পপআপ বন্ধ করা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'
+            : 'Google Sign-In popup was closed. Please try again.',
+      };
+    case 'auth/network-request-failed':
       return {
         code,
         message:
           lang === 'bn'
-            ? 'নিরাপত্তার জন্য Google অ্যাকাউন্টটি পুনরায় যাচাই করা প্রয়োজন। অনুগ্রহ করে আবার চেষ্টা করুন।'
-            : 'Please re-verify your Google account for security and try again.',
+            ? 'ইন্টারনেট সংযোগে সমস্যা হয়েছে। আপনার নেটওয়ার্ক পরীক্ষা করে আবার চেষ্টা করুন।'
+            : 'Network connection error. Please check your internet and try again.',
+      };
+    case 'auth/operation-not-allowed':
+      return {
+        code,
+        message:
+          lang === 'bn'
+            ? 'Firebase Console-এ Email/Password লগইন পদ্ধতি এখনো চালু করা হয়নি। অ্যাডমিন Firebase Console → Authentication → Sign-in method থেকে Email/Password চালু করলেই এটি সক্রিয় হবে।'
+            : 'Email/Password sign-in is not yet enabled in Firebase Console. Enable Email/Password under Authentication → Sign-in method.',
+      };
+    case 'auth/too-many-requests':
+      return {
+        code,
+        message:
+          lang === 'bn'
+            ? 'অনেকবার ভুল চেষ্টা করা হয়েছে। নিরাপত্তার জন্য কিছুক্ষণ অপেক্ষা করে আবার চেষ্টা করুন।'
+            : 'Too many attempts. Please wait a few minutes and try again.',
+      };
+    case 'auth/user-disabled':
+      return {
+        code,
+        message:
+          lang === 'bn'
+            ? 'এই অ্যাকাউন্টটি সাময়িকভাবে নিষ্ক্রিয় করা হয়েছে। অনুগ্রহ করে সাপোর্টে যোগাযোগ করুন।'
+            : 'This account has been disabled. Please contact support.',
       };
     case 'auth/account-exists-with-different-credential':
       return {
         code,
         message:
           lang === 'bn'
-            ? 'এই ইমেইলটি অন্য সাইন-ইন পদ্ধতিতে যুক্ত আছে। অনুগ্রহ করে সেই পদ্ধতি ব্যবহার করুন।'
-            : 'An account already exists with this email using a different sign-in method.',
+            ? 'এই ইমেইল দিয়ে অন্য লগইন পদ্ধতিতে অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে সেই পদ্ধতিতে লগইন করে প্রোফাইল থেকে অ্যাকাউন্ট লিংক করুন।'
+            : 'An account already exists with this email under another sign-in method. Sign in with that method and link your account from Profile.',
       };
     default: {
-      const rawMessage = err instanceof Error ? err.message : '';
+      const raw = err instanceof Error ? err.message : '';
       return {
         code,
         message:
-          rawMessage ||
+          raw ||
           (lang === 'bn'
-            ? 'অথেনটিকেশন সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।'
+            ? 'লগইন / সাইনআপ সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।'
             : 'Authentication could not be completed. Please try again.'),
       };
     }
   }
 }
 
-interface PasswordStrengthResult {
+interface PasswordStrength {
   score: 0 | 1 | 2 | 3 | 4;
   labelBn: string;
   labelEn: string;
   barColor: string;
   textColor: string;
-  hasMinLength: boolean;
-  hasRecommendedLength: boolean;
-  hasLetterAndNumber: boolean;
-  hasUpperOrSymbol: boolean;
 }
 
-function evaluatePasswordStrength(pwd: string): PasswordStrengthResult {
-  const hasMinLength = pwd.length >= 6;
-  const hasRecommendedLength = pwd.length >= 8;
-  const hasLetter = /[a-zA-Z]/.test(pwd);
-  const hasNumber = /\d/.test(pwd);
-  const hasLetterAndNumber = hasLetter && hasNumber;
-  const hasUpperOrSymbol = /[A-Z]/.test(pwd) || /[^a-zA-Z0-9]/.test(pwd);
-
+function evaluatePasswordStrength(pwd: string): PasswordStrength {
   if (!pwd) {
-    return {
-      score: 0,
-      labelBn: '',
-      labelEn: '',
-      barColor: 'bg-[#E6ECFA]',
-      textColor: 'text-[#777777]',
-      hasMinLength,
-      hasRecommendedLength,
-      hasLetterAndNumber,
-      hasUpperOrSymbol,
-    };
+    return { score: 0, labelBn: '', labelEn: '', barColor: 'bg-[#E6ECFA]', textColor: 'text-[#777777]' };
   }
-
-  let points = 0;
-  if (hasMinLength) points += 1;
-  if (hasRecommendedLength) points += 1;
-  if (hasLetterAndNumber) points += 1;
-  if (hasUpperOrSymbol) points += 1;
-  if (pwd.length >= 12 && hasLetterAndNumber && hasUpperOrSymbol) points = 4;
-
-  const score = Math.min(4, Math.max(1, points)) as 1 | 2 | 3 | 4;
-
-  if (score === 1) {
-    return {
-      score,
-      labelBn: 'দুর্বল পাসওয়ার্ড',
-      labelEn: 'Weak',
-      barColor: 'bg-[#DC2626]',
-      textColor: 'text-[#DC2626]',
-      hasMinLength,
-      hasRecommendedLength,
-      hasLetterAndNumber,
-      hasUpperOrSymbol,
-    };
+  let score = 0;
+  if (pwd.length >= 6) score += 1;
+  if (pwd.length >= 8) score += 1;
+  if (/[a-zA-Z]/.test(pwd) && /\d/.test(pwd)) score += 1;
+  if (/[A-Z]/.test(pwd) || /[^a-zA-Z0-9]/.test(pwd)) score += 1;
+  const clamped = Math.min(4, Math.max(1, score)) as 1 | 2 | 3 | 4;
+  if (clamped === 1) {
+    return { score: 1, labelBn: 'দুর্বল', labelEn: 'Weak', barColor: 'bg-[#DC2626]', textColor: 'text-[#DC2626]' };
   }
-  if (score === 2) {
-    return {
-      score,
-      labelBn: 'মাঝারি পাসওয়ার্ড',
-      labelEn: 'Fair',
-      barColor: 'bg-[#F59E0B]',
-      textColor: 'text-[#D97706]',
-      hasMinLength,
-      hasRecommendedLength,
-      hasLetterAndNumber,
-      hasUpperOrSymbol,
-    };
+  if (clamped === 2) {
+    return { score: 2, labelBn: 'মাঝারি', labelEn: 'Fair', barColor: 'bg-[#F59E0B]', textColor: 'text-[#D97706]' };
   }
-  if (score === 3) {
-    return {
-      score,
-      labelBn: 'ভালো পাসওয়ার্ড',
-      labelEn: 'Good',
-      barColor: 'bg-[#2563EB]',
-      textColor: 'text-[#2563EB]',
-      hasMinLength,
-      hasRecommendedLength,
-      hasLetterAndNumber,
-      hasUpperOrSymbol,
-    };
+  if (clamped === 3) {
+    return { score: 3, labelBn: 'ভালো', labelEn: 'Good', barColor: 'bg-[#2563EB]', textColor: 'text-[#2563EB]' };
   }
-  return {
-    score: 4,
-    labelBn: 'শক্তিশালী পাসওয়ার্ড',
-    labelEn: 'Strong',
-    barColor: 'bg-[#16A34A]',
-    textColor: 'text-[#16A34A]',
-    hasMinLength,
-    hasRecommendedLength,
-    hasLetterAndNumber,
-    hasUpperOrSymbol,
-  };
+  return { score: 4, labelBn: 'শক্তিশালী', labelEn: 'Strong', barColor: 'bg-[#16A34A]', textColor: 'text-[#16A34A]' };
 }
 
 export function AuthModal({
@@ -350,32 +308,35 @@ export function AuthModal({
   onRefreshVerification,
 }: AuthModalProps) {
   const [mode, setMode] = useState<'login' | 'register' | 'reset'>(initialMode);
-  const [step, setStep] = useState<'default' | 'create-password' | 'success'>('default');
-  const [verifiedGoogleUser, setVerifiedGoogleUser] = useState<VerifiedGoogleCandidate | null>(null);
+  const [channel, setChannel] = useState<'email' | 'phone'>('email');
+  const [step, setStep] = useState<'default' | 'success'>('default');
 
-  // Login / Reset fields
+  // Shared form fields
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
+  const [phoneInput, setPhoneInput] = useState('');
   const [password, setPassword] = useState('');
-  const [showLoginPassword, setShowLoginPassword] = useState(false);
-
-  // Create Digital Hub Password fields (Step 3)
-  const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-
   const [referralCode, setReferralCode] = useState(initialReferralCode);
+
   const [loading, setLoading] = useState(false);
+  const [loadingAction, setLoadingAction] = useState<'google' | 'submit' | 'verify' | ''>('');
   const [error, setError] = useState('');
   const [errorCode, setErrorCode] = useState('');
   const [info, setInfo] = useState('');
-  const [successEmail, setSuccessEmail] = useState('');
+  const [successIdentity, setSuccessIdentity] = useState('');
+  const [successIsNew, setSuccessIsNew] = useState(false);
+  const [pendingRegisteredPhone, setPendingRegisteredPhone] = useState('');
+
   const submittingRef = useRef(false);
   const successTimerRef = useRef<number | null>(null);
 
-  const strength = useMemo(() => evaluatePasswordStrength(newPassword), [newPassword]);
-  const passwordsMatch = Boolean(confirmPassword) && newPassword === confirmPassword;
-  const passwordsMismatch = Boolean(confirmPassword) && newPassword !== confirmPassword;
+  const normalizedPhonePreview = useMemo(() => normalizeBangladeshPhoneClient(phoneInput), [phoneInput]);
+  const strength = useMemo(() => evaluatePasswordStrength(password), [password]);
+  const passwordsMatch = Boolean(confirmPassword) && password === confirmPassword;
+  const passwordsMismatch = Boolean(confirmPassword) && password !== confirmPassword;
 
   useEffect(() => {
     return () => {
@@ -385,38 +346,31 @@ export function AuthModal({
     };
   }, []);
 
-  // Reset form state cleanly whenever modal opens or closes (unless actively in create-password)
   useEffect(() => {
     if (open) {
       if (step === 'default') {
         setMode(initialMode);
-        setEmail('');
-        setPassword('');
-        setNewPassword('');
-        setConfirmPassword('');
-        setShowLoginPassword(false);
-        setShowNewPassword(false);
-        setShowConfirmPassword(false);
         setError('');
         setErrorCode('');
         setInfo('');
       }
     } else {
       setStep('default');
-      setVerifiedGoogleUser(null);
+      setFullName('');
       setEmail('');
+      setPhoneInput('');
       setPassword('');
-      setNewPassword('');
       setConfirmPassword('');
-      setShowLoginPassword(false);
-      setShowNewPassword(false);
+      setShowPassword(false);
       setShowConfirmPassword(false);
       setError('');
       setErrorCode('');
       setInfo('');
-      setSuccessEmail('');
+      setSuccessIdentity('');
+      setPendingRegisteredPhone('');
       submittingRef.current = false;
       setLoading(false);
+      setLoadingAction('');
       onPasswordSetupStateChange?.(false);
     }
   }, [open, initialMode]);
@@ -429,51 +383,78 @@ export function AuthModal({
 
   if (!open) return null;
 
-  const switchMode = (nextMode: 'login' | 'register' | 'reset', preserveEmail = false) => {
-    setMode(nextMode);
-    setStep('default');
-    setVerifiedGoogleUser(null);
+  const clearFeedback = () => {
     setError('');
     setErrorCode('');
     setInfo('');
+  };
+
+  const switchMode = (
+    nextMode: 'login' | 'register' | 'reset',
+    options?: { nextChannel?: 'email' | 'phone'; keepEmail?: boolean; keepPhone?: boolean }
+  ) => {
+    setMode(nextMode);
+    if (options?.nextChannel) setChannel(options.nextChannel);
+    setStep('default');
+    clearFeedback();
     setPassword('');
-    setNewPassword('');
     setConfirmPassword('');
-    if (!preserveEmail) {
-      setEmail('');
-    }
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+    if (!options?.keepEmail) setEmail('');
+    if (!options?.keepPhone) setPhoneInput('');
   };
 
-  const handleCloseModal = async () => {
-    if (loading) return;
-    if (step === 'create-password' && verifiedGoogleUser) {
+  const switchChannel = (nextChannel: 'email' | 'phone') => {
+    setChannel(nextChannel);
+    clearFeedback();
+    setPassword('');
+    setConfirmPassword('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+  };
+
+  const finishWithSuccess = (
+    signedInUser: User,
+    isExistingAccount: boolean,
+    identityLabel: string,
+    meta: { authMethod: AuthMethod; phone?: string; displayName?: string }
+  ) => {
+    setSuccessIdentity(identityLabel);
+    setSuccessIsNew(!isExistingAccount);
+    setStep('success');
+    onLoginSuccess?.();
+
+    successTimerRef.current = window.setTimeout(async () => {
       onPasswordSetupStateChange?.(false);
-      if (!verifiedGoogleUser.hadExistingProfile && auth.currentUser?.uid === verifiedGoogleUser.uid) {
-        // Incomplete first-time signup without password linking: sign out cleanly so user can start fresh
-        await signOut(auth).catch(() => {});
+      if (onRegistrationComplete) {
+        await onRegistrationComplete(signedInUser, isExistingAccount, meta);
+      } else {
+        onClose();
       }
-    }
-    onClose();
+    }, 850);
   };
 
-  // STEP 1 & STEP 2: Google Account Selection + Verification
-  // Used for BOTH "Sign Up with Google" (register intent) and "Continue with Google" (login intent).
-  const handleGoogleFlow = async (intent: 'register' | 'login') => {
+  // =========================================================================
+  // METHOD A: GOOGLE ACCOUNT (Popup primary + optional Redirect fallback)
+  // =========================================================================
+  const handleGoogleSignIn = async (useRedirect = false) => {
     if (submittingRef.current) return;
     submittingRef.current = true;
-    setError('');
-    setErrorCode('');
-    setInfo('');
+    clearFeedback();
     setLoading(true);
-
-    // Pause App.tsx auto-close while we inspect whether this Google user needs Step 3 (Create Password)
+    setLoadingAction('google');
     onPasswordSetupStateChange?.(true);
 
     try {
       if (referralCode.trim()) onReferralCapture(referralCode.trim());
-
-      // Always force Google account chooser so users can freely create multiple accounts with different Gmails
       googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+      if (useRedirect) {
+        await signInWithRedirect(auth, googleProvider);
+        return;
+      }
+
       const cred = await signInWithPopup(auth, googleProvider);
       const signedInUser = cred.user;
       const verifiedEmail = (signedInUser.email || '').trim().toLowerCase();
@@ -483,212 +464,271 @@ export function AuthModal({
         'Customer'
       ).trim();
 
-      if (!verifiedEmail) {
-        await signOut(auth).catch(() => {});
-        onPasswordSetupStateChange?.(false);
+      const existing = await hasExistingUserProfile(signedInUser.uid);
+
+      await ensureUserProfile(
+        signedInUser.uid,
+        verifiedEmail,
+        verifiedName,
+        lang,
+        referralCode.trim(),
+        signedInUser.photoURL || '',
+        'google'
+      ).catch((profileErr) => {
+        console.warn('Non-fatal Google profile sync error:', profileErr);
+      });
+
+      clearPendingAuthMeta();
+      finishWithSuccess(signedInUser, existing, verifiedEmail || verifiedName, {
+        authMethod: 'google',
+        displayName: verifiedName,
+      });
+    } catch (err) {
+      onPasswordSetupStateChange?.(false);
+      const mapped = mapAuthError(err, 'google', lang);
+      setErrorCode(mapped.code);
+      setError(mapped.message);
+    } finally {
+      submittingRef.current = false;
+      setLoading(false);
+      setLoadingAction('');
+    }
+  };
+
+  // =========================================================================
+  // METHOD B & C: EMAIL / PHONE FORM SUBMIT (Login, Register, Reset)
+  // =========================================================================
+  const handlePrimaryFormSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (submittingRef.current) return;
+    clearFeedback();
+
+    // -----------------------------------------------------------------------
+    // FORGOT PASSWORD / ACCOUNT RECOVERY
+    // -----------------------------------------------------------------------
+    if (mode === 'reset') {
+      if (channel === 'email') {
+        const normalizedEmail = email.trim().toLowerCase();
+        if (!EMAIL_PATTERN.test(normalizedEmail)) {
+          setErrorCode('auth/invalid-email');
+          setError(
+            lang === 'bn'
+              ? 'অনুগ্রহ করে একটি সঠিক ইমেইল ঠিকানা লিখুন।'
+              : 'Please enter a valid email address.'
+          );
+          return;
+        }
+        submittingRef.current = true;
+        setLoading(true);
+        setLoadingAction('submit');
+        try {
+          await sendPasswordResetEmail(auth, normalizedEmail);
+          setInfo(
+            lang === 'bn'
+              ? `পাসওয়ার্ড রিসেট লিংক ${normalizedEmail} ইমেইলে পাঠানো হয়েছে। অনুগ্রহ করে ইনবক্স বা Spam ফোল্ডার চেক করুন।`
+              : `Password reset link sent to ${normalizedEmail}. Please check your inbox or Spam folder.`
+          );
+        } catch (err) {
+          const mapped = mapAuthError(err, 'reset-email', lang);
+          setErrorCode(mapped.code);
+          setError(mapped.message);
+        } finally {
+          submittingRef.current = false;
+          setLoading(false);
+          setLoadingAction('');
+        }
+        return;
+      }
+
+      // Phone Account Recovery
+      const normalizedPhone = normalizeBangladeshPhoneClient(phoneInput);
+      if (!normalizedPhone) {
+        setErrorCode('auth/invalid-phone-number');
         setError(
           lang === 'bn'
-            ? 'Google অ্যাকাউন্ট থেকে যাচাইকৃত Gmail ঠিকানা পাওয়া যায়নি। অনুগ্রহ করে অন্য Google অ্যাকাউন্ট বেছে নিন।'
-            : 'Could not retrieve a verified Gmail address from Google. Please select another Google account.'
+            ? 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন (যেমন: 017XXXXXXXX বা +88017XXXXXXXX)।'
+            : 'Please enter a valid Bangladesh mobile number (e.g., 017XXXXXXXX or +88017XXXXXXXX).'
         );
         return;
       }
 
-      const hasPasswordProvider = signedInUser.providerData.some((p) => p.providerId === 'password');
-      const existingProfile = await hasExistingUserProfile(signedInUser.uid);
+      submittingRef.current = true;
+      setLoading(true);
+      setLoadingAction('submit');
+      try {
+        const res = await recoverPhoneAccountServer(normalizedPhone);
+        setInfo(
+          lang === 'bn'
+            ? `${res.normalizedPhone} নম্বরের সাথে যুক্ত রিকভারি ইমেইলে (${res.maskedEmail}) পাসওয়ার্ড রিসেট লিংক পাঠানো হয়েছে। অনুগ্রহ করে ইনবক্স বা Spam ফোল্ডার চেক করুন।`
+            : `A password reset link for ${res.normalizedPhone} has been sent to its recovery email (${res.maskedEmail}). Check your inbox or Spam folder.`
+        );
+      } catch (err) {
+        const mapped = mapAuthError(err, 'reset-phone', lang);
+        setErrorCode(mapped.code);
+        setError(mapped.message);
+      } finally {
+        submittingRef.current = false;
+        setLoading(false);
+        setLoadingAction('');
+      }
+      return;
+    }
 
-      // Show "Create Your Digital Hub Password" screen when:
-      // 1. User clicked "Sign Up with Google" and does NOT yet have a Digital Hub password linked, OR
-      // 2. Brand-new user (no existing Firestore profile and no password linked) clicked Google on Login tab.
-      const needsPasswordSetup =
-        intent === 'register'
-          ? !hasPasswordProvider
-          : !hasPasswordProvider && !existingProfile;
-
-      if (needsPasswordSetup) {
-        setVerifiedGoogleUser({
-          uid: signedInUser.uid,
-          email: verifiedEmail,
-          displayName: verifiedName,
-          photoURL: signedInUser.photoURL || '',
-          hadExistingProfile: existingProfile,
-        });
-        setNewPassword('');
-        setConfirmPassword('');
-        setShowNewPassword(false);
-        setShowConfirmPassword(false);
-        setStep('create-password');
+    // -----------------------------------------------------------------------
+    // METHOD B: EMAIL + PASSWORD (Login / Register)
+    // -----------------------------------------------------------------------
+    if (channel === 'email') {
+      const normalizedEmail = email.trim().toLowerCase();
+      if (!EMAIL_PATTERN.test(normalizedEmail)) {
+        setErrorCode('auth/invalid-email');
+        setError(
+          lang === 'bn'
+            ? 'অনুগ্রহ করে একটি সঠিক ইমেইল ঠিকানা লিখুন।'
+            : 'Please enter a valid email address.'
+        );
+        return;
+      }
+      if (password.length < 6) {
+        setErrorCode('auth/weak-password');
+        setError(
+          lang === 'bn'
+            ? 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'
+            : 'Password must be at least 6 characters long.'
+        );
         return;
       }
 
-      // Account is already registered on Digital Hub — preserve existing data and log in seamlessly
-      onPasswordSetupStateChange?.(false);
-      onLoginSuccess?.();
-      if (onRegistrationComplete) {
-        await onRegistrationComplete(signedInUser, true);
-      } else {
-        onClose();
-      }
-    } catch (err) {
-      onPasswordSetupStateChange?.(false);
-      const mapped = mapFirebaseAuthError(err, intent === 'register' ? 'register' : 'google', lang);
-      setErrorCode(mapped.code);
-      setError(mapped.message);
-    } finally {
-      submittingRef.current = false;
-      setLoading(false);
-    }
-  };
+      if (mode === 'register') {
+        const cleanName = fullName.trim();
+        if (cleanName.length < 2) {
+          setError(
+            lang === 'bn'
+              ? 'অনুগ্রহ করে আপনার পূর্ণ নাম লিখুন (কমপক্ষে ২ অক্ষর)।'
+              : 'Please enter your full name (at least 2 characters).'
+          );
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError(
+            lang === 'bn'
+              ? 'দুটি পাসওয়ার্ড মেলেনি। অনুগ্রহ করে একই পাসওয়ার্ড দুই ঘরে লিখুন।'
+              : 'Passwords do not match. Please enter the same password in both fields.'
+          );
+          return;
+        }
 
-  // Switch to another Google account directly from Step 3 (supports multiple Gmail accounts smoothly)
-  const handleChooseAnotherGoogleAccount = async () => {
-    if (submittingRef.current) return;
-    setError('');
-    setErrorCode('');
-    setInfo('');
-    setNewPassword('');
-    setConfirmPassword('');
-    setVerifiedGoogleUser(null);
-    await signOut(auth).catch(() => {});
-    setStep('default');
-    setMode('register');
-    await handleGoogleFlow('register');
-  };
+        submittingRef.current = true;
+        setLoading(true);
+        setLoadingAction('submit');
+        onPasswordSetupStateChange?.(true);
 
-  // STEP 4, STEP 5, STEP 6: Link Email/Password credential to verified Google user -> sync profile -> auto-login
-  const handleCreatePasswordSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (submittingRef.current || !verifiedGoogleUser) return;
+        try {
+          if (referralCode.trim()) onReferralCapture(referralCode.trim());
+          const cred = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+          setPassword('');
+          setConfirmPassword('');
 
-    setError('');
-    setErrorCode('');
-    setInfo('');
-
-    const currentUser = auth.currentUser;
-    const currentEmail = (currentUser?.email || '').trim().toLowerCase();
-
-    // Security check: strictly enforce that password is only linked to the actively Google-verified user
-    if (!currentUser || currentUser.uid !== verifiedGoogleUser.uid || currentEmail !== verifiedGoogleUser.email) {
-      setError(
-        lang === 'bn'
-          ? 'Google যাচাইকরণ সেশনটি শেষ হয়ে গেছে। অনুগ্রহ করে আবার Google দিয়ে যাচাই করুন।'
-          : 'Google verification session expired. Please verify your Google account again.'
-      );
-      setStep('default');
-      setMode('register');
-      setVerifiedGoogleUser(null);
-      onPasswordSetupStateChange?.(false);
-      return;
-    }
-
-    if (newPassword.length < 6) {
-      setError(
-        lang === 'bn'
-          ? 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে (৮ বা তার বেশি অক্ষর সুপারিশকৃত)।'
-          : 'Password must be at least 6 characters long (8+ characters recommended).'
-      );
-      return;
-    }
-
-    if (newPassword !== confirmPassword) {
-      setError(
-        lang === 'bn'
-          ? 'দুটি পাসওয়ার্ড মেলেনি। অনুগ্রহ করে একই পাসওয়ার্ড দুই ঘরে লিখুন।'
-          : 'Passwords do not match. Please enter the same password in both fields.'
-      );
-      return;
-    }
-
-    submittingRef.current = true;
-    setLoading(true);
-
-    try {
-      const emailCredential = EmailAuthProvider.credential(verifiedGoogleUser.email, newPassword);
-
-      // STEP 4: Link Email/Password provider to the existing Google-authenticated Firebase user.
-      // Never calls createUserWithEmailAndPassword — zero duplicate Firebase accounts!
-      try {
-        await linkWithCredential(currentUser, emailCredential);
-      } catch (linkErr) {
-        const linkCode = getFirebaseAuthErrorCode(linkErr);
-        if (linkCode === 'auth/requires-recent-login') {
-          googleProvider.setCustomParameters({
-            prompt: 'select_account',
-            login_hint: verifiedGoogleUser.email,
+          await updateProfile(cred.user, { displayName: cleanName }).catch(() => {});
+          savePendingAuthMeta({
+            uid: cred.user.uid,
+            authMethod: 'email',
+            displayName: cleanName,
+            referralCode: referralCode.trim(),
           });
-          await reauthenticateWithPopup(currentUser, googleProvider);
-          await linkWithCredential(currentUser, emailCredential);
-        } else if (linkCode === 'auth/provider-already-linked') {
-          // Password credential is already linked on this exact account; proceed safely
-        } else {
-          throw linkErr;
+
+          if (!cred.user.emailVerified) {
+            await sendEmailVerification(cred.user).catch(() => {});
+            onPasswordSetupStateChange?.(false);
+            setInfo(
+              lang === 'bn'
+                ? `অ্যাকাউন্ট তৈরি হয়েছে! ${normalizedEmail} ঠিকানায় ভেরিফিকেশন ইমেইল পাঠানো হয়েছে। লিংকে ক্লিক করে নিচের বাটনে চাপ দিন।`
+                : `Account created! A verification link has been sent to ${normalizedEmail}. Click it and then tap refresh below.`
+            );
+          } else {
+            await ensureUserProfile(
+              cred.user.uid,
+              normalizedEmail,
+              cleanName,
+              lang,
+              referralCode.trim(),
+              '',
+              'email'
+            ).catch(() => {});
+            clearPendingAuthMeta();
+            finishWithSuccess(cred.user, false, normalizedEmail, {
+              authMethod: 'email',
+              displayName: cleanName,
+            });
+          }
+        } catch (err) {
+          onPasswordSetupStateChange?.(false);
+          const mapped = mapAuthError(err, 'email-register', lang);
+          setErrorCode(mapped.code);
+          setError(mapped.message);
+        } finally {
+          submittingRef.current = false;
+          setLoading(false);
+          setLoadingAction('');
         }
+        return;
       }
 
-      // Immediately clear plain-text passwords from memory; Firebase Auth stores the secure hash
-      setNewPassword('');
-      setConfirmPassword('');
+      // Email Login
+      submittingRef.current = true;
+      setLoading(true);
+      setLoadingAction('submit');
+      onPasswordSetupStateChange?.(true);
 
-      // Refresh Firebase user state & ID token
-      await currentUser.reload().catch(() => {});
-      await currentUser.getIdToken(true).catch(() => {});
-
-      // STEP 5: Create or update user profile in Firestore, preserving all existing user records
-      if (referralCode.trim()) onReferralCapture(referralCode.trim());
-      await ensureUserProfile(
-        currentUser.uid,
-        verifiedGoogleUser.email,
-        verifiedGoogleUser.displayName,
-        lang,
-        referralCode.trim(),
-        verifiedGoogleUser.photoURL
-      ).catch((profileErr) => {
-        console.warn('Non-fatal Firestore profile sync error after password linking:', profileErr);
-      });
-
-      // STEP 6: Show success confirmation and automatically log into Digital Hub
-      setSuccessEmail(verifiedGoogleUser.email);
-      setStep('success');
-      onLoginSuccess?.();
-
-      successTimerRef.current = window.setTimeout(async () => {
-        onPasswordSetupStateChange?.(false);
-        if (onRegistrationComplete) {
-          await onRegistrationComplete(currentUser, false);
+      try {
+        const cred = await signInWithEmailAndPassword(auth, normalizedEmail, password);
+        setPassword('');
+        if (cred.user.emailVerified) {
+          await ensureUserProfile(
+            cred.user.uid,
+            normalizedEmail,
+            cred.user.displayName || normalizedEmail.split('@')[0] || 'Customer',
+            lang,
+            referralCode.trim(),
+            cred.user.photoURL || '',
+            'email'
+          ).catch(() => {});
+          finishWithSuccess(cred.user, true, normalizedEmail, { authMethod: 'email' });
         } else {
-          onClose();
+          onPasswordSetupStateChange?.(false);
+          setInfo(
+            lang === 'bn'
+              ? 'আপনার ইমেইল এখনো যাচাই হয়নি। ইনবক্স/Spam চেক করে ভেরিফাই করুন।'
+              : 'Your email is not verified yet. Please verify from your inbox/Spam folder.'
+          );
         }
-      }, 1050);
-    } catch (err) {
-      const mapped = mapFirebaseAuthError(err, 'link-password', lang);
-      setErrorCode(mapped.code);
-      setError(mapped.message);
-    } finally {
-      submittingRef.current = false;
-      setLoading(false);
-    }
-  };
-
-  // Future Login (Gmail + Digital Hub Password) & Forgot Password Reset
-  const handleEmailFormSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (submittingRef.current) return;
-
-    const normalizedEmail = email.trim().toLowerCase();
-    setError('');
-    setErrorCode('');
-    setInfo('');
-
-    if (!EMAIL_PATTERN.test(normalizedEmail)) {
-      setError(
-        lang === 'bn'
-          ? 'অনুগ্রহ করে একটি সঠিক Gmail / ইমেইল ঠিকানা লিখুন।'
-          : 'Please enter a valid Gmail / email address.'
-      );
+      } catch (err) {
+        onPasswordSetupStateChange?.(false);
+        const mapped = mapAuthError(err, 'email-login', lang);
+        setErrorCode(mapped.code);
+        setError(mapped.message);
+      } finally {
+        submittingRef.current = false;
+        setLoading(false);
+        setLoadingAction('');
+      }
       return;
     }
 
-    if (mode === 'login' && password.length < 6) {
+    // -----------------------------------------------------------------------
+    // METHOD C: BANGLADESH PHONE NUMBER (+880) + PASSWORD
+    // -----------------------------------------------------------------------
+    const normalizedPhone = normalizeBangladeshPhoneClient(phoneInput);
+    if (!normalizedPhone) {
+      setErrorCode('auth/invalid-phone-number');
+      setError(
+        lang === 'bn'
+          ? 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন (যেমন: 017XXXXXXXX বা +88017XXXXXXXX)।'
+          : 'Please enter a valid Bangladesh mobile number (e.g., 017XXXXXXXX or +88017XXXXXXXX).'
+      );
+      return;
+    }
+    if (password.length < 6) {
+      setErrorCode('auth/weak-password');
       setError(
         lang === 'bn'
           ? 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'
@@ -697,84 +737,211 @@ export function AuthModal({
       return;
     }
 
+    if (mode === 'register') {
+      const cleanName = fullName.trim();
+      const normalizedRecoveryEmail = email.trim().toLowerCase();
+
+      if (cleanName.length < 2) {
+        setError(
+          lang === 'bn'
+            ? 'অনুগ্রহ করে আপনার পূর্ণ নাম লিখুন (কমপক্ষে ২ অক্ষর)।'
+            : 'Please enter your full name (at least 2 characters).'
+        );
+        return;
+      }
+      if (!EMAIL_PATTERN.test(normalizedRecoveryEmail)) {
+        setErrorCode('auth/invalid-email');
+        setError(
+          lang === 'bn'
+            ? 'ভেরিফিকেশন ও পাসওয়ার্ড রিকভারির জন্য একটি সঠিক ইমেইল ঠিকানা লিখুন।'
+            : 'Please enter a valid email address for verification and password recovery.'
+        );
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError(
+          lang === 'bn'
+            ? 'দুটি পাসওয়ার্ড মেলেনি। অনুগ্রহ করে একই পাসওয়ার্ড দুই ঘরে লিখুন।'
+            : 'Passwords do not match. Please enter the same password in both fields.'
+        );
+        return;
+      }
+
+      submittingRef.current = true;
+      setLoading(true);
+      setLoadingAction('submit');
+      onPasswordSetupStateChange?.(true);
+
+      try {
+        // 1. Check backend if this BD phone number is already registered BEFORE creating any Firebase account
+        const checkRes = await checkPhoneRegisteredServer(normalizedPhone);
+        if (checkRes.exists) {
+          onPasswordSetupStateChange?.(false);
+          setErrorCode('auth/phone-already-in-use');
+          setError(
+            lang === 'bn'
+              ? 'এই ফোন নম্বর দিয়ে আগে থেকেই অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে ফোন নম্বর ও পাসওয়ার্ড দিয়ে লগইন করুন।'
+              : 'An account already exists with this phone number. Please log in instead.'
+          );
+          return;
+        }
+
+        if (referralCode.trim()) onReferralCapture(referralCode.trim());
+
+        // 2. Create real Firebase Auth user backed by verified recovery email
+        const cred = await createUserWithEmailAndPassword(auth, normalizedRecoveryEmail, password);
+        setPassword('');
+        setConfirmPassword('');
+
+        await updateProfile(cred.user, { displayName: cleanName }).catch(() => {});
+
+        // Save pending phone registration metadata so verification completion indexes phoneHash & profile cleanly
+        savePendingAuthMeta({
+          uid: cred.user.uid,
+          authMethod: 'phone',
+          displayName: cleanName,
+          phone: normalizedPhone,
+          referralCode: referralCode.trim(),
+        });
+        setPendingRegisteredPhone(normalizedPhone);
+
+        if (!cred.user.emailVerified) {
+          await sendEmailVerification(cred.user).catch(() => {});
+          onPasswordSetupStateChange?.(false);
+          setInfo(
+            lang === 'bn'
+              ? `ফোন নম্বর ${normalizedPhone} যুক্ত হয়েছে! অ্যাকাউন্ট সক্রিয় করতে ${normalizedRecoveryEmail} ইমেইলে পাঠানো ভেরিফিকেশন লিংকে ক্লিক করুন।`
+              : `Phone ${normalizedPhone} linked! Click the verification link sent to ${normalizedRecoveryEmail} to activate your account.`
+          );
+        } else {
+          await ensureUserProfile(
+            cred.user.uid,
+            normalizedRecoveryEmail,
+            cleanName,
+            lang,
+            referralCode.trim(),
+            '',
+            'phone',
+            normalizedPhone
+          ).catch(() => {});
+          await registerPhoneIndexServer(normalizedPhone).catch(() => {});
+          clearPendingAuthMeta();
+          finishWithSuccess(cred.user, false, normalizedPhone, {
+            authMethod: 'phone',
+            phone: normalizedPhone,
+            displayName: cleanName,
+          });
+        }
+      } catch (err) {
+        onPasswordSetupStateChange?.(false);
+        const mapped = mapAuthError(err, 'phone-register', lang);
+        setErrorCode(mapped.code);
+        setError(mapped.message);
+      } finally {
+        submittingRef.current = false;
+        setLoading(false);
+        setLoadingAction('');
+      }
+      return;
+    }
+
+    // Phone + Password Login (Server-verified against Firebase Identity Toolkit)
     submittingRef.current = true;
     setLoading(true);
+    setLoadingAction('submit');
+    onPasswordSetupStateChange?.(true);
 
     try {
-      if (mode === 'reset') {
-        await sendPasswordResetEmail(auth, normalizedEmail);
+      const serverAuth = await authenticatePhoneServer(normalizedPhone, password);
+      const cred = await signInWithEmailAndPassword(auth, serverAuth.authEmail, password);
+      setPassword('');
+
+      if (cred.user.emailVerified) {
+        await ensureUserProfile(
+          cred.user.uid,
+          serverAuth.authEmail,
+          cred.user.displayName || normalizedPhone,
+          lang,
+          referralCode.trim(),
+          cred.user.photoURL || '',
+          'phone',
+          serverAuth.normalizedPhone
+        ).catch(() => {});
+        finishWithSuccess(cred.user, true, serverAuth.normalizedPhone, {
+          authMethod: 'phone',
+          phone: serverAuth.normalizedPhone,
+        });
+      } else {
+        onPasswordSetupStateChange?.(false);
+        setPendingRegisteredPhone(serverAuth.normalizedPhone);
         setInfo(
           lang === 'bn'
-            ? `পাসওয়ার্ড রিসেট লিংক ${normalizedEmail} ইমেইলে পাঠানো হয়েছে। অনুগ্রহ করে ইনবক্স বা Spam ফোল্ডার চেক করুন।`
-            : `Password reset link has been sent to ${normalizedEmail}. Please check your inbox or Spam folder.`
+            ? 'আপনার রিকভারি ইমেইল এখনো যাচাই হয়নি। ইনবক্স/Spam থেকে ভেরিফিকেশন সম্পন্ন করুন।'
+            : 'Your verification email is still pending. Please verify from your inbox/Spam folder.'
         );
-      } else {
-        const cred = await signInWithEmailAndPassword(auth, normalizedEmail, password);
-        setPassword('');
-        if (cred.user.emailVerified) {
-          onLoginSuccess?.();
-          onClose();
-        } else {
-          setInfo(t(lang, 'verifyEmailDesc'));
-        }
       }
     } catch (err) {
-      const mapped = mapFirebaseAuthError(err, mode === 'reset' ? 'reset' : 'login', lang);
+      onPasswordSetupStateChange?.(false);
+      const mapped = mapAuthError(err, 'phone-login', lang);
       setErrorCode(mapped.code);
       setError(mapped.message);
     } finally {
       submittingRef.current = false;
       setLoading(false);
+      setLoadingAction('');
     }
   };
 
+  // =========================================================================
+  // VERIFICATION HANDLERS
+  // =========================================================================
   const handleRefreshVerificationClick = async () => {
     if (!onRefreshVerification || submittingRef.current) return;
     submittingRef.current = true;
-    setError('');
-    setErrorCode('');
-    setInfo('');
+    clearFeedback();
     setLoading(true);
+    setLoadingAction('verify');
     try {
       const verified = await onRefreshVerification();
       if (!verified) {
         setInfo(
           lang === 'bn'
-            ? 'ইমেইল এখনো যাচাই হয়নি। আপনার ইনবক্স/Spam ফোল্ডারের লিংকে ক্লিক করে আবার রিফ্রেশ করুন।'
-            : 'Email is not verified yet. Please click the verification link in your inbox/Spam folder, then refresh again.'
+            ? 'ইমেইল এখনো যাচাই হয়নি। ইনবক্স বা Spam ফোল্ডারের লিংকে ক্লিক করে আবার চেষ্টা করুন।'
+            : 'Email is not verified yet. Click the link in your inbox or Spam folder and try again.'
         );
       }
     } catch (err) {
-      const mapped = mapFirebaseAuthError(err, 'verify', lang);
+      const mapped = mapAuthError(err, 'verify', lang);
       setErrorCode(mapped.code);
       setError(mapped.message);
     } finally {
       submittingRef.current = false;
       setLoading(false);
+      setLoadingAction('');
     }
   };
 
   const handleResendVerification = async () => {
     if (!auth.currentUser || submittingRef.current) return;
     submittingRef.current = true;
-    setError('');
-    setErrorCode('');
-    setInfo('');
+    clearFeedback();
     setLoading(true);
+    setLoadingAction('verify');
     try {
       await sendEmailVerification(auth.currentUser);
       setInfo(
         lang === 'bn'
-          ? 'নতুন ভেরিফিকেশন ইমেইল পাঠানো হয়েছে।'
-          : 'A new verification email has been sent.'
+          ? 'নতুন ভেরিফিকেশন ইমেইল পাঠানো হয়েছে। অনুগ্রহ করে ইনবক্স ও Spam ফোল্ডার চেক করুন।'
+          : 'A fresh verification email has been sent. Please check your inbox and Spam folder.'
       );
     } catch (err) {
-      const mapped = mapFirebaseAuthError(err, 'verify', lang);
+      const mapped = mapAuthError(err, 'verify', lang);
       setErrorCode(mapped.code);
       setError(mapped.message);
     } finally {
       submittingRef.current = false;
       setLoading(false);
+      setLoadingAction('');
     }
   };
 
@@ -783,10 +950,12 @@ export function AuthModal({
     submittingRef.current = true;
     setLoading(true);
     try {
+      clearPendingAuthMeta();
       await signOut(auth);
-      switchMode('register', false);
+      setPendingRegisteredPhone('');
+      switchMode('login');
     } catch (err) {
-      const mapped = mapFirebaseAuthError(err, 'verify', lang);
+      const mapped = mapAuthError(err, 'verify', lang);
       setErrorCode(mapped.code);
       setError(mapped.message);
     } finally {
@@ -798,172 +967,639 @@ export function AuthModal({
   const verificationEmailLabel = pendingEmail || auth.currentUser?.email || '';
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#172033]/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
-      <div className="w-full max-w-md bg-white rounded-3xl border border-[#E6ECFA] shadow-2xl overflow-hidden my-auto">
-        <div className="px-5 sm:px-6 py-4 bg-[#FFF7EE] border-b border-[#E6ECFA] flex items-center justify-between">
+    <div
+      className="fixed inset-0 z-50 bg-[#172033]/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-label="DIGITAL HUB Authentication"
+    >
+      <div className="w-full max-w-[440px] bg-white rounded-3xl border border-[#E6ECFA] shadow-2xl overflow-hidden my-auto">
+        {/* Modal Header with DIGITAL HUB Logo */}
+        <div className="px-5 sm:px-6 py-4 bg-gradient-to-r from-[#FFF7EE] via-[#FFFBF5] to-[#F3F6FF] border-b border-[#E6ECFA] flex items-center justify-between">
           <DigitalHubLogo compact />
           <button
             type="button"
-            onClick={handleCloseModal}
+            onClick={() => !loading && onClose()}
             disabled={loading}
-            className="p-2 rounded-xl bg-white border border-[#E6ECFA] text-[#777777] hover:text-[#172033] disabled:opacity-50"
-            aria-label="Close modal"
+            className="p-2 rounded-xl bg-white border border-[#E6ECFA] text-[#777777] hover:text-[#172033] hover:border-[#FF8500]/40 transition-colors disabled:opacity-50"
+            aria-label="Close authentication modal"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-5 sm:p-6 space-y-5 max-h-[85vh] overflow-y-auto">
+        <div className="p-5 sm:p-6 space-y-4 max-h-[84vh] overflow-y-auto">
+          {/* =============================================================== */}
+          {/* VIEW 1: SUCCESS SCREEN                                          */}
+          {/* =============================================================== */}
           {step === 'success' ? (
-            /* STEP 6: Registration Complete & Auto-Login */
             <div className="py-6 text-center space-y-4">
               <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-200 text-[#16A34A] flex items-center justify-center mx-auto shadow-xs">
                 <CheckCircle2 className="w-9 h-9" />
               </div>
               <div className="space-y-1.5">
                 <h2 className="text-xl font-extrabold text-[#172033]">
-                  {lang === 'bn'
-                    ? 'অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে!'
-                    : 'Account Created Successfully!'}
+                  {successIsNew
+                    ? lang === 'bn'
+                      ? 'অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে!'
+                      : 'Account Created Successfully!'
+                    : lang === 'bn'
+                      ? 'লগইন সফল হয়েছে!'
+                      : 'Signed In Successfully!'}
                 </h2>
                 <p className="text-xs sm:text-sm text-[#777777]">
                   {lang === 'bn'
-                    ? 'আপনার Google এবং Digital Hub পাসওয়ার্ড উভয়ই সক্রিয় হয়েছে। আপনাকে স্বয়ংক্রিয়ভাবে লগইন করা হচ্ছে...'
-                    : 'Both Google Login and your Digital Hub password are now active. Signing you in automatically...'}
+                    ? 'আপনাকে আপনার ড্যাশবোর্ডে নিয়ে যাওয়া হচ্ছে...'
+                    : 'Taking you to your dashboard...'}
                 </p>
               </div>
-              {successEmail && (
+              {successIdentity && (
                 <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-bold text-[#172033]">
                   <UserCheck className="w-4 h-4 text-[#16A34A]" />
-                  <span>{successEmail}</span>
+                  <span>{successIdentity}</span>
                 </div>
               )}
             </div>
-          ) : step === 'create-password' && verifiedGoogleUser ? (
-            /* STEP 3: Create Your Digital Hub Password Screen (Bengali + Mobile Responsive) */
+          ) : needsVerification ? (
+            /* =============================================================== */
+            /* VIEW 2: EMAIL VERIFICATION GATE                                 */
+            /* =============================================================== */
             <div className="space-y-4">
-              {/* Step Indicator */}
-              <div className="flex items-center gap-2 text-[11px] font-bold">
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-[#16A34A] border border-emerald-200">
-                  <Check className="w-3.5 h-3.5" />
-                  {lang === 'bn' ? '১. Google যাচাইকৃত' : '1. Google Verified'}
-                </span>
-                <ArrowRight className="w-3.5 h-3.5 text-[#94A3B8]" />
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#FFF3E5] text-[#FF8500] border border-[#FFD7AA]">
-                  <Lock className="w-3.5 h-3.5" />
-                  {lang === 'bn' ? '২. পাসওয়ার্ড তৈরি' : '2. Create Password'}
-                </span>
-              </div>
-
-              <div>
-                <h2 className="text-lg sm:text-xl font-extrabold text-[#172033]">
+              <div className="p-4 rounded-2xl bg-[#FFF7EE] border border-[#FF8500]/30 space-y-2.5">
+                <div className="flex items-center gap-2 text-[#FF8500] font-extrabold text-sm">
+                  <ShieldCheck className="w-5 h-5 shrink-0" />
+                  <span>
+                    {lang === 'bn' ? 'আপনার ইমেইল ভেরিফাই করুন' : 'Verify Your Email Address'}
+                  </span>
+                </div>
+                <p className="text-xs text-[#172033] leading-relaxed">
                   {lang === 'bn'
-                    ? 'আপনার Digital Hub পাসওয়ার্ড তৈরি করুন'
-                    : 'Create Your Digital Hub Password'}
-                </h2>
-                <p className="text-xs sm:text-sm text-[#777777] mt-1 leading-relaxed">
-                  {lang === 'bn'
-                    ? 'আপনার Google অ্যাকাউন্ট সফলভাবে যাচাই হয়েছে। এখন Digital Hub-এ লগইন করার জন্য একটি পাসওয়ার্ড তৈরি করুন।'
-                    : 'Your Google account has been verified. Now create a password to use when logging into Digital Hub.'}
+                    ? 'নিরাপত্তার জন্য আমরা আপনার ইমেইলে একটি ভেরিফিকেশন লিংক পাঠিয়েছি। লিংকে ক্লিক করার পর নিচের "ভেরিফিকেশন চেক করুন" বাটনে চাপ দিন।'
+                    : 'For account security, we sent a verification link to your email. Click the link, then tap the button below.'}
                 </p>
-              </div>
-
-              {/* Verified Google Identity Card */}
-              <div className="p-3.5 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex items-center gap-3">
-                {verifiedGoogleUser.photoURL ? (
-                  <img
-                    src={verifiedGoogleUser.photoURL}
-                    alt={verifiedGoogleUser.displayName}
-                    className="w-11 h-11 rounded-xl object-cover border-2 border-emerald-400 shrink-0"
-                  />
-                ) : (
-                  <div className="w-11 h-11 rounded-xl dh-orange-gradient text-white font-extrabold text-base flex items-center justify-center shrink-0">
-                    {verifiedGoogleUser.displayName.slice(0, 1).toUpperCase()}
+                {verificationEmailLabel && (
+                  <div className="px-3 py-2 rounded-xl bg-white border border-[#E6ECFA] text-xs font-bold text-[#172033] break-all flex items-center gap-2">
+                    <Mail className="w-3.5 h-3.5 text-[#FF8500] shrink-0" />
+                    <span>{verificationEmailLabel}</span>
                   </div>
                 )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <p className="text-sm font-bold text-[#172033] truncate">
-                      {verifiedGoogleUser.displayName}
-                    </p>
-                    <CheckCircle2 className="w-4 h-4 text-[#16A34A] shrink-0" />
+                {pendingRegisteredPhone && (
+                  <div className="px-3 py-2 rounded-xl bg-white border border-[#E6ECFA] text-xs font-bold text-[#172033] font-mono-num flex items-center gap-2">
+                    <Phone className="w-3.5 h-3.5 text-[#16A34A] shrink-0" />
+                    <span>{pendingRegisteredPhone}</span>
                   </div>
-                  <p className="text-[11px] font-semibold text-[#16A34A]">
-                    {lang === 'bn' ? 'Google দ্বারা যাচাইকৃত অ্যাকাউন্ট' : 'Verified Google Account'}
-                  </p>
-                </div>
+                )}
               </div>
 
               {error && (
-                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-[#DC2626] text-xs font-semibold leading-relaxed">
-                  {error}
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-[#DC2626] text-xs font-semibold flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{error}</span>
+                </div>
+              )}
+              {info && (
+                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-[#16A34A] text-xs font-semibold">
+                  {info}
                 </div>
               )}
 
-              <form onSubmit={handleCreatePasswordSubmit} className="space-y-3.5" autoComplete="off">
-                {/* Verified Gmail (Read-Only) */}
-                <div>
-                  <label
-                    htmlFor="dh-verified-gmail"
-                    className="block text-xs font-bold text-[#172033] mb-1"
-                  >
-                    {lang === 'bn' ? 'যাচাইকৃত Gmail ঠিকানা' : 'Verified Gmail Address'}
-                  </label>
-                  <div className="relative">
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={handleRefreshVerificationClick}
+                  className="w-full py-3 rounded-xl dh-orange-gradient text-white font-bold text-sm flex items-center justify-center gap-2 shadow-sm hover:opacity-95 disabled:opacity-60"
+                >
+                  {loading && loadingAction === 'verify' ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4" />
+                  )}
+                  <span>
+                    {lang === 'bn' ? 'ভেরিফিকেশন চেক করুন ও ড্যাশবোর্ডে যান' : 'I Verified — Go to Dashboard'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={handleResendVerification}
+                  className="w-full py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-[#172033] font-bold text-xs flex items-center justify-center gap-2 hover:bg-[#E6ECFA]/70 disabled:opacity-60"
+                >
+                  <Mail className="w-3.5 h-3.5 text-[#FF8500]" />
+                  <span>
+                    {lang === 'bn' ? 'ভেরিফিকেশন ইমেইল আবার পাঠান' : 'Resend Verification Email'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={handleSwitchAccountSignOut}
+                  className="w-full py-2.5 rounded-xl bg-white border border-[#E6ECFA] text-[#777777] hover:text-[#172033] font-semibold text-xs flex items-center justify-center gap-1.5"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>{lang === 'bn' ? 'অন্য অ্যাকাউন্ট দিয়ে লগইন করুন' : 'Use Another Account'}</span>
+                </button>
+              </div>
+            </div>
+          ) : mode === 'reset' ? (
+            /* =============================================================== */
+            /* VIEW 3: FORGOT PASSWORD / ACCOUNT RECOVERY (Email & Phone)      */
+            /* =============================================================== */
+            <div className="space-y-4">
+              <button
+                type="button"
+                onClick={() => switchMode('login', { nextChannel: channel, keepEmail: true, keepPhone: true })}
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-[#777777] hover:text-[#172033]"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>{lang === 'bn' ? 'লগইনে ফিরে যান' : 'Back to Login'}</span>
+              </button>
+
+              <div>
+                <h2 className="text-lg font-extrabold text-[#172033]">
+                  {lang === 'bn' ? 'পাসওয়ার্ড রিসেট / অ্যাকাউন্ট রিকভারি' : 'Reset Password / Account Recovery'}
+                </h2>
+                <p className="text-xs text-[#777777] mt-1">
+                  {channel === 'phone'
+                    ? lang === 'bn'
+                      ? 'আপনার নিবন্ধিত বাংলাদেশি ফোন নম্বর দিন। অ্যাকাউন্টের রিকভারি ইমেইলে পাসওয়ার্ড রিসেট লিংক পাঠানো হবে।'
+                      : 'Enter your registered Bangladesh phone number. A password reset link will be sent to your recovery email.'
+                    : lang === 'bn'
+                      ? 'আপনার নিবন্ধিত ইমেইল ঠিকানা দিন। আমরা পাসওয়ার্ড রিসেট লিংক পাঠিয়ে দেব।'
+                      : 'Enter your registered email address and we will send you a password reset link.'}
+                </p>
+              </div>
+
+              {/* Channel Toggle: Email vs Phone */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA]">
+                <button
+                  type="button"
+                  onClick={() => switchChannel('email')}
+                  className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    channel === 'email'
+                      ? 'bg-white text-[#172033] shadow-xs border border-[#E6ECFA]'
+                      : 'text-[#777777] hover:text-[#172033]'
+                  }`}
+                >
+                  <Mail className="w-3.5 h-3.5 text-[#FF8500]" />
+                  <span>{lang === 'bn' ? 'ইমেইল দিয়ে' : 'By Email'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchChannel('phone')}
+                  className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    channel === 'phone'
+                      ? 'bg-white text-[#172033] shadow-xs border border-[#E6ECFA]'
+                      : 'text-[#777777] hover:text-[#172033]'
+                  }`}
+                >
+                  <Phone className="w-3.5 h-3.5 text-[#FF8500]" />
+                  <span>{lang === 'bn' ? 'ফোন নম্বর দিয়ে' : 'By Phone'}</span>
+                </button>
+              </div>
+
+              {error && (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-[#DC2626] text-xs font-semibold flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{error}</span>
+                </div>
+              )}
+              {info && (
+                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-[#16A34A] text-xs font-semibold leading-relaxed">
+                  {info}
+                </div>
+              )}
+
+              <form onSubmit={handlePrimaryFormSubmit} className="space-y-3.5">
+                {channel === 'email' ? (
+                  <div>
+                    <label htmlFor="dh-reset-email" className="block text-xs font-bold text-[#172033] mb-1">
+                      {lang === 'bn' ? 'ইমেইল ঠিকানা' : 'Email Address'}
+                    </label>
                     <input
-                      id="dh-verified-gmail"
+                      id="dh-reset-email"
                       type="email"
-                      readOnly
-                      tabIndex={-1}
-                      value={verifiedGoogleUser.email}
-                      className="w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-[#EEF2FA] border border-[#D8E2F5] text-sm font-semibold text-[#172033] cursor-not-allowed select-all"
-                    />
-                    <ShieldCheck
-                      className="w-4 h-4 text-[#16A34A] absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                      aria-hidden="true"
+                      required
+                      autoComplete="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@gmail.com"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-sm text-[#172033] focus:outline-none focus:border-[#FF8500]"
                     />
                   </div>
-                </div>
+                ) : (
+                  <div>
+                    <label htmlFor="dh-reset-phone" className="block text-xs font-bold text-[#172033] mb-1">
+                      {lang === 'bn' ? 'বাংলাদেশি ফোন নম্বর' : 'Bangladesh Phone Number'}
+                    </label>
+                    <div className="flex items-stretch rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] focus-within:border-[#FF8500] overflow-hidden">
+                      <span className="px-3 flex items-center gap-1 bg-[#EAEFFA] border-r border-[#DCE4F7] text-xs font-extrabold text-[#172033] font-mono-num shrink-0">
+                        +880
+                      </span>
+                      <input
+                        id="dh-reset-phone"
+                        type="tel"
+                        required
+                        autoComplete="tel"
+                        value={phoneInput}
+                        onChange={(e) => setPhoneInput(e.target.value)}
+                        placeholder="017XXXXXXXX"
+                        className="w-full px-3 py-2.5 bg-transparent text-sm text-[#172033] font-mono-num focus:outline-none"
+                      />
+                    </div>
+                    {normalizedPhonePreview && (
+                      <p className="text-[11px] font-mono-num font-semibold text-[#16A34A] mt-1">
+                        ✓ {normalizedPhonePreview}
+                      </p>
+                    )}
+                  </div>
+                )}
 
-                {/* New Password Field + Show/Hide Toggle */}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-3 rounded-xl dh-orange-gradient text-white font-bold text-sm flex items-center justify-center gap-2 shadow-sm hover:opacity-95 disabled:opacity-60"
+                >
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
+                  <span>
+                    {loading
+                      ? lang === 'bn'
+                        ? 'পাঠানো হচ্ছে...'
+                        : 'Sending...'
+                      : lang === 'bn'
+                        ? 'রিসেট লিংক পাঠান'
+                        : 'Send Reset Link'}
+                  </span>
+                </button>
+              </form>
+            </div>
+          ) : (
+            /* =============================================================== */
+            /* VIEW 4: MAIN LOGIN & CREATE ACCOUNT VIEW                        */
+            /* =============================================================== */
+            <div className="space-y-4">
+              {/* Top Primary Tabs: Login | Create Account */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA]">
+                <button
+                  type="button"
+                  onClick={() => switchMode('login', { nextChannel: channel, keepEmail: true, keepPhone: true })}
+                  className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 transition-all ${
+                    mode === 'login'
+                      ? 'bg-[#172033] text-white shadow-sm'
+                      : 'text-[#777777] hover:text-[#172033]'
+                  }`}
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>{lang === 'bn' ? 'লগইন' : 'Login'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchMode('register', { nextChannel: channel, keepEmail: true, keepPhone: true })}
+                  className={`py-2.5 px-3 rounded-xl text-xs sm:text-sm font-extrabold flex items-center justify-center gap-1.5 transition-all ${
+                    mode === 'register'
+                      ? 'dh-orange-gradient text-white shadow-sm'
+                      : 'text-[#777777] hover:text-[#172033]'
+                  }`}
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>{lang === 'bn' ? 'নতুন অ্যাকাউন্ট' : 'Create Account'}</span>
+                </button>
+              </div>
+
+              {/* Heading */}
+              <div>
+                <h2 className="text-lg sm:text-xl font-extrabold text-[#172033]">
+                  {mode === 'login'
+                    ? lang === 'bn'
+                      ? 'আপনার অ্যাকাউন্টে লগইন করুন'
+                      : 'Sign In to Your Account'
+                    : lang === 'bn'
+                      ? 'নতুন Digital Hub অ্যাকাউন্ট খুলুন'
+                      : 'Create Your Digital Hub Account'}
+                </h2>
+                <p className="text-xs text-[#777777] mt-0.5">
+                  {mode === 'login'
+                    ? lang === 'bn'
+                      ? 'Google, ইমেইল অথবা ফোন নম্বর দিয়ে দ্রুত ও নিরাপদ লগইন করুন।'
+                      : 'Sign in securely with Google, Email, or Bangladesh Phone Number.'
+                    : lang === 'bn'
+                      ? 'মাত্র ১ ক্লিকে Google দিয়ে অথবা ইমেইল / ফোন নম্বর দিয়ে অ্যাকাউন্ট তৈরি করুন।'
+                      : 'Register in 1 click with Google, or use your Email or Bangladesh Phone Number.'}
+                </p>
+              </div>
+
+              {/* METHOD A: Google Continue Button */}
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => handleGoogleSignIn(false)}
+                className="w-full py-3 px-4 rounded-xl bg-[#172033] hover:bg-[#1E2B45] text-white font-bold text-sm flex items-center justify-center gap-2.5 shadow-sm transition-all disabled:opacity-60"
+              >
+                {loading && loadingAction === 'google' ? (
+                  <Loader2 className="w-5 h-5 animate-spin text-[#FF8500]" />
+                ) : (
+                  <span className="w-7 h-7 rounded-lg bg-white flex items-center justify-center shrink-0">
+                    <GoogleBrandMark />
+                  </span>
+                )}
+                <span>
+                  {loading && loadingAction === 'google'
+                    ? lang === 'bn'
+                      ? 'Google যাচাই হচ্ছে...'
+                      : 'Connecting to Google...'
+                    : mode === 'register'
+                      ? lang === 'bn'
+                        ? 'Google দিয়ে দ্রুত অ্যাকাউন্ট খুলুন'
+                        : 'Continue with Google'
+                      : lang === 'bn'
+                        ? 'Google অ্যাকাউন্ট দিয়ে চালিয়ে যান'
+                        : 'Continue with Google'}
+                </span>
+              </button>
+
+              {/* Divider */}
+              <div className="relative flex items-center py-0.5">
+                <div className="grow border-t border-[#E6ECFA]" />
+                <span className="mx-3 text-[11px] font-bold text-[#777777] uppercase tracking-wide">
+                  {lang === 'bn' ? 'অথবা ইমেইল / ফোন দিয়ে' : 'or use email / phone'}
+                </span>
+                <div className="grow border-t border-[#E6ECFA]" />
+              </div>
+
+              {/* Channel Selector: Email vs Phone Number */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => switchChannel('email')}
+                  className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    channel === 'email'
+                      ? 'bg-[#FFF7EE] border-[#FF8500] text-[#172033] shadow-2xs'
+                      : 'bg-[#F8FAFF] border-[#E6ECFA] text-[#777777] hover:text-[#172033]'
+                  }`}
+                >
+                  <Mail className={`w-3.5 h-3.5 ${channel === 'email' ? 'text-[#FF8500]' : 'text-[#94A3B8]'}`} />
+                  <span>{lang === 'bn' ? 'ইমেইল ও পাসওয়ার্ড' : 'Email & Password'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchChannel('phone')}
+                  className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    channel === 'phone'
+                      ? 'bg-[#FFF7EE] border-[#FF8500] text-[#172033] shadow-2xs'
+                      : 'bg-[#F8FAFF] border-[#E6ECFA] text-[#777777] hover:text-[#172033]'
+                  }`}
+                >
+                  <Phone className={`w-3.5 h-3.5 ${channel === 'phone' ? 'text-[#FF8500]' : 'text-[#94A3B8]'}`} />
+                  <span>{lang === 'bn' ? 'ফোন নম্বর (+880)' : 'Phone (+880)'}</span>
+                </button>
+              </div>
+
+              {/* Error Alert with Smart Contextual Actions */}
+              {error && (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-[#DC2626] text-xs font-semibold leading-relaxed space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{error}</span>
+                  </div>
+
+                  {/* Smart 1-click redirect when Email already registered */}
+                  {errorCode === 'auth/email-already-in-use' && mode === 'register' && (
+                    <div className="flex flex-wrap gap-2 pt-0.5 pl-6">
+                      <button
+                        type="button"
+                        onClick={() => switchMode('login', { nextChannel: 'email', keepEmail: true })}
+                        className="px-3 py-1.5 rounded-lg bg-[#172033] text-white text-[11px] font-bold hover:opacity-90 inline-flex items-center gap-1"
+                      >
+                        <span>{lang === 'bn' ? 'এই ইমেইল দিয়ে লগইন করুন' : 'Log in with this email'}</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => switchMode('reset', { nextChannel: 'email', keepEmail: true })}
+                        className="px-3 py-1.5 rounded-lg bg-white border border-red-200 text-[#172033] text-[11px] font-bold hover:bg-red-50"
+                      >
+                        {lang === 'bn' ? 'পাসওয়ার্ড রিসেট' : 'Reset Password'}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Smart 1-click redirect when Phone already registered */}
+                  {errorCode === 'auth/phone-already-in-use' && mode === 'register' && (
+                    <div className="flex flex-wrap gap-2 pt-0.5 pl-6">
+                      <button
+                        type="button"
+                        onClick={() => switchMode('login', { nextChannel: 'phone', keepPhone: true })}
+                        className="px-3 py-1.5 rounded-lg bg-[#172033] text-white text-[11px] font-bold hover:opacity-90 inline-flex items-center gap-1"
+                      >
+                        <span>{lang === 'bn' ? 'এই নম্বর দিয়ে লগইন করুন' : 'Log in with this phone'}</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => switchMode('reset', { nextChannel: 'phone', keepPhone: true })}
+                        className="px-3 py-1.5 rounded-lg bg-white border border-red-200 text-[#172033] text-[11px] font-bold hover:bg-red-50"
+                      >
+                        {lang === 'bn' ? 'পাসওয়ার্ড রিকভারি' : 'Recover Password'}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Smart 1-click switch to Register when account not found on Login */}
+                  {errorCode === 'auth/user-not-found' && mode === 'login' && (
+                    <div className="pl-6">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          switchMode('register', {
+                            nextChannel: channel,
+                            keepEmail: channel === 'email',
+                            keepPhone: channel === 'phone',
+                          })
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-[#FF8500] text-white text-[11px] font-bold hover:opacity-90 inline-flex items-center gap-1"
+                      >
+                        <span>{lang === 'bn' ? 'নতুন অ্যাকাউন্ট খুলুন' : 'Create New Account'}</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Redirect fallback when mobile browser blocks Google Popup */}
+                  {errorCode === 'auth/popup-blocked' && (
+                    <div className="pl-6">
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => handleGoogleSignIn(true)}
+                        className="px-3 py-1.5 rounded-lg bg-[#172033] text-white text-[11px] font-bold hover:opacity-90 inline-flex items-center gap-1.5"
+                      >
+                        <span>
+                          {lang === 'bn'
+                            ? 'পপআপ ছাড়া সরাসরি Google-এ চালিয়ে যান'
+                            : 'Continue to Google without popup'}
+                        </span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Success / Info Banner */}
+              {info && (
+                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-[#16A34A] text-xs font-semibold leading-relaxed">
+                  {info}
+                </div>
+              )}
+
+              {/* Credential Form (Email or Phone) */}
+              <form onSubmit={handlePrimaryFormSubmit} className="space-y-3" autoComplete="on">
+                {/* Full Name (Registration Only) */}
+                {mode === 'register' && (
+                  <div>
+                    <label htmlFor="dh-auth-name" className="block text-xs font-bold text-[#172033] mb-1">
+                      {lang === 'bn' ? 'আপনার পূর্ণ নাম' : 'Full Name'}
+                    </label>
+                    <input
+                      id="dh-auth-name"
+                      type="text"
+                      required
+                      minLength={2}
+                      maxLength={120}
+                      autoComplete="name"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      placeholder={lang === 'bn' ? 'যেমন: আরিফুল ইসলাম' : 'e.g. Ariful Islam'}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-sm text-[#172033] focus:outline-none focus:border-[#FF8500]"
+                    />
+                  </div>
+                )}
+
+                {/* Phone Number Input (When Phone Channel Selected) */}
+                {channel === 'phone' && (
+                  <div>
+                    <label htmlFor="dh-auth-phone" className="block text-xs font-bold text-[#172033] mb-1">
+                      {lang === 'bn' ? 'বাংলাদেশি ফোন নম্বর' : 'Bangladesh Phone Number'}
+                    </label>
+                    <div className="flex items-stretch rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] focus-within:border-[#FF8500] overflow-hidden">
+                      <span className="px-3 flex items-center gap-1 bg-[#EAEFFA] border-r border-[#DCE4F7] text-xs font-extrabold text-[#172033] font-mono-num shrink-0">
+                        +880
+                      </span>
+                      <input
+                        id="dh-auth-phone"
+                        type="tel"
+                        required
+                        autoComplete="tel"
+                        value={phoneInput}
+                        onChange={(e) => setPhoneInput(e.target.value)}
+                        placeholder="017XXXXXXXX"
+                        className="w-full px-3 py-2.5 bg-transparent text-sm text-[#172033] font-mono-num focus:outline-none"
+                      />
+                    </div>
+                    {phoneInput.trim().length > 0 && (
+                      <p
+                        className={`text-[11px] mt-1 font-mono-num font-semibold ${
+                          normalizedPhonePreview ? 'text-[#16A34A]' : 'text-[#D97706]'
+                        }`}
+                      >
+                        {normalizedPhonePreview
+                          ? `✓ ${lang === 'bn' ? 'নরমালাইজড নম্বর:' : 'Normalized:'} ${normalizedPhonePreview}`
+                          : lang === 'bn'
+                            ? '১১ ডিজিটের বাংলাদেশি নম্বর লিখুন (যেমন: 01712345678)'
+                            : 'Enter a valid 11-digit BD mobile number (e.g. 01712345678)'}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Email Input (For Email Login/Signup, OR as Verified Recovery Email on Phone Signup) */}
+                {(channel === 'email' || (channel === 'phone' && mode === 'register')) && (
+                  <div>
+                    <label htmlFor="dh-auth-email" className="block text-xs font-bold text-[#172033] mb-1">
+                      {channel === 'phone'
+                        ? lang === 'bn'
+                          ? 'ভেরিফিকেশন ও রিকভারি ইমেইল'
+                          : 'Verification & Recovery Email'
+                        : lang === 'bn'
+                          ? 'ইমেইল ঠিকানা'
+                          : 'Email Address'}
+                    </label>
+                    <input
+                      id="dh-auth-email"
+                      type="email"
+                      required
+                      autoComplete="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="name@gmail.com"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-sm text-[#172033] focus:outline-none focus:border-[#FF8500]"
+                    />
+                    {channel === 'phone' && mode === 'register' && (
+                      <p className="text-[11px] text-[#777777] mt-1">
+                        {lang === 'bn'
+                          ? 'অ্যাকাউন্ট ভেরিফিকেশন এবং পাসওয়ার্ড ভুলে গেলে রিকভারির জন্য ব্যবহৃত হবে।'
+                          : 'Used for account verification and password recovery if you forget your password.'}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Password Input with Show/Hide Icon */}
                 <div>
-                  <label
-                    htmlFor="dh-new-password"
-                    className="block text-xs font-bold text-[#172033] mb-1"
-                  >
-                    {lang === 'bn' ? 'নতুন পাসওয়ার্ড' : 'New Password'}
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label htmlFor="dh-auth-password" className="text-xs font-bold text-[#172033]">
+                      {lang === 'bn' ? 'পাসওয়ার্ড' : 'Password'}
+                    </label>
+                    {mode === 'login' && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          switchMode('reset', {
+                            nextChannel: channel,
+                            keepEmail: channel === 'email',
+                            keepPhone: channel === 'phone',
+                          })
+                        }
+                        className="text-[11px] font-bold text-[#FF8500] hover:underline"
+                      >
+                        {lang === 'bn' ? 'পাসওয়ার্ড ভুলে গেছেন?' : 'Forgot Password?'}
+                      </button>
+                    )}
+                  </div>
                   <div className="relative">
                     <input
-                      id="dh-new-password"
-                      name="dh_new_password"
-                      type={showNewPassword ? 'text' : 'password'}
+                      id="dh-auth-password"
+                      type={showPassword ? 'text' : 'password'}
                       required
                       minLength={6}
-                      autoComplete="new-password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
+                      autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
                       placeholder={
-                        lang === 'bn'
-                          ? 'কমপক্ষে ৬ অক্ষরের শক্তিশালী পাসওয়ার্ড লিখুন'
-                          : 'Enter a strong password (min 6 chars)'
+                        mode === 'register'
+                          ? lang === 'bn'
+                            ? 'কমপক্ষে ৬ অক্ষরের পাসওয়ার্ড লিখুন'
+                            : 'Create password (min 6 chars)'
+                          : '••••••••'
                       }
                       className="w-full pl-3.5 pr-11 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-sm text-[#172033] focus:outline-none focus:border-[#FF8500]"
                     />
                     <button
                       type="button"
-                      onClick={() => setShowNewPassword((v) => !v)}
+                      onClick={() => setShowPassword((v) => !v)}
                       className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-[#777777] hover:text-[#172033]"
-                      aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
                     >
-                      {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
 
-                  {/* Password Strength Indicator */}
-                  {newPassword.length > 0 && (
-                    <div className="mt-2 space-y-1.5">
-                      <div className="grid grid-cols-4 gap-1.5">
+                  {/* Real-time Password Strength Indicator on Registration */}
+                  {mode === 'register' && password.length > 0 && (
+                    <div className="mt-1.5 space-y-1">
+                      <div className="grid grid-cols-4 gap-1">
                         {[1, 2, 3, 4].map((seg) => (
                           <div
                             key={seg}
@@ -978,524 +1614,150 @@ export function AuthModal({
                           {lang === 'bn' ? strength.labelBn : strength.labelEn}
                         </span>
                         <span className="text-[#777777]">
-                          {lang === 'bn'
-                            ? `${newPassword.length} অক্ষর`
-                            : `${newPassword.length} chars`}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
-                        <span
-                          className={
-                            strength.hasMinLength ? 'text-[#16A34A] font-semibold' : 'text-[#777777]'
-                          }
-                        >
-                          {strength.hasMinLength ? '✓' : '○'}{' '}
-                          {lang === 'bn' ? 'কমপক্ষে ৬ অক্ষর' : '6+ chars'}
-                        </span>
-                        <span
-                          className={
-                            strength.hasLetterAndNumber
-                              ? 'text-[#16A34A] font-semibold'
-                              : 'text-[#777777]'
-                          }
-                        >
-                          {strength.hasLetterAndNumber ? '✓' : '○'}{' '}
-                          {lang === 'bn' ? 'অক্ষর ও সংখ্যা' : 'Letters & numbers'}
-                        </span>
-                        <span
-                          className={
-                            strength.hasUpperOrSymbol
-                              ? 'text-[#16A34A] font-semibold'
-                              : 'text-[#777777]'
-                          }
-                        >
-                          {strength.hasUpperOrSymbol ? '✓' : '○'}{' '}
-                          {lang === 'bn' ? 'বড় হাতের অক্ষর/চিহ্ন' : 'Uppercase/symbol'}
+                          {lang === 'bn' ? `${password.length} অক্ষর` : `${password.length} chars`}
                         </span>
                       </div>
                     </div>
                   )}
                 </div>
 
-                {/* Confirm Password Field + Show/Hide Toggle */}
-                <div>
-                  <label
-                    htmlFor="dh-confirm-password"
-                    className="block text-xs font-bold text-[#172033] mb-1"
-                  >
-                    {lang === 'bn' ? 'পাসওয়ার্ড নিশ্চিত করুন' : 'Confirm Password'}
-                  </label>
-                  <div className="relative">
-                    <input
-                      id="dh-confirm-password"
-                      name="dh_confirm_password"
-                      type={showConfirmPassword ? 'text' : 'password'}
-                      required
-                      minLength={6}
-                      autoComplete="new-password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      placeholder={
-                        lang === 'bn'
-                          ? 'একই পাসওয়ার্ড আবার লিখুন'
-                          : 'Re-enter your password'
-                      }
-                      className={`w-full pl-3.5 pr-11 py-2.5 rounded-xl bg-[#F3F6FF] border text-sm text-[#172033] focus:outline-none ${
-                        passwordsMismatch
-                          ? 'border-[#DC2626] focus:border-[#DC2626]'
-                          : passwordsMatch
-                            ? 'border-[#16A34A] focus:border-[#16A34A]'
-                            : 'border-[#E6ECFA] focus:border-[#FF8500]'
-                      }`}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowConfirmPassword((v) => !v)}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-[#777777] hover:text-[#172033]"
-                      aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                {/* Confirm Password (Registration Only) */}
+                {mode === 'register' && (
+                  <div>
+                    <label
+                      htmlFor="dh-auth-confirm-password"
+                      className="block text-xs font-bold text-[#172033] mb-1"
                     >
-                      {showConfirmPassword ? (
-                        <EyeOff className="w-4 h-4" />
-                      ) : (
-                        <Eye className="w-4 h-4" />
-                      )}
-                    </button>
+                      {lang === 'bn' ? 'পাসওয়ার্ড নিশ্চিত করুন' : 'Confirm Password'}
+                    </label>
+                    <div className="relative">
+                      <input
+                        id="dh-auth-confirm-password"
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        required
+                        minLength={6}
+                        autoComplete="new-password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder={
+                          lang === 'bn' ? 'একই পাসওয়ার্ড আবার লিখুন' : 'Re-enter your password'
+                        }
+                        className={`w-full pl-3.5 pr-11 py-2.5 rounded-xl bg-[#F3F6FF] border text-sm text-[#172033] focus:outline-none ${
+                          passwordsMismatch
+                            ? 'border-[#DC2626] focus:border-[#DC2626]'
+                            : passwordsMatch
+                              ? 'border-[#16A34A] focus:border-[#16A34A]'
+                              : 'border-[#E6ECFA] focus:border-[#FF8500]'
+                        }`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword((v) => !v)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-[#777777] hover:text-[#172033]"
+                        aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                      >
+                        {showConfirmPassword ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                    {passwordsMismatch && (
+                      <p className="text-[11px] font-semibold text-[#DC2626] mt-1">
+                        {lang === 'bn' ? 'পাসওয়ার্ড মেলেনি' : 'Passwords do not match'}
+                      </p>
+                    )}
+                    {passwordsMatch && (
+                      <p className="text-[11px] font-semibold text-[#16A34A] mt-1">
+                        ✓ {lang === 'bn' ? 'পাসওয়ার্ড মিলেছে' : 'Passwords match'}
+                      </p>
+                    )}
                   </div>
-                  {passwordsMismatch && (
-                    <p className="text-[11px] font-semibold text-[#DC2626] mt-1">
-                      {lang === 'bn' ? 'পাসওয়ার্ড দুটি মেলেনি।' : 'Passwords do not match.'}
-                    </p>
-                  )}
-                  {passwordsMatch && (
-                    <p className="text-[11px] font-semibold text-[#16A34A] mt-1">
-                      {lang === 'bn' ? 'পাসওয়ার্ড মিলেছে।' : 'Passwords match.'}
-                    </p>
-                  )}
-                </div>
+                )}
 
-                {/* Continue / Create Account Button */}
+                {/* Optional Referral Code (Registration Only) */}
+                {mode === 'register' && (
+                  <div>
+                    <label htmlFor="dh-auth-referral" className="block text-xs font-bold text-[#172033] mb-1">
+                      {lang === 'bn' ? 'রেফারেল কোড (ঐচ্ছিক)' : 'Referral Code (Optional)'}
+                    </label>
+                    <input
+                      id="dh-auth-referral"
+                      type="text"
+                      maxLength={24}
+                      value={referralCode}
+                      onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
+                      placeholder="DHXXXXXX"
+                      className="w-full px-3.5 py-2 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-mono-num uppercase text-[#172033] focus:outline-none focus:border-[#FF8500]"
+                    />
+                  </div>
+                )}
+
+                {/* Primary Submit CTA */}
                 <button
                   type="submit"
-                  disabled={loading || !strength.hasMinLength || passwordsMismatch}
-                  className="w-full py-3 rounded-xl dh-orange-gradient text-white font-bold text-sm shadow-sm hover:opacity-95 disabled:opacity-60 flex items-center justify-center gap-2"
+                  disabled={loading}
+                  className="w-full py-3 rounded-xl dh-orange-gradient text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-sm hover:opacity-95 transition-opacity disabled:opacity-60 mt-1"
                 >
-                  <UserPlus className="w-4 h-4" />
+                  {loading && loadingAction === 'submit' ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : mode === 'login' ? (
+                    <LogIn className="w-4 h-4" />
+                  ) : (
+                    <UserPlus className="w-4 h-4" />
+                  )}
                   <span>
-                    {loading
+                    {loading && loadingAction === 'submit'
                       ? lang === 'bn'
-                        ? 'অ্যাকাউন্ট সেটআপ হচ্ছে...'
-                        : 'Creating Account...'
-                      : lang === 'bn'
-                        ? 'চালিয়ে যান / অ্যাকাউন্ট তৈরি করুন'
-                        : 'Continue / Create Account'}
+                        ? 'অপেক্ষা করুন...'
+                        : 'Please wait...'
+                      : mode === 'login'
+                        ? channel === 'phone'
+                          ? lang === 'bn'
+                            ? 'ফোন নম্বর দিয়ে লগইন করুন'
+                            : 'Sign In with Phone'
+                          : lang === 'bn'
+                            ? 'লগইন করুন'
+                            : 'Sign In'
+                        : channel === 'phone'
+                          ? lang === 'bn'
+                            ? 'ফোন নম্বর দিয়ে অ্যাকাউন্ট তৈরি করুন'
+                            : 'Create Account with Phone'
+                          : lang === 'bn'
+                            ? 'অ্যাকাউন্ট তৈরি করুন'
+                            : 'Create Account'}
                   </span>
                 </button>
               </form>
 
-              <p className="text-[11px] text-center text-[#777777] leading-relaxed">
-                {lang === 'bn'
-                  ? 'আপনার পাসওয়ার্ড Firebase Authentication-এ সম্পূর্ণ এনক্রিপ্ট করে সংরক্ষিত হয়। ভবিষ্যতে আপনি Google অথবা Gmail + এই পাসওয়ার্ড দিয়ে লগইন করতে পারবেন।'
-                  : 'Your password is securely stored by Firebase Authentication. Next time, sign in using either Google or your Gmail + this password.'}
-              </p>
-
-              <div className="pt-2 border-t border-[#E6ECFA] text-center">
-                <button
-                  type="button"
-                  onClick={handleChooseAnotherGoogleAccount}
-                  disabled={loading}
-                  className="text-xs font-semibold text-[#777777] hover:text-[#FF8500] inline-flex items-center gap-1.5"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  {lang === 'bn'
-                    ? 'অন্য Google অ্যাকাউন্ট ব্যবহার করুন'
-                    : 'Use a different Google account'}
-                </button>
-              </div>
-            </div>
-          ) : needsVerification ? (
-            /* Legacy Unverified Email Account Fallback */
-            <div className="space-y-4 text-center">
-              <div className="w-12 h-12 rounded-2xl bg-[#FFF3E5] text-[#FF8500] flex items-center justify-center mx-auto">
-                <Mail className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg font-bold text-[#172033]">{t(lang, 'verifyEmailTitle')}</h3>
-              {verificationEmailLabel && (
-                <p className="text-xs font-bold text-[#172033] bg-[#F3F6FF] border border-[#E6ECFA] rounded-xl py-1.5 px-3 inline-block">
-                  {verificationEmailLabel}
-                </p>
-              )}
-              <p className="text-xs sm:text-sm text-[#777777]">{t(lang, 'verifyEmailDesc')}</p>
-
-              {info && (
-                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
-                  {info}
-                </div>
-              )}
-              {error && (
-                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-[#DC2626] text-xs font-semibold">
-                  {error}
-                </div>
-              )}
-
-              <div className="flex flex-col gap-2.5">
-                {onRefreshVerification && (
-                  <button
-                    type="button"
-                    onClick={handleRefreshVerificationClick}
-                    disabled={loading}
-                    className="w-full py-2.5 rounded-xl dh-orange-gradient text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-60"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    {t(lang, 'refreshVerification')}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleResendVerification}
-                  disabled={loading}
-                  className="w-full py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-[#172033] font-semibold text-sm hover:border-[#FF8500] disabled:opacity-60"
-                >
-                  {t(lang, 'resendVerification')}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSwitchAccountSignOut}
-                  disabled={loading}
-                  className="w-full py-2 rounded-xl text-xs font-semibold text-[#777777] hover:text-[#DC2626] flex items-center justify-center gap-1.5"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  {lang === 'bn'
-                    ? 'লগআউট করে অন্য ইমেইল ব্যবহার করুন'
-                    : 'Sign out & use a different email'}
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* DEFAULT AUTH SCREEN: Login | Register (Google-First) | Forgot Password */
-            <>
-              {/* Clean Two-Mode Switcher (Login / Create Account) */}
-              {mode !== 'reset' && (
-                <div className="grid grid-cols-2 p-1 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA]">
-                  <button
-                    type="button"
-                    onClick={() => switchMode('login', false)}
-                    className={`py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                      mode === 'login'
-                        ? 'bg-white text-[#172033] shadow-xs border border-[#E6ECFA]'
-                        : 'text-[#777777] hover:text-[#172033]'
-                    }`}
-                  >
-                    {lang === 'bn' ? 'লগইন করুন' : 'Sign In'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => switchMode('register', false)}
-                    className={`py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                      mode === 'register'
-                        ? 'dh-orange-gradient text-white shadow-xs'
-                        : 'text-[#777777] hover:text-[#172033]'
-                    }`}
-                  >
-                    {lang === 'bn' ? 'নতুন অ্যাকাউন্ট' : 'Create Account'}
-                  </button>
-                </div>
-              )}
-
-              <div>
-                <h2 className="text-xl font-bold text-[#172033]">
-                  {mode === 'login'
-                    ? lang === 'bn'
-                      ? 'আপনার অ্যাকাউন্টে লগইন করুন'
-                      : 'Sign In to DIGITAL HUB'
-                    : mode === 'register'
-                      ? lang === 'bn'
-                        ? 'নতুন কাস্টমার অ্যাকাউন্ট তৈরি করুন'
-                        : 'Create Customer Account'
-                      : lang === 'bn'
-                        ? 'পাসওয়ার্ড রিসেট করুন'
-                        : 'Reset Your Password'}
-                </h2>
-                <p className="text-xs text-[#777777] mt-1">
-                  {mode === 'register'
-                    ? lang === 'bn'
-                      ? 'প্রথমে Google দিয়ে আপনার Gmail যাচাই করুন, তারপর Digital Hub-এর জন্য নিজের পাসওয়ার্ড সেট করুন।'
-                      : 'First verify your Gmail with Google, then create your own Digital Hub password.'
-                    : mode === 'reset'
-                      ? lang === 'bn'
-                        ? 'আপনার নিবন্ধিত Gmail ঠিকানা দিন — আমরা পাসওয়ার্ড রিসেট লিংক পাঠিয়ে দেব।'
-                        : 'Enter your registered Gmail address to receive a Firebase password reset link.'
-                      : lang === 'bn'
-                        ? 'Google অথবা আপনার Gmail ও Digital Hub পাসওয়ার্ড দিয়ে লগইন করুন।'
-                        : 'Sign in with Google or your Gmail & Digital Hub password.'}
-                </p>
-              </div>
-
-              {error && (
-                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-[#DC2626] text-xs font-semibold space-y-2 leading-relaxed">
-                  <p>{error}</p>
-                  {mode === 'register' &&
-                    (errorCode === 'auth/email-already-in-use' ||
-                      errorCode === 'auth/credential-already-in-use' ||
-                      errorCode === 'auth/provider-already-linked') && (
-                      <div className="flex flex-wrap items-center gap-3 pt-0.5">
-                        <button
-                          type="button"
-                          onClick={() => switchMode('login', false)}
-                          className="underline font-bold text-[#172033] hover:text-[#FF8500]"
-                        >
-                          {lang === 'bn' ? 'লগইন পেজে যান' : 'Go to Sign In'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => switchMode('reset', false)}
-                          className="underline font-semibold text-[#777777] hover:text-[#172033]"
-                        >
-                          {lang === 'bn' ? 'পাসওয়ার্ড রিসেট করুন' : 'Reset password'}
-                        </button>
-                      </div>
-                    )}
-                </div>
-              )}
-              {info && (
-                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold flex items-start gap-2 leading-relaxed">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{info}</span>
-                </div>
-              )}
-
-              {mode === 'register' ? (
-                /* STEP 1: Google-First Public Registration Flow */
-                <div className="space-y-4">
-                  {/* Optional Referral Code before Google Verification */}
-                  <div>
-                    <label
-                      htmlFor="dh-register-referral"
-                      className="block text-xs font-bold text-[#172033] mb-1"
-                    >
-                      {lang === 'bn' ? 'রেফারেল কোড (ঐচ্ছিক)' : 'Referral Code (Optional)'}
-                    </label>
-                    <input
-                      id="dh-register-referral"
-                      name="register_referral_code"
-                      type="text"
-                      autoComplete="off"
-                      value={referralCode}
-                      onChange={(e) => setReferralCode(e.target.value.toUpperCase())}
-                      placeholder="DHXXXXXX"
-                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-sm font-mono-num text-[#172033] focus:outline-none focus:border-[#FF8500]"
-                    />
-                  </div>
-
-                  {/* Primary STEP 1 CTA: Sign Up with Google */}
-                  <button
-                    type="button"
-                    onClick={() => handleGoogleFlow('register')}
-                    disabled={loading}
-                    className="w-full py-3.5 px-4 rounded-2xl bg-[#172033] hover:bg-[#23314d] text-white font-bold text-sm flex items-center justify-center gap-3 transition-colors shadow-md disabled:opacity-60"
-                  >
-                    <span className="w-7 h-7 rounded-lg bg-white flex items-center justify-center shrink-0">
-                      <GoogleBrandMark />
-                    </span>
-                    <span>
-                      {loading
-                        ? lang === 'bn'
-                          ? 'Google যাচাই চলছে...'
-                          : 'Verifying with Google...'
-                        : lang === 'bn'
-                          ? 'Google দিয়ে সাইনআপ করুন'
-                          : 'Sign Up with Google'}
-                    </span>
-                  </button>
-
-                  {/* 2-Step Guided Explanation */}
-                  <div className="p-3.5 rounded-2xl bg-[#FFF7EE] border border-[#FFE0BF] space-y-2">
-                    <p className="text-xs font-extrabold text-[#172033]">
-                      {lang === 'bn' ? 'কিভাবে নতুন অ্যাকাউন্ট তৈরি হবে:' : 'How registration works:'}
-                    </p>
-                    <div className="space-y-1.5 text-[11px] sm:text-xs text-[#555555]">
-                      <div className="flex items-start gap-2">
-                        <span className="w-4 h-4 rounded-full bg-[#FF8500] text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                          ১
-                        </span>
-                        <span>
-                          {lang === 'bn'
-                            ? 'পপআপ থেকে আপনার পছন্দের Google (Gmail) অ্যাকাউন্টটি বাছাই করুন।'
-                            : 'Choose your Google (Gmail) account in the popup window.'}
-                        </span>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <span className="w-4 h-4 rounded-full bg-[#FF8500] text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                          ২
-                        </span>
-                        <span>
-                          {lang === 'bn'
-                            ? 'Gmail যাচাই হলে Digital Hub-এর জন্য আপনার নিজের পাসওয়ার্ড তৈরি করুন।'
-                            : 'Once verified, create your own Digital Hub password.'}
-                        </span>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <span className="w-4 h-4 rounded-full bg-[#16A34A] text-white text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                          ✓
-                        </span>
-                        <span>
-                          {lang === 'bn'
-                            ? 'ভবিষ্যতে Google অথবা Gmail + পাসওয়ার্ড—যেকোনোটি দিয়ে লগইন করতে পারবেন।'
-                            : 'Log in anytime with Google or your Gmail + Digital Hub password.'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <p className="text-[11px] text-center text-[#777777]">
-                    {lang === 'bn'
-                      ? 'ভিন্ন ভিন্ন Gmail ঠিকানা দিয়ে একাধিক Digital Hub অ্যাকাউন্ট তৈরি করা যাবে।'
-                      : 'You can create multiple Digital Hub accounts using different Gmail addresses.'}
-                  </p>
-                </div>
-              ) : (
-                /* LOGIN & FORGOT PASSWORD FLOWS */
-                <>
-                  {mode === 'login' && (
-                    <>
-                      <div className="space-y-2">
-                        <button
-                          type="button"
-                          onClick={() => handleGoogleFlow('login')}
-                          disabled={loading}
-                          className="w-full py-3 px-4 rounded-xl bg-[#172033] hover:bg-[#23314d] text-white font-bold text-sm flex items-center justify-center gap-2.5 transition-colors shadow-sm disabled:opacity-60"
-                        >
-                          <span className="w-6 h-6 rounded-md bg-white flex items-center justify-center shrink-0">
-                            <GoogleBrandMark />
-                          </span>
-                          <span>
-                            {loading
-                              ? '...'
-                              : lang === 'bn'
-                                ? 'Google দিয়ে লগইন করুন'
-                                : 'Continue with Google'}
-                          </span>
-                        </button>
-                      </div>
-
-                      <div className="relative flex items-center py-0.5">
-                        <div className="flex-grow border-t border-[#E6ECFA]" />
-                        <span className="px-3 text-[11px] font-bold uppercase tracking-wider text-[#777777]">
-                          {lang === 'bn' ? 'অথবা Gmail ও পাসওয়ার্ড দিয়ে' : 'OR GMAIL & PASSWORD'}
-                        </span>
-                        <div className="flex-grow border-t border-[#E6ECFA]" />
-                      </div>
-                    </>
-                  )}
-
-                  <form key={mode} onSubmit={handleEmailFormSubmit} className="space-y-3">
-                    <div>
-                      <label
-                        htmlFor={`dh-${mode}-email`}
-                        className="block text-xs font-bold text-[#172033] mb-1"
-                      >
-                        {lang === 'bn' ? 'Gmail / ইমেইল ঠিকানা' : 'Gmail / Email Address'}
-                      </label>
-                      <input
-                        id={`dh-${mode}-email`}
-                        name="email"
-                        type="email"
-                        required
-                        autoComplete="email"
-                        autoCapitalize="none"
-                        spellCheck={false}
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="yourname@gmail.com"
-                        className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-sm text-[#172033] focus:outline-none focus:border-[#FF8500]"
-                      />
-                    </div>
-
-                    {mode === 'login' && (
-                      <div>
-                        <label
-                          htmlFor="dh-login-password"
-                          className="block text-xs font-bold text-[#172033] mb-1"
-                        >
-                          {lang === 'bn' ? 'Digital Hub পাসওয়ার্ড' : 'Digital Hub Password'}
-                        </label>
-                        <div className="relative">
-                          <input
-                            id="dh-login-password"
-                            name="password"
-                            type={showLoginPassword ? 'text' : 'password'}
-                            required
-                            minLength={6}
-                            autoComplete="current-password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="••••••••"
-                            className="w-full pl-3.5 pr-11 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-sm text-[#172033] focus:outline-none focus:border-[#FF8500]"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowLoginPassword((v) => !v)}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-[#777777] hover:text-[#172033]"
-                            aria-label={showLoginPassword ? 'Hide password' : 'Show password'}
-                          >
-                            {showLoginPassword ? (
-                              <EyeOff className="w-4 h-4" />
-                            ) : (
-                              <Eye className="w-4 h-4" />
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    <button
-                      type="submit"
-                      disabled={loading}
-                      className="w-full py-2.5 rounded-xl dh-orange-gradient text-white font-bold text-sm shadow-sm hover:opacity-95 disabled:opacity-60 flex items-center justify-center gap-2"
-                    >
-                      <KeyRound className="w-4 h-4" />
-                      <span>
-                        {loading
-                          ? '...'
-                          : mode === 'login'
-                            ? t(lang, 'signIn')
-                            : lang === 'bn'
-                              ? 'রিসেট লিংক পাঠান'
-                              : 'Send Reset Link'}
-                      </span>
-                    </button>
-                  </form>
-                </>
-              )}
-
-              <div className="flex items-center justify-between text-xs pt-2 border-t border-[#E6ECFA]">
+              {/* Footer Switcher */}
+              <div className="pt-2 border-t border-[#E6ECFA] text-center text-xs text-[#777777]">
                 {mode === 'login' ? (
                   <>
+                    <span>{lang === 'bn' ? 'অ্যাকাউন্ট নেই?' : "Don't have an account?"} </span>
                     <button
                       type="button"
-                      onClick={() => switchMode('register', false)}
-                      className="font-bold text-[#FF8500] hover:underline"
+                      onClick={() => switchMode('register', { nextChannel: channel })}
+                      className="font-extrabold text-[#FF8500] hover:underline"
                     >
-                      {lang === 'bn' ? 'নতুন অ্যাকাউন্ট খুলুন' : 'Create new account'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => switchMode('reset', false)}
-                      className="text-[#777777] hover:text-[#172033]"
-                    >
-                      {lang === 'bn' ? 'পাসওয়ার্ড ভুলে গেছেন?' : 'Forgot password?'}
+                      {lang === 'bn' ? 'নতুন অ্যাকাউন্ট খুলুন' : 'Create Account'}
                     </button>
                   </>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => switchMode('login', false)}
-                    className="font-bold text-[#FF8500] hover:underline"
-                  >
-                    {lang === 'bn' ? 'আগের অ্যাকাউন্টে লগইন করুন' : 'Back to Sign In'}
-                  </button>
+                  <>
+                    <span>{lang === 'bn' ? 'আগে থেকেই অ্যাকাউন্ট আছে?' : 'Already have an account?'} </span>
+                    <button
+                      type="button"
+                      onClick={() => switchMode('login', { nextChannel: channel })}
+                      className="font-extrabold text-[#FF8500] hover:underline"
+                    >
+                      {lang === 'bn' ? 'লগইন করুন' : 'Log In'}
+                    </button>
+                  </>
                 )}
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>

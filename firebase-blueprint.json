@@ -9,6 +9,7 @@
         "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
         "email": { "type": "string", "format": "email", "maxLength": 200 },
         "role": { "type": "string", "enum": ["admin", "user"] },
+        "authMethod": { "type": "string", "enum": ["google", "email", "phone"] },
         "phone": { "type": "string", "maxLength": 30 },
         "photoUrl": { "type": "string", "maxLength": 250000 },
         "referralCode": { "type": "string", "minLength": 4, "maxLength": 24, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -676,6 +677,19 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "sessionId", "userId", "provider", "coins", "bdtEquivalent", "type", "status", "createdAt"]
+    },
+    "PhoneAuthIndex": {
+      "title": "PhoneAuthIndex",
+      "description": "Zero-PII salted SHA-256 phone lookup index storing only AES-256-GCM server-encrypted auth reference",
+      "type": "object",
+      "properties": {
+        "phoneHash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "encryptedRef": { "type": "string", "minLength": 24, "maxLength": 600 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["phoneHash", "uid", "encryptedRef", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -802,6 +816,10 @@
     "/adRewardTransactions/{txId}": {
       "schema": { "$ref": "#/entities/AdRewardTransaction" },
       "description": "Watch & Earn coin earnings and BDT wallet redemption ledger"
+    },
+    "/phoneIndex/{phoneHash}": {
+      "schema": { "$ref": "#/entities/PhoneAuthIndex" },
+      "description": "Zero-PII encrypted phone authentication lookup table indexed by salted SHA-256 hash"
     }
   }
 }

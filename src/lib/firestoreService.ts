@@ -37,6 +37,7 @@ import {
   Announcement,
   AppNotification,
   AuditLog,
+  AuthMethod,
   Banner,
   CartItem,
   Category,
@@ -539,13 +540,40 @@ export async function hasExistingUserProfile(uid: string): Promise<boolean> {
   }
 }
 
+const CLIENT_BENGALI_DIGITS: Record<string, string> = {
+  '০': '0',
+  '১': '1',
+  '২': '2',
+  '৩': '3',
+  '৪': '4',
+  '৫': '5',
+  '৬': '6',
+  '৭': '7',
+  '৮': '8',
+  '৯': '9',
+};
+
+export function normalizeBangladeshPhoneClient(raw: string): string | null {
+  if (typeof raw !== 'string') return null;
+  const ascii = raw.replace(/[০-৯]/g, (d) => CLIENT_BENGALI_DIGITS[d] || d);
+  const cleaned = ascii.replace(/[\s\-().]/g, '').trim();
+  if (!cleaned) return null;
+  if (/^\+8801[3-9]\d{8}$/.test(cleaned)) return cleaned;
+  if (/^8801[3-9]\d{8}$/.test(cleaned)) return `+${cleaned}`;
+  if (/^01[3-9]\d{8}$/.test(cleaned)) return `+88${cleaned}`;
+  if (/^1[3-9]\d{8}$/.test(cleaned)) return `+880${cleaned}`;
+  return null;
+}
+
 export async function ensureUserProfile(
   uid: string,
   email: string,
   displayName: string,
   language: 'bn' | 'en' = 'bn',
   referredByCode?: string,
-  photoUrl?: string
+  photoUrl?: string,
+  authMethod?: AuthMethod,
+  phone?: string
 ): Promise<UserProfile | null> {
   if (!uid || !auth.currentUser || auth.currentUser.uid !== uid || !auth.currentUser.emailVerified) {
     return null;
@@ -563,6 +591,10 @@ export async function ensureUserProfile(
       if (!normalizedEmail || normalizedEmail.length < 3) {
         return null;
       }
+
+      const normalizedPhone = phone
+        ? normalizeBangladeshPhoneClient(phone) || phone.trim().slice(0, 30)
+        : '';
 
       const userRef = doc(db, 'users', uid);
       const walletRef = doc(db, 'walletAccounts', uid);
@@ -593,6 +625,21 @@ export async function ensureUserProfile(
 
       if (snap.exists()) {
         const existingProf = snap.data() as UserProfile;
+
+        // Backfill missing photoUrl or phone on existing profile without overwriting existing data
+        const safePhotoBackfill =
+          !existingProf.photoUrl && typeof photoUrl === 'string' && photoUrl.trim().startsWith('https://')
+            ? photoUrl.trim().slice(0, 250000)
+            : '';
+        const safePhoneBackfill = !existingProf.phone && normalizedPhone ? normalizedPhone : '';
+        if (safePhotoBackfill || safePhoneBackfill) {
+          updateDoc(userRef, {
+            ...(safePhotoBackfill ? { photoUrl: safePhotoBackfill } : {}),
+            ...(safePhoneBackfill ? { phone: safePhoneBackfill } : {}),
+            updatedAt: serverTimestamp(),
+          }).catch(() => {});
+        }
+
         const ownCode = (existingProf.referralCode || fallbackCode).trim().toUpperCase();
         if (/^[A-Z0-9_-]{4,24}$/.test(ownCode)) {
           const refCodeRef = doc(db, 'referralCodes', ownCode);
@@ -617,7 +664,11 @@ export async function ensureUserProfile(
         if (refToLink) {
           registerReferralServer(refToLink).catch(() => {});
         }
-        return existingProf;
+        return {
+          ...existingProf,
+          ...(safePhotoBackfill ? { photoUrl: safePhotoBackfill } : {}),
+          ...(safePhoneBackfill ? { phone: safePhoneBackfill } : {}),
+        };
       }
 
       const code = fallbackCode;
@@ -637,12 +688,21 @@ export async function ensureUserProfile(
           ? photoUrl.trim().slice(0, 250000)
           : '';
 
+      const inferredAuthMethod: AuthMethod =
+        authMethod ||
+        (auth.currentUser?.providerData.some((p) => p.providerId === 'google.com')
+          ? 'google'
+          : normalizedPhone
+            ? 'phone'
+            : 'email');
+
       const newProfile: UserProfile = {
         uid,
         displayName: cleanDisplayName,
         email: normalizedEmail,
         role: isOwner ? 'admin' : 'user',
-        phone: '',
+        authMethod: inferredAuthMethod,
+        phone: normalizedPhone,
         ...(safePhotoUrl ? { photoUrl: safePhotoUrl } : {}),
         referralCode: code,
         ...(cleanReferredBy ? { referredBy: cleanReferredBy } : {}),
@@ -681,6 +741,178 @@ export async function ensureUserProfile(
 
   inFlightProfileEnsures.set(uid, run);
   return run;
+}
+
+export interface PhoneAuthApiError extends Error {
+  code?: string;
+}
+
+function createPhoneAuthError(code: string, message: string): PhoneAuthApiError {
+  const err = new Error(message) as PhoneAuthApiError;
+  err.code = code;
+  return err;
+}
+
+export async function checkPhoneRegisteredServer(
+  phone: string
+): Promise<{ ok: boolean; normalizedPhone: string; exists: boolean }> {
+  const resp = await fetch(apiUrl('/api/auth/phone/check'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  });
+  const data = (await resp.json().catch(() => ({}))) as {
+    ok?: boolean;
+    normalizedPhone?: string;
+    exists?: boolean;
+    code?: string;
+    error?: string;
+  };
+  if (!resp.ok || !data.ok) {
+    throw createPhoneAuthError(
+      data.code || 'auth/network-request-failed',
+      data.error || 'Could not verify phone number.'
+    );
+  }
+  return {
+    ok: true,
+    normalizedPhone: data.normalizedPhone || '',
+    exists: Boolean(data.exists),
+  };
+}
+
+export async function registerPhoneIndexServer(
+  phone: string
+): Promise<{ ok: boolean; normalizedPhone: string }> {
+  const current = auth.currentUser;
+  if (!current || !current.emailVerified) {
+    throw createPhoneAuthError('auth/requires-recent-login', 'Verified user session required.');
+  }
+  const idToken = await current.getIdToken();
+  const resp = await fetch(apiUrl('/api/auth/phone/index'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({ phone }),
+  });
+  const data = (await resp.json().catch(() => ({}))) as {
+    ok?: boolean;
+    normalizedPhone?: string;
+    code?: string;
+    error?: string;
+  };
+  if (!resp.ok || !data.ok) {
+    throw createPhoneAuthError(
+      data.code || 'auth/internal-error',
+      data.error || 'Failed to register phone number.'
+    );
+  }
+  return { ok: true, normalizedPhone: data.normalizedPhone || '' };
+}
+
+export async function authenticatePhoneServer(
+  phone: string,
+  password: string
+): Promise<{ ok: boolean; normalizedPhone: string; authEmail: string }> {
+  const resp = await fetch(apiUrl('/api/auth/phone/login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone, password }),
+  });
+  const data = (await resp.json().catch(() => ({}))) as {
+    ok?: boolean;
+    normalizedPhone?: string;
+    authEmail?: string;
+    code?: string;
+    error?: string;
+  };
+  if (!resp.ok || !data.ok || !data.authEmail) {
+    throw createPhoneAuthError(
+      data.code || 'auth/invalid-credential',
+      data.error || 'Phone authentication failed.'
+    );
+  }
+  return {
+    ok: true,
+    normalizedPhone: data.normalizedPhone || '',
+    authEmail: data.authEmail,
+  };
+}
+
+export async function recoverPhoneAccountServer(
+  phone: string
+): Promise<{ ok: boolean; normalizedPhone: string; maskedEmail: string }> {
+  const resp = await fetch(apiUrl('/api/auth/phone/recover'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone }),
+  });
+  const data = (await resp.json().catch(() => ({}))) as {
+    ok?: boolean;
+    normalizedPhone?: string;
+    maskedEmail?: string;
+    code?: string;
+    error?: string;
+  };
+  if (!resp.ok || !data.ok) {
+    throw createPhoneAuthError(
+      data.code || 'auth/user-not-found',
+      data.error || 'Phone recovery failed.'
+    );
+  }
+  return {
+    ok: true,
+    normalizedPhone: data.normalizedPhone || '',
+    maskedEmail: data.maskedEmail || '***',
+  };
+}
+
+export interface PendingAuthMeta {
+  uid: string;
+  authMethod: AuthMethod;
+  displayName?: string;
+  phone?: string;
+  referralCode?: string;
+}
+
+const PENDING_AUTH_META_KEY = 'dh_pending_auth_meta_v1';
+
+export function savePendingAuthMeta(meta: PendingAuthMeta): void {
+  try {
+    sessionStorage.setItem(PENDING_AUTH_META_KEY, JSON.stringify(meta));
+  } catch {
+    // Non-fatal
+  }
+}
+
+export function readPendingAuthMeta(uid: string): PendingAuthMeta | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_AUTH_META_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PendingAuthMeta>;
+    if (parsed && parsed.uid === uid && (parsed.authMethod === 'google' || parsed.authMethod === 'email' || parsed.authMethod === 'phone')) {
+      return {
+        uid: parsed.uid,
+        authMethod: parsed.authMethod,
+        displayName: typeof parsed.displayName === 'string' ? parsed.displayName : undefined,
+        phone: typeof parsed.phone === 'string' ? parsed.phone : undefined,
+        referralCode: typeof parsed.referralCode === 'string' ? parsed.referralCode : undefined,
+      };
+    }
+  } catch {
+    // Non-fatal
+  }
+  return null;
+}
+
+export function clearPendingAuthMeta(): void {
+  try {
+    sessionStorage.removeItem(PENDING_AUTH_META_KEY);
+  } catch {
+    // Non-fatal
+  }
 }
 
 export interface BackendAuthSession {

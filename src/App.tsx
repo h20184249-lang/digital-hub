@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, signOut, User } from 'firebase/auth';
+import { getRedirectResult, onAuthStateChanged, signOut, User } from 'firebase/auth';
 import {
   ArrowRight,
   Award,
@@ -32,6 +32,7 @@ import {
   Announcement,
   AppNotification,
   AppRoute,
+  AuthMethod,
   Banner,
   CartItem,
   Category,
@@ -53,7 +54,10 @@ import {
   WithdrawalRequest,
 } from './types/marketplace';
 import {
+  clearPendingAuthMeta,
   ensureUserProfile,
+  readPendingAuthMeta,
+  registerPhoneIndexServer,
   seedMarketplaceToFirestore,
   subscribeAdNetworks,
   subscribeAdvertisements,
@@ -247,64 +251,100 @@ export default function App() {
     capturedReferralRef.current = capturedReferral;
   }, [capturedReferral]);
 
-  const initializeVerifiedUserSession = useCallback(async (current: User) => {
-    const emailVerified = current.emailVerified;
-    const isOwnerEmail =
-      emailVerified && current.email?.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
-    const [session, serverVerified] = await Promise.all([
-      syncBackendAuthSession(),
-      isOwnerEmail ? verifyOwnerAdminServer() : Promise.resolve(false),
-    ]);
-    const adminStatus = isOwnerEmail && (session?.role === 'admin' || serverVerified);
-    setIsAdmin(adminStatus);
-    if (emailVerified) {
-      setAuthModalOpen(false);
-    }
-
-    if (adminStatus) {
-      seedMarketplaceToFirestore(false).catch(() => {});
-    }
-
-    if (emailVerified) {
-      ensureUserProfile(
-        current.uid,
-        (current.email || '').trim().toLowerCase(),
-        current.displayName || current.email?.split('@')[0] || 'Customer',
-        langRef.current,
-        capturedReferralRef.current,
-        current.photoURL || ''
-      )
-        .then(async (prof) => {
-          if (!prof) return;
-          if (prof.sessionRevokedAt) {
-            const tokenRes = await current.getIdTokenResult().catch(() => null);
-            const authTimeMs = tokenRes?.authTime ? Date.parse(tokenRes.authTime) : 0;
-            if (authTimeMs > 0 && authTimeMs < prof.sessionRevokedAt) {
-              await signOut(auth).catch(() => {});
-              showToast(
-                langRef.current === 'bn'
-                  ? 'নিরাপত্তার জন্য এই সেশনটি লগআউট করা হয়েছে।'
-                  : 'Session signed out due to logout-all request.'
-              );
-              return;
-            }
-          }
-          setProfile(prof);
-        })
-        .catch((profileErr) => {
-          console.warn('Non-fatal profile sync error after authentication:', profileErr);
-        });
-
-      if (explicitAuthSignInRef.current) {
-        explicitAuthSignInRef.current = false;
-        setRoute(adminStatus ? 'admin' : 'account');
-      } else if (!adminStatus) {
-        setRoute((prev) => (prev === 'admin' ? 'account' : prev));
+  const initializeVerifiedUserSession = useCallback(
+    async (
+      current: User,
+      overrideMeta?: { authMethod?: AuthMethod; phone?: string; displayName?: string }
+    ) => {
+      const emailVerified = current.emailVerified;
+      const isOwnerEmail =
+        emailVerified && current.email?.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+      const [session, serverVerified] = await Promise.all([
+        syncBackendAuthSession(),
+        isOwnerEmail ? verifyOwnerAdminServer() : Promise.resolve(false),
+      ]);
+      const adminStatus = isOwnerEmail && (session?.role === 'admin' || serverVerified);
+      setIsAdmin(adminStatus);
+      if (emailVerified) {
+        setAuthModalOpen(false);
       }
-    }
-  }, []);
+
+      if (adminStatus) {
+        seedMarketplaceToFirestore(false).catch(() => {});
+      }
+
+      if (emailVerified) {
+        const pendingMeta = readPendingAuthMeta(current.uid);
+        const effectiveAuthMethod = overrideMeta?.authMethod || pendingMeta?.authMethod;
+        const effectivePhone = overrideMeta?.phone || pendingMeta?.phone || '';
+        const effectiveDisplayName =
+          overrideMeta?.displayName ||
+          pendingMeta?.displayName ||
+          current.displayName ||
+          current.email?.split('@')[0] ||
+          'Customer';
+        const effectiveReferral = pendingMeta?.referralCode || capturedReferralRef.current;
+
+        ensureUserProfile(
+          current.uid,
+          (current.email || '').trim().toLowerCase(),
+          effectiveDisplayName,
+          langRef.current,
+          effectiveReferral,
+          current.photoURL || '',
+          effectiveAuthMethod,
+          effectivePhone
+        )
+          .then(async (prof) => {
+            if (effectivePhone) {
+              await registerPhoneIndexServer(effectivePhone).catch((idxErr) => {
+                console.warn('Non-fatal phone login index sync error:', idxErr);
+              });
+            }
+            if (pendingMeta) {
+              clearPendingAuthMeta();
+            }
+            if (!prof) return;
+            if (prof.sessionRevokedAt) {
+              const tokenRes = await current.getIdTokenResult().catch(() => null);
+              const authTimeMs = tokenRes?.authTime ? Date.parse(tokenRes.authTime) : 0;
+              if (authTimeMs > 0 && authTimeMs < prof.sessionRevokedAt) {
+                await signOut(auth).catch(() => {});
+                showToast(
+                  langRef.current === 'bn'
+                    ? 'নিরাপত্তার জন্য এই সেশনটি লগআউট করা হয়েছে।'
+                    : 'Session signed out due to logout-all request.'
+                );
+                return;
+              }
+            }
+            setProfile(prof);
+          })
+          .catch((profileErr) => {
+            console.warn('Non-fatal profile sync error after authentication:', profileErr);
+          });
+
+        if (explicitAuthSignInRef.current) {
+          explicitAuthSignInRef.current = false;
+          setRoute(adminStatus ? 'admin' : 'account');
+        } else if (!adminStatus) {
+          setRoute((prev) => (prev === 'admin' ? 'account' : prev));
+        }
+      }
+    },
+    []
+  );
 
   useEffect(() => {
+    // Handle Google redirect fallback cleanly when browser blocks popups
+    getRedirectResult(auth)
+      .then((res) => {
+        if (res?.user) {
+          explicitAuthSignInRef.current = true;
+        }
+      })
+      .catch(() => {});
+
     const unsub = onAuthStateChanged(auth, async (current) => {
       setUser(current);
       if (!current) {
@@ -326,8 +366,6 @@ export default function App() {
         return;
       }
 
-      // While user is actively on Step 3 ("Create Your Digital Hub Password"),
-      // keep AuthModal open and wait for Step 4 (linkWithCredential) + Step 5 before finalizing login.
       if (pendingPasswordSetupRef.current) {
         return;
       }
@@ -1540,12 +1578,12 @@ export default function App() {
         onPasswordSetupStateChange={(active) => {
           pendingPasswordSetupRef.current = active;
         }}
-        onRegistrationComplete={async (signedInUser, isExistingAccount) => {
+        onRegistrationComplete={async (signedInUser, isExistingAccount, meta) => {
           pendingPasswordSetupRef.current = false;
           explicitAuthSignInRef.current = true;
           setUser(signedInUser);
           setAuthRefreshNonce((n) => n + 1);
-          await initializeVerifiedUserSession(signedInUser);
+          await initializeVerifiedUserSession(signedInUser, meta);
           setAuthModalOpen(false);
           showToast(
             isExistingAccount

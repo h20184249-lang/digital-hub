@@ -18,6 +18,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidPhoneHash(hash) {
+      return hash is string && hash.size() == 64 && hash.matches('^[a-f0-9]{64}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -84,11 +88,12 @@ service cloud.firestore {
 
     function isValidUserProfile(data) {
       return data.keys().hasAll(['uid', 'displayName', 'email', 'referralCode', 'promotionalCredits', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'displayName', 'email', 'role', 'phone', 'photoUrl', 'referralCode', 'referredBy', 'promotionalCredits', 'language', 'status', 'sessionRevokedAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'role', 'authMethod', 'phone', 'photoUrl', 'referralCode', 'referredBy', 'promotionalCredits', 'language', 'status', 'sessionRevokedAt', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && isNonEmptyStr(data.displayName, 1, 120)
         && isNonEmptyStr(data.email, 3, 200)
         && (!('role' in data) || data.role in ['admin', 'user'])
+        && (!('authMethod' in data) || data.authMethod in ['google', 'email', 'phone'])
         && isOptStr(data, 'phone', 30)
         && isOptStr(data, 'photoUrl', 250000)
         && isNonEmptyStr(data.referralCode, 4, 24)
@@ -100,6 +105,16 @@ service cloud.firestore {
         && (!('language' in data) || data.language in ['bn', 'en'])
         && data.status in ['active', 'suspended']
         && isOptNum(data, 'sessionRevokedAt', 0, 9999999999999)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPhoneIndex(data) {
+      return data.keys().hasAll(['phoneHash', 'uid', 'encryptedRef', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['phoneHash', 'uid', 'encryptedRef', 'createdAt', 'updatedAt'])
+        && isValidPhoneHash(data.phoneHash)
+        && isValidId(data.uid)
+        && isNonEmptyStr(data.encryptedRef, 24, 600)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -1440,6 +1455,32 @@ service cloud.firestore {
         && incoming().userId == existing().userId
         && incoming().createdAt == existing().createdAt;
       allow delete: if false;
+    }
+
+    match /phoneIndex/{phoneHash} {
+      // Single-document lookup by 64-char salted SHA-256 hash only; document contains zero plaintext PII
+      allow get: if isValidPhoneHash(phoneHash);
+      allow list: if isAdmin();
+      allow create: if isValidPhoneHash(phoneHash)
+        && isVerified()
+        && isActiveUser(request.auth.uid)
+        && isValidPhoneIndex(incoming())
+        && incoming().phoneHash == phoneHash
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && !exists(/databases/$(database)/documents/phoneIndex/$(phoneHash));
+      allow update: if isValidPhoneHash(phoneHash)
+        && isVerified()
+        && isValidPhoneIndex(incoming())
+        && incoming().phoneHash == existing().phoneHash
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isAdmin() || existing().uid == request.auth.uid);
+      allow delete: if isValidPhoneHash(phoneHash)
+        && isVerified()
+        && (isAdmin() || existing().uid == request.auth.uid);
     }
   }
 }
