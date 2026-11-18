@@ -1,11 +1,57 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, reauthenticateWithPopup } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import firebaseAppletConfig from '../../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
+function pickEnvOrFallback(envValue: string | undefined, fallback: string): string {
+  const trimmed = (envValue || '').trim();
+  if (!trimmed) return fallback;
+  const upper = trimmed.toUpperCase();
+  if (
+    upper.startsWith('YOUR_') ||
+    upper.startsWith('REPLACE_') ||
+    upper.startsWith('MY_') ||
+    upper.includes('CHANGEME') ||
+    upper.includes('<')
+  ) {
+    return fallback;
+  }
+  return trimmed;
+}
 
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const resolvedFirebaseConfig = {
+  ...firebaseAppletConfig,
+  apiKey: pickEnvOrFallback(import.meta.env.VITE_FIREBASE_API_KEY, firebaseAppletConfig.apiKey),
+  authDomain: pickEnvOrFallback(
+    import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    firebaseAppletConfig.authDomain
+  ),
+  projectId: pickEnvOrFallback(
+    import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    firebaseAppletConfig.projectId
+  ),
+  storageBucket: pickEnvOrFallback(
+    import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    firebaseAppletConfig.storageBucket
+  ),
+  messagingSenderId: pickEnvOrFallback(
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    firebaseAppletConfig.messagingSenderId
+  ),
+  appId: pickEnvOrFallback(import.meta.env.VITE_FIREBASE_APP_ID, firebaseAppletConfig.appId),
+  firestoreDatabaseId: pickEnvOrFallback(
+    import.meta.env.VITE_FIREBASE_DATABASE_ID,
+    firebaseAppletConfig.firestoreDatabaseId
+  ),
+  measurementId: pickEnvOrFallback(
+    import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+    firebaseAppletConfig.measurementId || ''
+  ),
+};
+
+const app = initializeApp(resolvedFirebaseConfig);
+
+export const db = getFirestore(app, resolvedFirebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
