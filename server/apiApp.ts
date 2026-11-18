@@ -508,6 +508,7 @@ const AUTHORIZED_24_UNIT_PROVIDERS = new Set(['AFDERS', 'ARWF', 'BICEA', 'AUCTIO
 
 function getConfiguredCorsOrigins(): Set<string> {
   const origins = new Set<string>([
+    'https://digital-hub.h20184249.workers.dev',
     'https://localhost',
     'http://localhost',
     'http://localhost:3000',
