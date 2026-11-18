@@ -154,6 +154,7 @@ export default function App() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [authRefreshNonce, setAuthRefreshNonce] = useState(0);
   const explicitAuthSignInRef = useRef(false);
+  const pendingPasswordSetupRef = useRef(false);
   const langRef = useRef<Language>(lang);
 
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -187,8 +188,9 @@ export default function App() {
   });
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(() => {
     const isRegPath = window.location.pathname === '/register';
+    const isLoginPath = window.location.pathname === '/login';
     const hasRef = Boolean(new URLSearchParams(window.location.search).get('ref'));
-    return isRegPath || hasRef;
+    return isRegPath || isLoginPath || hasRef;
   });
   const [homeSearch, setHomeSearch] = useState('');
   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
@@ -269,7 +271,8 @@ export default function App() {
         (current.email || '').trim().toLowerCase(),
         current.displayName || current.email?.split('@')[0] || 'Customer',
         langRef.current,
-        capturedReferralRef.current
+        capturedReferralRef.current,
+        current.photoURL || ''
       )
         .then(async (prof) => {
           if (!prof) return;
@@ -320,6 +323,12 @@ export default function App() {
         setAdRewardTransactions([]);
         setAnnouncements([]);
         explicitAuthSignInRef.current = false;
+        return;
+      }
+
+      // While user is actively on Step 3 ("Create Your Digital Hub Password"),
+      // keep AuthModal open and wait for Step 4 (linkWithCredential) + Step 5 before finalizing login.
+      if (pendingPasswordSetupRef.current) {
         return;
       }
 
@@ -573,6 +582,10 @@ export default function App() {
         unreadNotifications={unreadNotifications}
         onOpenAuth={() => {
           setAuthInitialMode('login');
+          setAuthModalOpen(true);
+        }}
+        onOpenRegister={() => {
+          setAuthInitialMode('register');
           setAuthModalOpen(true);
         }}
         announcementText={lang === 'bn' ? settings.announcementBn : settings.announcementEn}
@@ -1523,6 +1536,26 @@ export default function App() {
         }}
         onLoginSuccess={() => {
           explicitAuthSignInRef.current = true;
+        }}
+        onPasswordSetupStateChange={(active) => {
+          pendingPasswordSetupRef.current = active;
+        }}
+        onRegistrationComplete={async (signedInUser, isExistingAccount) => {
+          pendingPasswordSetupRef.current = false;
+          explicitAuthSignInRef.current = true;
+          setUser(signedInUser);
+          setAuthRefreshNonce((n) => n + 1);
+          await initializeVerifiedUserSession(signedInUser);
+          setAuthModalOpen(false);
+          showToast(
+            isExistingAccount
+              ? langRef.current === 'bn'
+                ? 'স্বাগতম! আপনার অ্যাকাউন্টে সফলভাবে লগইন হয়েছে।'
+                : 'Welcome back! Signed in successfully.'
+              : langRef.current === 'bn'
+                ? 'অভিনন্দন! আপনার Digital Hub অ্যাকাউন্ট তৈরি ও লগইন সম্পন্ন হয়েছে।'
+                : 'Welcome! Your Digital Hub account is ready and signed in.'
+          );
         }}
         needsVerification={Boolean(user && !user.emailVerified)}
         pendingEmail={user && !user.emailVerified ? user.email || '' : ''}

@@ -33,6 +33,7 @@ interface NavbarProps {
   isAdmin: boolean;
   unreadNotifications: number;
   onOpenAuth: () => void;
+  onOpenRegister?: () => void;
   announcementText?: string;
 }
 
@@ -49,6 +50,7 @@ export function Navbar({
   isAdmin,
   unreadNotifications,
   onOpenAuth,
+  onOpenRegister,
   announcementText,
 }: NavbarProps) {
   const [catMenuOpen, setCatMenuOpen] = useState(false);
@@ -270,13 +272,22 @@ export function Navbar({
                 )}
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={onOpenAuth}
-                className="px-3 sm:px-4 py-2 rounded-xl bg-[#172033] text-white text-xs font-bold hover:bg-[#23314d] transition-colors"
-              >
-                {t(lang, 'signIn')}
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={onOpenAuth}
+                  className="px-3 sm:px-3.5 py-2 rounded-xl bg-[#172033] text-white text-xs font-bold hover:bg-[#23314d] transition-colors"
+                >
+                  {t(lang, 'signIn')}
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenRegister || onOpenAuth}
+                  className="hidden sm:inline-flex px-3.5 py-2 rounded-xl bg-[#FFF3E5] border border-[#FF8500]/30 text-[#FF8500] text-xs font-bold hover:bg-[#FF8500] hover:text-white transition-colors"
+                >
+                  {lang === 'bn' ? 'সাইনআপ' : 'Sign Up'}
+                </button>
+              </div>
             )}
           </div>
         </div>

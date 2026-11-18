@@ -527,12 +527,25 @@ export async function seedMarketplaceToFirestore(forceOverwrite = false): Promis
 
 const inFlightProfileEnsures = new Map<string, Promise<UserProfile | null>>();
 
+export async function hasExistingUserProfile(uid: string): Promise<boolean> {
+  if (!uid || !auth.currentUser || auth.currentUser.uid !== uid || !auth.currentUser.emailVerified) {
+    return false;
+  }
+  try {
+    const snap = await getDoc(doc(db, 'users', uid));
+    return snap.exists();
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureUserProfile(
   uid: string,
   email: string,
   displayName: string,
   language: 'bn' | 'en' = 'bn',
-  referredByCode?: string
+  referredByCode?: string,
+  photoUrl?: string
 ): Promise<UserProfile | null> {
   if (!uid || !auth.currentUser || auth.currentUser.uid !== uid || !auth.currentUser.emailVerified) {
     return null;
@@ -619,6 +632,10 @@ export async function ensureUserProfile(
         normalizedEmail.split('@')[0] ||
         'Customer'
       ).slice(0, 120);
+      const safePhotoUrl =
+        typeof photoUrl === 'string' && photoUrl.trim().startsWith('https://')
+          ? photoUrl.trim().slice(0, 250000)
+          : '';
 
       const newProfile: UserProfile = {
         uid,
@@ -626,6 +643,7 @@ export async function ensureUserProfile(
         email: normalizedEmail,
         role: isOwner ? 'admin' : 'user',
         phone: '',
+        ...(safePhotoUrl ? { photoUrl: safePhotoUrl } : {}),
         referralCode: code,
         ...(cleanReferredBy ? { referredBy: cleanReferredBy } : {}),
         promotionalCredits: 0,

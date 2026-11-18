@@ -608,15 +608,16 @@ export function createApiApp(): express.Express {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
     const cspDirectives = [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://accounts.google.com https://securetoken.googleapis.com https://pagead2.googlesyndication.com https://afders.org https://bicea.org",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://accounts.google.com https://securetoken.googleapis.com https://www.google.com https://www.recaptcha.net https://pagead2.googlesyndication.com https://afders.org https://bicea.org",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' data: https://fonts.gstatic.com",
       "img-src 'self' data: blob: https:",
       "media-src 'self' data: blob: https:",
       "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.google-analytics.com https:",
-      "frame-src 'self' https://accounts.google.com https://*.firebaseapp.com https://bicea.org https://afders.org https://arwf.org https://auctionr.org https://asiafilm.org https:",
+      "frame-src 'self' https://accounts.google.com https://*.firebaseapp.com https://www.google.com https://www.recaptcha.net https://bicea.org https://afders.org https://arwf.org https://auctionr.org https://asiafilm.org https:",
       "object-src 'none'",
       "base-uri 'self'",
     ].join('; ');
