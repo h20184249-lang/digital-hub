@@ -22,7 +22,8 @@
   ],
   "vars": {
     "APP_URL": "https://digital-hub.h20184249.workers.dev",
-    "ALLOWED_CORS_ORIGINS": "https://digital-hub.h20184249.workers.dev"
+    "ALLOWED_CORS_ORIGINS": "https://digital-hub.h20184249.workers.dev",
+    "SUPER_ADMIN_EMAIL": "ftake810@gmail.com"
   },
   "alias": {
     "iconv-lite": "./server/workerShims/iconvLite.ts"

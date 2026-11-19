@@ -7,10 +7,12 @@ import {
   Home,
   LayoutGrid,
   Megaphone,
+  Moon,
   PackageCheck,
   Plus,
   Shield,
   ShoppingCart,
+  Sun,
   Tag,
   User as UserIcon,
   Wallet,
@@ -24,6 +26,10 @@ interface NavbarProps {
   setRoute: (r: AppRoute) => void;
   lang: Language;
   setLang: (l: Language) => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
+  siteName?: string;
+  logoUrl?: string;
   user: AuthUser | null;
   profile: UserProfile | null;
   walletBalanceBdt: number;
@@ -41,6 +47,10 @@ export function Navbar({
   setRoute,
   lang,
   setLang,
+  theme,
+  onToggleTheme,
+  siteName,
+  logoUrl,
   user,
   profile,
   walletBalanceBdt,
@@ -79,23 +89,24 @@ export function Navbar({
   return (
     <>
       {announcementText && (
-        <div className="bg-[#172033] text-white text-[11px] sm:text-xs py-1.5 px-4 text-center font-medium">
+        <div className="bg-[#172033] dark:bg-slate-950 text-white text-[11px] sm:text-xs py-1.5 px-4 text-center font-medium border-b border-slate-800">
           <div className="max-w-7xl mx-auto flex items-center justify-center gap-2 truncate">
-            <span className="inline-block w-2 h-2 rounded-full bg-[#FF8500] shrink-0" />
             <span className="truncate">{announcementText}</span>
           </div>
         </div>
       )}
 
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-[#E6ECFA] shadow-xs">
+      <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-[#E6ECFA] dark:border-slate-800 shadow-xs transition-colors">
         <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
           <button
             type="button"
             onClick={() => go('home')}
             className="text-left focus:outline-none shrink-0"
-            aria-label="DIGITAL HUB Home"
+            aria-label={`${siteName || 'DIGITAL HUB'} Home`}
           >
             <DigitalHubLogo
+              siteName={siteName}
+              logoUrl={logoUrl}
               subtitle={lang === 'bn' ? 'আপনার ডিজিটাল সার্ভিস মার্কেট' : 'Your Complete Digital Services'}
               compact
             />
@@ -106,8 +117,10 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('home')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${
-                route === 'home' ? 'bg-[#FFF3E5] text-[#FF8500]' : 'text-[#172033] hover:bg-[#F3F6FF]'
+              className={`px-3 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-colors ${
+                route === 'home'
+                  ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
+                  : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
               }`}
             >
               {t(lang, 'navHome')}
@@ -117,8 +130,10 @@ export function Navbar({
               <button
                 type="button"
                 onClick={() => setCatMenuOpen((prev) => !prev)}
-                className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 transition-colors ${
-                  isCategoryRoute ? 'bg-[#FFF3E5] text-[#FF8500]' : 'text-[#172033] hover:bg-[#F3F6FF]'
+                className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                  isCategoryRoute
+                    ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
+                    : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
                 }`}
               >
                 <LayoutGrid className="w-4 h-4 text-[#FF8500]" />
@@ -129,7 +144,7 @@ export function Navbar({
               {catMenuOpen && (
                 <div
                   onMouseLeave={() => setCatMenuOpen(false)}
-                  className="absolute left-0 mt-2 w-60 bg-white border border-[#E6ECFA] rounded-2xl shadow-xl p-2 grid grid-cols-1 gap-0.5 z-50"
+                  className="absolute left-0 mt-2 w-60 bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-700 rounded-2xl shadow-xl p-2 grid grid-cols-1 gap-0.5 z-50"
                 >
                   {categoryRoutes.map((item) => (
                     <button
@@ -139,7 +154,7 @@ export function Navbar({
                       className={`text-left px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${
                         route === item.id
                           ? 'bg-[#FF8500] text-white'
-                          : 'text-[#172033] hover:bg-[#FFF3E5] hover:text-[#FF8500]'
+                          : 'text-[#172033] dark:text-slate-200 hover:bg-[#FFF3E5] dark:hover:bg-slate-800 hover:text-[#FF8500]'
                       }`}
                     >
                       {item.label}
@@ -152,8 +167,10 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('offers')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 transition-colors ${
-                route === 'offers' ? 'bg-[#FFF3E5] text-[#FF8500]' : 'text-[#172033] hover:bg-[#F3F6FF]'
+              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                route === 'offers'
+                  ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
+                  : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
               }`}
             >
               <Tag className="w-4 h-4 text-[#FF8500]" />
@@ -163,8 +180,10 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('watch-earn')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 transition-colors ${
-                route === 'watch-earn' ? 'bg-[#FFF3E5] text-[#FF8500]' : 'text-[#172033] hover:bg-[#F3F6FF]'
+              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                route === 'watch-earn'
+                  ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
+                  : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
               }`}
             >
               <Film className="w-4 h-4 text-[#FF8500]" />
@@ -174,8 +193,10 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('ads')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 transition-colors ${
-                route === 'ads' ? 'bg-[#FFF3E5] text-[#FF8500]' : 'text-[#172033] hover:bg-[#F3F6FF]'
+              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                route === 'ads'
+                  ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
+                  : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
               }`}
             >
               <Megaphone className="w-4 h-4 text-[#FF8500]" />
@@ -185,8 +206,10 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('support')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 transition-colors ${
-                route === 'support' ? 'bg-[#FFF3E5] text-[#FF8500]' : 'text-[#172033] hover:bg-[#F3F6FF]'
+              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                route === 'support'
+                  ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
+                  : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
               }`}
             >
               <Headphones className="w-4 h-4 text-[#FF8500]" />
@@ -197,10 +220,10 @@ export function Navbar({
               <button
                 type="button"
                 onClick={() => go('admin')}
-                className={`px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 transition-colors ${
+                className={`px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
                   route === 'admin'
-                    ? 'bg-[#172033] text-white'
-                    : 'bg-[#FFF3E5] text-[#FF8500] hover:bg-[#FF8500] hover:text-white'
+                    ? 'bg-[#172033] dark:bg-[#FF8500] text-white'
+                    : 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500] hover:bg-[#FF8500] hover:text-white'
                 }`}
               >
                 <Shield className="w-4 h-4" />
@@ -209,12 +232,26 @@ export function Navbar({
             )}
           </nav>
 
-          {/* Right Header Controls: Language + Wallet Balance + Cart + Profile */}
-          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          {/* Right Header Controls: Theme + Language + Wallet Balance + Cart + Profile */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={onToggleTheme}
+              className="p-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-200 hover:border-[#FF8500] transition-colors"
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={theme === 'dark' ? (lang === 'bn' ? 'লাইট মোড' : 'Light Mode') : lang === 'bn' ? 'ডার্ক মোড' : 'Dark Mode'}
+            >
+              {theme === 'dark' ? (
+                <Sun className="w-4 h-4 text-[#FF8500]" />
+              ) : (
+                <Moon className="w-4 h-4 text-[#172033]" />
+              )}
+            </button>
+
             <button
               type="button"
               onClick={() => setLang(lang === 'bn' ? 'en' : 'bn')}
-              className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-bold text-[#172033] hover:border-[#FF8500]"
+              className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs font-bold text-[#172033] dark:text-slate-200 hover:border-[#FF8500]"
               title="Switch Language"
             >
               <Globe className="w-3.5 h-3.5 text-[#FF8500]" />
@@ -224,7 +261,7 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('wallet')}
-              className="dh-orange-gradient text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-2xl text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-sm hover:opacity-95 transition-opacity"
+              className="dh-orange-gradient text-white px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-2xl text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-sm hover:opacity-95 transition-opacity whitespace-nowrap"
               title={t(lang, 'navWallet')}
             >
               <Wallet className="w-4 h-4 shrink-0" />
@@ -234,7 +271,7 @@ export function Navbar({
             <button
               type="button"
               onClick={onOpenCart}
-              className="relative p-2 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-[#172033] hover:border-[#FF8500] transition-colors"
+              className="relative p-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-200 hover:border-[#FF8500] transition-colors"
               aria-label={t(lang, 'cart')}
             >
               <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -249,7 +286,7 @@ export function Navbar({
               <button
                 type="button"
                 onClick={() => go('account')}
-                className="relative flex items-center gap-2 p-0.5 sm:pr-2.5 rounded-full bg-[#F3F6FF] border border-[#E6ECFA] hover:border-[#FF8500] transition-colors"
+                className="relative flex items-center gap-2 p-0.5 sm:pr-2.5 rounded-full bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500] transition-colors"
                 title={profile?.displayName || user.phone || user.email || t(lang, 'navAccount')}
               >
                 {profile?.photoUrl || user.photoURL ? (
@@ -259,15 +296,15 @@ export function Navbar({
                     className="w-8 h-8 sm:w-9 sm:h-9 rounded-full object-cover border border-[#FF8500]/40"
                   />
                 ) : (
-                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#172033] text-white flex items-center justify-center text-xs font-bold">
+                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#172033] dark:bg-[#FF8500] text-white flex items-center justify-center text-xs font-bold">
                     {(profile?.displayName || user.displayName || user.phone || user.email || 'U').slice(0, 1).toUpperCase()}
                   </div>
                 )}
-                <span className="hidden xl:inline text-xs font-bold text-[#172033] max-w-[90px] truncate">
+                <span className="hidden xl:inline text-xs font-bold text-[#172033] dark:text-slate-100 max-w-[90px] truncate">
                   {profile?.displayName || t(lang, 'navAccount')}
                 </span>
                 {unreadNotifications > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-[#DC2626] border-2 border-white" />
+                  <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-[#DC2626] border-2 border-white dark:border-slate-900" />
                 )}
               </button>
             ) : (
@@ -275,14 +312,14 @@ export function Navbar({
                 <button
                   type="button"
                   onClick={onOpenAuth}
-                  className="px-3 sm:px-3.5 py-2 rounded-xl bg-[#172033] text-white text-xs font-bold hover:bg-[#23314d] transition-colors"
+                  className="px-3 sm:px-3.5 py-2 rounded-xl bg-[#172033] dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold hover:opacity-90 transition-opacity whitespace-nowrap"
                 >
                   {t(lang, 'signIn')}
                 </button>
                 <button
                   type="button"
                   onClick={onOpenRegister || onOpenAuth}
-                  className="hidden sm:inline-flex px-3.5 py-2 rounded-xl bg-[#FFF3E5] border border-[#FF8500]/30 text-[#FF8500] text-xs font-bold hover:bg-[#FF8500] hover:text-white transition-colors"
+                  className="hidden sm:inline-flex px-3.5 py-2 rounded-xl bg-[#FFF3E5] dark:bg-orange-500/15 border border-[#FF8500]/30 text-[#FF8500] text-xs font-bold hover:bg-[#FF8500] hover:text-white transition-colors whitespace-nowrap"
                 >
                   {lang === 'bn' ? 'সাইনআপ' : 'Sign Up'}
                 </button>
@@ -292,16 +329,16 @@ export function Navbar({
         </div>
       </header>
 
-      {/* Mobile 5-Tab Bottom Navigation matching Reference Screenshot */}
+      {/* Mobile 5-Tab Bottom Navigation */}
       <nav
         aria-label="Mobile Navigation"
-        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-[#E6ECFA] shadow-[0_-6px_24px_rgba(23,32,51,0.08)] px-2 h-16 flex items-center justify-around"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white dark:bg-slate-900 border-t border-[#E6ECFA] dark:border-slate-800 shadow-[0_-6px_24px_rgba(23,32,51,0.08)] px-2 h-16 flex items-center justify-around"
       >
         <button
           type="button"
           onClick={() => go('home')}
           className={`flex flex-col items-center justify-center gap-0.5 min-w-[56px] text-[11px] font-semibold ${
-            route === 'home' ? 'text-[#FF8500]' : 'text-[#777777]'
+            route === 'home' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
           <Home className="w-5 h-5" />
@@ -312,7 +349,7 @@ export function Navbar({
           type="button"
           onClick={() => go('orders')}
           className={`flex flex-col items-center justify-center gap-0.5 min-w-[56px] text-[11px] font-semibold ${
-            route === 'orders' ? 'text-[#FF8500]' : 'text-[#777777]'
+            route === 'orders' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
           <PackageCheck className="w-5 h-5" />
@@ -324,10 +361,14 @@ export function Navbar({
           onClick={() => go('add-money')}
           className="relative -top-3.5 flex flex-col items-center justify-center"
         >
-          <span className="w-12 h-12 rounded-full dh-orange-gradient text-white flex items-center justify-center shadow-lg border-4 border-white">
+          <span className="w-12 h-12 rounded-full dh-orange-gradient text-white flex items-center justify-center shadow-lg border-4 border-white dark:border-slate-900">
             <Plus className="w-6 h-6" />
           </span>
-          <span className={`mt-0.5 text-[10px] font-bold ${route === 'add-money' ? 'text-[#FF8500]' : 'text-[#172033]'}`}>
+          <span
+            className={`mt-0.5 text-[10px] font-bold ${
+              route === 'add-money' ? 'text-[#FF8500]' : 'text-[#172033] dark:text-slate-200'
+            }`}
+          >
             {t(lang, 'navAddMoney')}
           </span>
         </button>
@@ -336,7 +377,7 @@ export function Navbar({
           type="button"
           onClick={() => go('wallet')}
           className={`flex flex-col items-center justify-center gap-0.5 min-w-[56px] text-[11px] font-semibold ${
-            route === 'wallet' ? 'text-[#FF8500]' : 'text-[#777777]'
+            route === 'wallet' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
           <Wallet className="w-5 h-5" />
@@ -347,7 +388,7 @@ export function Navbar({
           type="button"
           onClick={() => (user ? go(isAdmin && route === 'account' ? 'admin' : 'account') : onOpenAuth())}
           className={`flex flex-col items-center justify-center gap-0.5 min-w-[56px] text-[11px] font-semibold relative ${
-            route === 'account' || route === 'admin' ? 'text-[#FF8500]' : 'text-[#777777]'
+            route === 'account' || route === 'admin' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
           <UserIcon className="w-5 h-5" />

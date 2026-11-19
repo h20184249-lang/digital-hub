@@ -1,5 +1,8 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
+  ArrowDownToLine,
+  ArrowUpRight,
   Bell,
   CheckCircle2,
   Clock,
@@ -60,6 +63,7 @@ import {
   compressImageToDataUrl,
   createSupportTicket,
   formatDateShort,
+  getTimeMs,
   markNotificationRead,
   normalizeBangladeshPhoneClient,
   submitAccountDeletionRequestServer,
@@ -130,6 +134,7 @@ export function CustomerDashboard({
 }: CustomerDashboardProps) {
   const [tab, setTab] = useState(initialTab);
   const [copiedRef, setCopiedRef] = useState(false);
+  const [copiedUid, setCopiedUid] = useState(false);
 
   // Support ticket state
   const [subject, setSubject] = useState('');
@@ -189,13 +194,93 @@ export function CustomerDashboard({
       .filter((tx) => tx.type === 'referral' && tx.status === 'Approved')
       .reduce((s, tx) => s + (tx.amountBdt || 0), 0);
     const adRewardsEarned = walletTxs
-      .filter((tx) => tx.type === 'rewarded_ad' && tx.status === 'Approved')
+      .filter(
+        (tx) =>
+          (tx.type === 'rewarded_ad' || tx.type === 'watch_earn_coin_redeem') &&
+          tx.status === 'Approved'
+      )
       .reduce((s, tx) => s + (tx.amountBdt || 0), 0);
+    const promoEarned = walletTxs
+      .filter((tx) => tx.type === 'promo_credit' && tx.status === 'Approved')
+      .reduce((s, tx) => s + (tx.amountBdt || 0), 0);
+    const totalEarnings = cashbackEarned + referralEarned + adRewardsEarned + promoEarned;
     const totalWithdrawn = withdrawals
-      .filter((w) => w.status === 'Approved')
+      .filter((w) => w.status === 'Paid' || w.status === 'Approved')
       .reduce((s, w) => s + (w.amountBdt || 0), 0);
-    return { cashbackEarned, referralEarned, adRewardsEarned, totalWithdrawn };
+    const pendingWithdrawal = withdrawals
+      .filter((w) => w.status === 'Pending' || w.status === 'Processing')
+      .reduce((s, w) => s + (w.amountBdt || 0), 0);
+    return {
+      totalEarnings,
+      cashbackEarned,
+      referralEarned,
+      adRewardsEarned,
+      totalWithdrawn,
+      pendingWithdrawal,
+    };
   }, [walletTxs, withdrawals]);
+
+  const recentActivity = useMemo(() => {
+    type ActivityItem = {
+      id: string;
+      kind: 'wallet' | 'withdrawal' | 'order' | 'alert';
+      title: string;
+      subtitle: string;
+      amountLabel?: string;
+      amountTone?: 'credit' | 'debit' | 'neutral';
+      status: string;
+      ts: number;
+    };
+    const items: ActivityItem[] = [];
+
+    walletTxs.slice(0, 6).forEach((tx) => {
+      const isCredit =
+        typeof tx.signedDeltaBdt === 'number'
+          ? tx.signedDeltaBdt >= 0
+          : !['purchase', 'withdrawal'].includes(tx.type);
+      items.push({
+        id: `tx_${tx.id}`,
+        kind: 'wallet',
+        title: tx.note || tx.type.replace(/_/g, ' '),
+        subtitle: `${String(tx.method || 'wallet').toUpperCase()} · ${tx.transactionId}`,
+        amountLabel: `${isCredit ? '+' : '-'}৳${Math.abs(tx.amountBdt || 0)}`,
+        amountTone: isCredit ? 'credit' : 'debit',
+        status: tx.status,
+        ts: getTimeMs(tx.createdAt),
+      });
+    });
+
+    withdrawals.slice(0, 4).forEach((w) => {
+      items.push({
+        id: `wd_${w.id}`,
+        kind: 'withdrawal',
+        title:
+          lang === 'bn'
+            ? `উইথড্র রিকোয়েস্ট (${w.methodName || w.method.toUpperCase()})`
+            : `Withdrawal (${w.methodName || w.method.toUpperCase()})`,
+        subtitle: `${w.accountNumber}${w.payoutReference ? ` · Ref: ${w.payoutReference}` : ''}`,
+        amountLabel: `৳${w.amountBdt}`,
+        amountTone: w.status === 'Rejected' ? 'credit' : 'debit',
+        status: w.status,
+        ts: getTimeMs(w.createdAt),
+      });
+    });
+
+    orders.slice(0, 4).forEach((o) => {
+      items.push({
+        id: `ord_${o.id}`,
+        kind: 'order',
+        title: lang === 'bn' ? o.productTitleBn || o.productTitleEn || 'অর্ডার' : o.productTitleEn || 'Order',
+        subtitle: `#${o.orderNumber} · ${o.paymentMethod.toUpperCase()}`,
+        amountLabel: `৳${o.totalPriceBdt}`,
+        amountTone: 'neutral',
+        status: o.status,
+        ts: getTimeMs(o.createdAt),
+      });
+    });
+
+    return items.sort((a, b) => b.ts - a.ts).slice(0, 8);
+  }, [walletTxs, withdrawals, orders, lang]);
 
   const incentivizedNetworks = useMemo(
     () =>
@@ -239,6 +324,12 @@ export function CustomerDashboard({
     navigator.clipboard.writeText(referralUrl).catch(() => {});
     setCopiedRef(true);
     setTimeout(() => setCopiedRef(false), 1800);
+  };
+
+  const handleCopyUid = () => {
+    navigator.clipboard.writeText(user.uid).catch(() => {});
+    setCopiedUid(true);
+    setTimeout(() => setCopiedUid(false), 1800);
   };
 
   const handleCopyCode = () => {
@@ -428,37 +519,62 @@ export function CustomerDashboard({
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
       {/* Top Account Banner */}
-      <div className="dh-card rounded-3xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3.5">
+      <div className="dh-card rounded-3xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 dark:bg-slate-900 dark:border-slate-800">
+        <div className="flex items-center gap-3.5 min-w-0">
           {profile?.photoUrl || photoUrl || user.photoURL ? (
             <img
               src={profile?.photoUrl || photoUrl || user.photoURL || ''}
               alt={profile?.displayName || 'Customer'}
-              className="w-14 h-14 rounded-2xl object-cover border-2 border-[#FF8500]"
+              className="w-14 h-14 rounded-2xl object-cover border-2 border-[#FF8500] shrink-0"
             />
           ) : (
-            <div className="w-14 h-14 rounded-2xl dh-orange-gradient text-white flex items-center justify-center text-xl font-extrabold">
+            <div className="w-14 h-14 rounded-2xl dh-orange-gradient text-white flex items-center justify-center text-xl font-extrabold shrink-0">
               {(profile?.displayName || user.displayName || user.phone || user.email || 'U').slice(0, 1).toUpperCase()}
             </div>
           )}
-          <div>
-            <h1 className="text-lg sm:text-xl font-extrabold text-[#172033]">
-              {profile?.displayName || user.displayName || 'DIGITAL HUB Customer'}
-            </h1>
-            <p className="text-xs font-mono-num text-[#777777]">
-              {profile?.phone || user.phone || profile?.email || user.email}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-lg sm:text-xl font-extrabold text-[#172033] dark:text-slate-100 truncate">
+                {profile?.displayName || user.displayName || 'DIGITAL HUB Customer'}
+              </h1>
+              {user.role === 'super_admin' && (
+                <span className="px-2 py-0.5 rounded-md bg-[#172033] dark:bg-[#FF8500] text-white text-[10px] font-extrabold uppercase tracking-wider">
+                  Super Admin
+                </span>
+              )}
+            </div>
+            <p className="text-xs font-mono-num text-[#777777] dark:text-slate-400 truncate">
+              {[profile?.email || user.email, profile?.phone || user.phone].filter(Boolean).join(' · ')}
             </p>
             <div className="flex flex-wrap items-center gap-2 mt-1.5">
-              <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-[#16A34A] text-[11px] font-bold">
-                {(profile?.authMethod || user.authMethod) === 'email'
+              <button
+                type="button"
+                onClick={handleCopyUid}
+                title={lang === 'bn' ? 'ইউজার আইডি কপি করুন' : 'Copy Unique User ID'}
+                className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[#172033] dark:text-slate-200 text-[11px] font-mono-num font-bold inline-flex items-center gap-1 hover:border-[#FF8500] transition-colors"
+              >
+                <span>ID: {user.uid}</span>
+                <Copy className="w-3 h-3 text-[#FF8500]" />
+                {copiedUid && (
+                  <span className="text-[#16A34A] ml-0.5">{lang === 'bn' ? 'কপিড' : 'Copied'}</span>
+                )}
+              </button>
+              <span
+                className={`px-2 py-0.5 rounded-md text-[11px] font-bold ${
+                  profile?.status === 'suspended'
+                    ? 'bg-red-50 dark:bg-red-950/50 text-[#DC2626]'
+                    : 'bg-emerald-50 dark:bg-emerald-950/40 text-[#16A34A]'
+                }`}
+              >
+                {profile?.status === 'suspended'
                   ? lang === 'bn'
-                    ? 'ইমেইল অ্যাকাউন্ট সক্রিয়'
-                    : 'Active Email Account'
+                    ? 'অ্যাকাউন্ট সাসপেন্ডেড'
+                    : 'Suspended'
                   : lang === 'bn'
-                    ? 'মোবাইল অ্যাকাউন্ট সক্রিয়'
-                    : 'Active Mobile Account'}
+                    ? 'সক্রিয় অ্যাকাউন্ট'
+                    : 'Active'}
               </span>
-              <span className="px-2 py-0.5 rounded-md bg-[#FFF3E5] text-[#FF8500] text-[11px] font-mono-num font-bold">
+              <span className="px-2 py-0.5 rounded-md bg-[#FFF3E5] dark:bg-orange-950/40 text-[#FF8500] text-[11px] font-mono-num font-bold">
                 Ref: {refCode}
               </span>
             </div>
@@ -477,18 +593,18 @@ export function CustomerDashboard({
           <button
             type="button"
             onClick={() => onNavigate('wallet')}
-            className="px-4 py-2 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-[#172033] text-xs font-bold flex items-center gap-1.5"
+            className="px-4 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-100 text-xs font-bold flex items-center gap-1.5"
           >
             <Wallet className="w-4 h-4 text-[#FF8500]" />
-            ৳{(wallet?.availableBalanceBdt || 0).toFixed(2)}
+            <span className="font-mono-num">৳{(wallet?.availableBalanceBdt || 0).toFixed(2)}</span>
           </button>
           {isAdmin && (
             <button
               type="button"
               onClick={() => onNavigate('admin')}
-              className="px-4 py-2 rounded-xl bg-[#172033] text-white text-xs font-bold flex items-center gap-1.5"
+              className="px-4 py-2 rounded-xl bg-[#172033] dark:bg-[#FF8500] text-white text-xs font-bold flex items-center gap-1.5"
             >
-              <Shield className="w-4 h-4 text-[#FF8500]" />
+              <Shield className="w-4 h-4 text-[#FF8500] dark:text-white" />
               {t(lang, 'navAdmin')}
             </button>
           )}
@@ -497,7 +613,7 @@ export function CustomerDashboard({
             onClick={() => {
               onLogout().catch(() => {});
             }}
-            className="px-3.5 py-2 rounded-xl bg-red-50 text-[#DC2626] text-xs font-bold flex items-center gap-1.5 hover:bg-red-100"
+            className="px-3.5 py-2 rounded-xl bg-red-50 dark:bg-red-950/40 text-[#DC2626] text-xs font-bold flex items-center gap-1.5 hover:bg-red-100 dark:hover:bg-red-950/70"
           >
             <LogOut className="w-4 h-4" />
             {t(lang, 'signOut')}
@@ -534,7 +650,7 @@ export function CustomerDashboard({
               className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 transition-colors ${
                 active
                   ? 'dh-orange-gradient text-white shadow-xs'
-                  : 'bg-white border border-[#E6ECFA] text-[#172033] hover:border-[#FF8500]'
+                  : 'bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 text-[#172033] dark:text-slate-200 hover:border-[#FF8500]'
               }`}
             >
               <Icon className="w-3.5 h-3.5" />
@@ -545,7 +661,7 @@ export function CustomerDashboard({
       </div>
 
       {feedback && (
-        <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-[#16A34A] text-xs font-bold flex items-center gap-2">
+        <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-[#16A34A] text-xs font-bold flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 shrink-0" />
           <span>{feedback}</span>
         </div>
@@ -553,103 +669,215 @@ export function CustomerDashboard({
 
       {tab === 'overview' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {/* Primary Financial & Account KPI Strip */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             {[
-              { label: lang === 'bn' ? 'মোট অর্ডার' : 'Total Orders', val: orderStats.total, color: 'text-[#172033]' },
-              { label: lang === 'bn' ? 'সম্পন্ন অর্ডার' : 'Completed Orders', val: orderStats.completed, color: 'text-[#16A34A]' },
               {
                 label: t(lang, 'walletBalanceLabel'),
-                val: `৳${(wallet?.availableBalanceBdt || 0).toFixed(0)}`,
+                val: `৳${(wallet?.availableBalanceBdt || 0).toFixed(2)}`,
                 color: 'text-[#FF8500]',
               },
               {
-                label: lang === 'bn' ? 'মোট ক্যাশব্যাক' : 'Cashback Earned',
-                val: `৳${earningStats.cashbackEarned}`,
+                label: lang === 'bn' ? 'মোট আয়' : 'Total Earnings',
+                val: `৳${earningStats.totalEarnings.toFixed(0)}`,
                 color: 'text-[#16A34A]',
               },
               {
-                label: lang === 'bn' ? 'রেফারেল আয়' : 'Referral Income',
-                val: `৳${earningStats.referralEarned}`,
-                color: 'text-[#FF8500]',
-              },
-              {
-                label: lang === 'bn' ? 'অ্যাড রিওয়ার্ড' : 'Ad Rewards',
-                val: `৳${earningStats.adRewardsEarned}`,
-                color: 'text-[#172033]',
-              },
-              {
                 label: lang === 'bn' ? 'মোট উইথড্র' : 'Total Withdrawn',
-                val: `৳${earningStats.totalWithdrawn}`,
-                color: 'text-[#172033]',
+                val: `৳${earningStats.totalWithdrawn.toFixed(0)}`,
+                color: 'text-[#172033] dark:text-slate-100',
               },
               {
-                label: lang === 'bn' ? 'পেন্ডিং অর্ডার' : 'Pending Orders',
-                val: orderStats.pending,
+                label: lang === 'bn' ? 'পেন্ডিং উইথড্র' : 'Pending Withdrawal',
+                val: `৳${earningStats.pendingWithdrawal.toFixed(0)}`,
+                color: 'text-amber-600 dark:text-amber-400',
+              },
+              {
+                label: lang === 'bn' ? 'রেফারেল আয়' : 'Referral Earnings',
+                val: `৳${earningStats.referralEarned.toFixed(0)}`,
                 color: 'text-[#FF8500]',
+              },
+              {
+                label: lang === 'bn' ? 'মোট অর্ডার' : 'Total Orders',
+                val: `${orderStats.total}`,
+                color: 'text-[#172033] dark:text-slate-100',
               },
             ].map((kpi) => (
-              <div key={kpi.label} className="dh-card rounded-2xl p-4">
-                <p className="text-[11px] font-semibold text-[#777777]">{kpi.label}</p>
-                <p className={`text-2xl font-extrabold font-mono-num mt-1 ${kpi.color}`}>{kpi.val}</p>
+              <div
+                key={kpi.label}
+                className="dh-card rounded-2xl p-4 dark:bg-slate-900 dark:border-slate-800"
+              >
+                <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">{kpi.label}</p>
+                <p className={`text-xl sm:text-2xl font-extrabold font-mono-num mt-1 ${kpi.color}`}>
+                  {kpi.val}
+                </p>
               </div>
             ))}
           </div>
 
-          <div className="dh-card rounded-3xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-bold text-[#172033]">
-                {lang === 'bn' ? 'সাম্প্রতিক অর্ডার' : 'Recent Orders'}
-              </h2>
+          {/* Quick Referral Invite & Wallet Actions Bar */}
+          <div className="dh-card rounded-3xl p-4 sm:p-5 dark:bg-slate-900 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <p className="text-xs font-extrabold uppercase tracking-wider text-[#FF8500] flex items-center gap-1.5">
+                <Gift className="w-3.5 h-3.5" />
+                {lang === 'bn' ? 'রেফারেল কোড ও ইনভাইট লিংক' : 'Referral Code & Invite Link'}
+              </p>
+              <p className="text-xs text-[#777777] dark:text-slate-400">
+                {lang === 'bn'
+                  ? `বন্ধুদের ইনভাইট করে প্রতি যোগ্য রেফারেলে ৳${settings.referralBonusBdt} বোনাস পান (${referrals.length} জন রেফার্ড)।`
+                  : `Earn ৳${settings.referralBonusBdt} per qualified referral (${referrals.length} referred so far).`}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => setTab('orders')}
-                className="text-xs font-bold text-[#FF8500] hover:underline"
+                onClick={handleCopyCode}
+                className="px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs font-mono-num font-extrabold text-[#172033] dark:text-slate-100 inline-flex items-center gap-1.5 hover:border-[#FF8500]"
               >
-                {t(lang, 'viewAll')} →
+                <span>{refCode}</span>
+                <Copy className="w-3.5 h-3.5 text-[#FF8500]" />
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyRef}
+                className="px-3.5 py-2 rounded-xl dh-orange-gradient text-white text-xs font-bold inline-flex items-center gap-1.5"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                {copiedRef ? (lang === 'bn' ? 'লিংক কপি হয়েছে!' : 'Link Copied!') : lang === 'bn' ? 'লিংক কপি' : 'Copy Link'}
+              </button>
+              <button
+                type="button"
+                onClick={handleShareRef}
+                className="px-3.5 py-2 rounded-xl bg-[#172033] dark:bg-slate-800 text-white text-xs font-bold inline-flex items-center gap-1.5"
+              >
+                <Share2 className="w-3.5 h-3.5 text-[#FF8500]" />
+                {lang === 'bn' ? 'শেয়ার' : 'Share'}
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('wallet')}
+                className="px-3.5 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-[#16A34A] text-xs font-bold inline-flex items-center gap-1.5"
+              >
+                <ArrowDownToLine className="w-3.5 h-3.5" />
+                {lang === 'bn' ? 'উইথড্র করুন' : 'Withdraw'}
               </button>
             </div>
-            {orders.length === 0 ? (
-              <p className="text-sm text-[#777777] py-6 text-center">
-                {lang === 'bn' ? 'এখনো কোনো অর্ডার নেই।' : 'No orders placed yet.'}
-              </p>
-            ) : (
-              <div className="space-y-2.5">
-                {orders.slice(0, 5).map((ord) => (
-                  <div
-                    key={ord.id}
-                    className="p-3.5 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                  >
-                    <div>
-                      <p className="text-sm font-bold text-[#172033]">
-                        {lang === 'bn' ? ord.productTitleBn || ord.productTitleEn : ord.productTitleEn || ord.productTitleBn}
-                        {ord.selectedPackageName ? (
-                          <span className="ml-1.5 text-xs font-semibold text-[#FF8500]">
-                            ({ord.selectedPackageName})
-                          </span>
-                        ) : null}
-                      </p>
-                      <p className="text-xs text-[#777777] font-mono-num">
-                        #{ord.orderNumber} · {ord.paymentMethod.toUpperCase()} · {formatDateShort(ord.createdAt, lang)}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono-num font-extrabold text-sm text-[#FF8500]">৳{ord.totalPriceBdt}</span>
-                      <span className="px-2.5 py-1 rounded-lg bg-white border border-[#E6ECFA] text-[11px] font-bold text-[#172033]">
-                        {ord.status}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedOrder(ord)}
-                        className="px-2.5 py-1 rounded-lg bg-[#172033] text-white text-[11px] font-bold flex items-center gap-1 hover:bg-[#FF8500] transition-colors"
-                      >
-                        <Eye className="w-3 h-3" />
-                        {lang === 'bn' ? 'বিস্তারিত' : 'Details'}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            {/* Recent Activity Feed */}
+            <div className="dh-card rounded-3xl p-5 dark:bg-slate-900 dark:border-slate-800">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-base font-bold text-[#172033] dark:text-slate-100 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-[#FF8500]" />
+                  {lang === 'bn' ? 'সাম্প্রতিক কার্যক্রম' : 'Recent Activity'}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('wallet')}
+                  className="text-xs font-bold text-[#FF8500] hover:underline inline-flex items-center gap-0.5"
+                >
+                  {lang === 'bn' ? 'ওয়ালেট লেজার' : 'Wallet Ledger'}
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
               </div>
-            )}
+              {recentActivity.length === 0 ? (
+                <p className="text-sm text-[#777777] dark:text-slate-400 py-6 text-center">
+                  {lang === 'bn' ? 'এখনো কোনো কার্যক্রম রেকর্ড হয়নি।' : 'No account activity recorded yet.'}
+                </p>
+              ) : (
+                <div className="divide-y divide-[#E6ECFA] dark:divide-slate-800">
+                  {recentActivity.map((act) => (
+                    <div key={act.id} className="py-2.5 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs sm:text-sm font-bold text-[#172033] dark:text-slate-100 truncate">
+                          {act.title}
+                        </p>
+                        <p className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400 truncate">
+                          {act.subtitle} · {formatDateShort(act.ts, lang)}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        {act.amountLabel && (
+                          <p
+                            className={`text-xs sm:text-sm font-mono-num font-extrabold ${
+                              act.amountTone === 'credit'
+                                ? 'text-[#16A34A]'
+                                : act.amountTone === 'debit'
+                                  ? 'text-[#DC2626]'
+                                  : 'text-[#172033] dark:text-slate-100'
+                            }`}
+                          >
+                            {act.amountLabel}
+                          </p>
+                        )}
+                        <span className="text-[10px] font-bold text-[#777777] dark:text-slate-400">
+                          {act.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Recent Orders */}
+            <div className="dh-card rounded-3xl p-5 dark:bg-slate-900 dark:border-slate-800">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-base font-bold text-[#172033] dark:text-slate-100">
+                  {lang === 'bn' ? 'সাম্প্রতিক অর্ডার' : 'Recent Orders'}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setTab('orders')}
+                  className="text-xs font-bold text-[#FF8500] hover:underline"
+                >
+                  {t(lang, 'viewAll')} →
+                </button>
+              </div>
+              {orders.length === 0 ? (
+                <p className="text-sm text-[#777777] dark:text-slate-400 py-6 text-center">
+                  {lang === 'bn' ? 'এখনো কোনো অর্ডার নেই।' : 'No orders placed yet.'}
+                </p>
+              ) : (
+                <div className="space-y-2.5">
+                  {orders.slice(0, 5).map((ord) => (
+                    <div
+                      key={ord.id}
+                      className="p-3.5 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70 border border-[#E6ECFA] dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-[#172033] dark:text-slate-100 truncate">
+                          {lang === 'bn' ? ord.productTitleBn || ord.productTitleEn : ord.productTitleEn || ord.productTitleBn}
+                          {ord.selectedPackageName ? (
+                            <span className="ml-1.5 text-xs font-semibold text-[#FF8500]">
+                              ({ord.selectedPackageName})
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="text-xs text-[#777777] dark:text-slate-400 font-mono-num">
+                          #{ord.orderNumber} · {ord.paymentMethod.toUpperCase()} · {formatDateShort(ord.createdAt, lang)}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <span className="font-mono-num font-extrabold text-sm text-[#FF8500]">৳{ord.totalPriceBdt}</span>
+                        <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-700 text-[11px] font-bold text-[#172033] dark:text-slate-200">
+                          {ord.status}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedOrder(ord)}
+                          className="px-2.5 py-1 rounded-lg bg-[#172033] dark:bg-[#FF8500] text-white text-[11px] font-bold flex items-center gap-1 hover:bg-[#FF8500] transition-colors"
+                        >
+                          <Eye className="w-3 h-3" />
+                          {lang === 'bn' ? 'বিস্তারিত' : 'Details'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="p-4 rounded-3xl bg-gradient-to-r from-[#172033] to-[#23314d] text-white flex flex-wrap items-center justify-between gap-3">

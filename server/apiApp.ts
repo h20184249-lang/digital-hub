@@ -1,9 +1,6 @@
 import express from 'express';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { getRuntimeEnvVar } from './db.ts';
+import { getAppDatabase, getRuntimeEnvVar } from './db.ts';
 import { createPhoneAuthAndAppRouter, resolveSessionFromRequest } from './phoneAuthRoutes.ts';
 
 function isConfiguredEnvValue(raw: string | undefined): boolean {
@@ -24,67 +21,16 @@ function isConfiguredEnvValue(raw: string | undefined): boolean {
   return true;
 }
 
-// Persistent server-side ad telemetry store (strictly real tracked events, no fabricated earnings)
-interface AdAnalyticsEntry {
+interface AdStatsRow {
+  ad_id: string;
+  ad_format: string;
   impressions: number;
   clicks: number;
-  byPlacement: Record<string, { impressions: number; clicks: number }>;
-  lastEventAt: string;
+  blocked_clicks: number;
+  by_placement_json: string;
+  last_event_at: number;
 }
 
-interface AdAnalyticsState {
-  byAd: Record<string, AdAnalyticsEntry>;
-  byFormat: Record<string, { impressions: number; clicks: number }>;
-  blockedFakeClicks: number;
-}
-
-function resolveDataDir(): string | null {
-  try {
-    if (typeof import.meta.url === 'string' && import.meta.url.startsWith('file:')) {
-      const moduleDir = path.dirname(fileURLToPath(import.meta.url));
-      return path.resolve(moduleDir, '..', '.data');
-    }
-  } catch {
-    // Non-filesystem runtime (Cloudflare Workers)
-  }
-  return null;
-}
-
-const dataDir = resolveDataDir();
-const analyticsFile = dataDir ? path.join(dataDir, 'ad_analytics.json') : '';
-
-function loadAnalytics(): AdAnalyticsState {
-  if (!analyticsFile) return { byAd: {}, byFormat: {}, blockedFakeClicks: 0 };
-  try {
-    if (fs.existsSync(analyticsFile)) {
-      const parsed = JSON.parse(fs.readFileSync(analyticsFile, 'utf-8')) as Partial<AdAnalyticsState>;
-      if (parsed && typeof parsed === 'object' && parsed.byAd) {
-        return {
-          byAd: parsed.byAd,
-          byFormat: parsed.byFormat || {},
-          blockedFakeClicks: Number(parsed.blockedFakeClicks) || 0,
-        };
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return { byAd: {}, byFormat: {}, blockedFakeClicks: 0 };
-}
-
-function saveAnalytics(state: AdAnalyticsState): void {
-  if (!dataDir || !analyticsFile) return;
-  try {
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    fs.writeFileSync(analyticsFile, JSON.stringify(state, null, 2), 'utf-8');
-  } catch {
-    // ignore
-  }
-}
-
-const adAnalyticsState: AdAnalyticsState = loadAnalytics();
 const recentAdEvents = new Map<string, number>();
 const burstWindow = new Map<string, { count: number; resetAt: number }>();
 
@@ -211,7 +157,7 @@ export function createApiApp(): express.Express {
       "font-src 'self' data: https://fonts.gstatic.com",
       "img-src 'self' data: blob: https:",
       "media-src 'self' data: blob: https:",
-      "connect-src 'self' https://firestore.googleapis.com https://*.googleapis.com https:",
+      "connect-src 'self' https:",
       "frame-src 'self' https://bicea.org https://afders.org https://arwf.org https://auctionr.org https://asiafilm.org https:",
       "object-src 'none'",
       "base-uri 'self'",
@@ -288,8 +234,8 @@ export function createApiApp(): express.Express {
   };
 
   app.use('/api/payments', applyApiRateLimit('payments', 40, 60000));
-  app.use('/api/auth', applyApiRateLimit('auth', 40, 60000));
-  app.use('/api/admin', applyApiRateLimit('admin', 100, 60000));
+  app.use('/api/auth', applyApiRateLimit('auth', 60, 60000));
+  app.use('/api/admin', applyApiRateLimit('admin', 180, 60000));
 
   app.get('/api/health', (_req, res) => {
     res.json({
@@ -300,9 +246,9 @@ export function createApiApp(): express.Express {
     });
   });
 
-  // Track real ad impressions and clicks with anti-fake-click & dedup protection
-  app.post('/api/ads/track', (req, res) => {
-    const body = req.body as {
+  // Track real ad impressions and clicks persisted in Cloudflare D1 / SQLite `ad_stats`
+  app.post('/api/ads/track', async (req, res) => {
+    const body = (req.body || {}) as {
       adId?: unknown;
       type?: unknown;
       placement?: unknown;
@@ -326,15 +272,26 @@ export function createApiApp(): express.Express {
     const now = Date.now();
     cleanupRateMaps(now);
 
+    const recordBlockedClick = async () => {
+      try {
+        const db = await getAppDatabase();
+        await db.run(
+          `INSERT INTO ad_stats (ad_id, ad_format, impressions, clicks, blocked_clicks, by_placement_json, last_event_at)
+           VALUES (?, ?, 0, 0, 1, '{}', ?)
+           ON CONFLICT(ad_id) DO UPDATE SET blocked_clicks = blocked_clicks + 1, last_event_at = excluded.last_event_at`,
+          [adId, adFormat, now]
+        );
+      } catch {
+        // non-fatal
+      }
+    };
+
     const actorKey = `${req.ip || 'unknown'}:${sessionId}:${type}`;
     const burst = burstWindow.get(actorKey);
     const maxPerMinute = type === 'click' ? 12 : 45;
     if (burst && now < burst.resetAt) {
       if (burst.count >= maxPerMinute) {
-        if (type === 'click') {
-          adAnalyticsState.blockedFakeClicks += 1;
-          saveAnalytics(adAnalyticsState);
-        }
+        if (type === 'click') await recordBlockedClick();
         res.status(429).json({ ok: false, deduplicated: true, reason: 'Rate limit exceeded' });
         return;
       }
@@ -347,65 +304,86 @@ export function createApiApp(): express.Express {
     const lastTs = recentAdEvents.get(dedupKey);
     const cooldownMs = type === 'click' ? 45000 : 25000;
     if (lastTs && now - lastTs < cooldownMs) {
-      if (type === 'click') {
-        adAnalyticsState.blockedFakeClicks += 1;
-        saveAnalytics(adAnalyticsState);
+      if (type === 'click') await recordBlockedClick();
+      let counts = { impressions: 0, clicks: 0 };
+      try {
+        const db = await getAppDatabase();
+        const existing = await db.first<{ impressions: number; clicks: number }>(
+          'SELECT impressions, clicks FROM ad_stats WHERE ad_id = ?',
+          [adId]
+        );
+        if (existing) {
+          counts = { impressions: Number(existing.impressions || 0), clicks: Number(existing.clicks || 0) };
+        }
+      } catch {
+        // ignore
       }
-      res.json({
-        ok: true,
-        deduplicated: true,
-        adId,
-        type,
-        counts: adAnalyticsState.byAd[adId]
-          ? {
-              impressions: adAnalyticsState.byAd[adId].impressions,
-              clicks: adAnalyticsState.byAd[adId].clicks,
-            }
-          : { impressions: 0, clicks: 0 },
-      });
+      res.json({ ok: true, deduplicated: true, adId, type, counts });
       return;
     }
     recentAdEvents.set(dedupKey, now);
 
-    if (!adAnalyticsState.byAd[adId]) {
-      adAnalyticsState.byAd[adId] = {
-        impressions: 0,
-        clicks: 0,
-        byPlacement: {},
-        lastEventAt: new Date().toISOString(),
-      };
-    }
+    try {
+      const db = await getAppDatabase();
+      const existing = await db.first<AdStatsRow>(
+        'SELECT ad_id, ad_format, impressions, clicks, blocked_clicks, by_placement_json, last_event_at FROM ad_stats WHERE ad_id = ?',
+        [adId]
+      );
+      let byPlacement: Record<string, { impressions: number; clicks: number }> = {};
+      if (existing?.by_placement_json) {
+        try {
+          byPlacement = JSON.parse(existing.by_placement_json) as Record<
+            string,
+            { impressions: number; clicks: number }
+          >;
+        } catch {
+          byPlacement = {};
+        }
+      }
+      if (!byPlacement[placement]) byPlacement[placement] = { impressions: 0, clicks: 0 };
+      let nextImpressions = Number(existing?.impressions || 0);
+      let nextClicks = Number(existing?.clicks || 0);
+      if (type === 'impression') {
+        nextImpressions += 1;
+        byPlacement[placement].impressions += 1;
+      } else {
+        nextClicks += 1;
+        byPlacement[placement].clicks += 1;
+      }
 
-    const entry = adAnalyticsState.byAd[adId];
-    if (!entry.byPlacement[placement]) {
-      entry.byPlacement[placement] = { impressions: 0, clicks: 0 };
-    }
-    if (!adAnalyticsState.byFormat[adFormat]) {
-      adAnalyticsState.byFormat[adFormat] = { impressions: 0, clicks: 0 };
-    }
+      await db.run(
+        `INSERT INTO ad_stats (ad_id, ad_format, impressions, clicks, blocked_clicks, by_placement_json, last_event_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(ad_id) DO UPDATE SET
+           ad_format = excluded.ad_format,
+           impressions = excluded.impressions,
+           clicks = excluded.clicks,
+           by_placement_json = excluded.by_placement_json,
+           last_event_at = excluded.last_event_at`,
+        [
+          adId,
+          adFormat,
+          nextImpressions,
+          nextClicks,
+          Number(existing?.blocked_clicks || 0),
+          JSON.stringify(byPlacement),
+          now,
+        ]
+      );
 
-    if (type === 'impression') {
-      entry.impressions += 1;
-      entry.byPlacement[placement].impressions += 1;
-      adAnalyticsState.byFormat[adFormat].impressions += 1;
-    } else {
-      entry.clicks += 1;
-      entry.byPlacement[placement].clicks += 1;
-      adAnalyticsState.byFormat[adFormat].clicks += 1;
+      res.json({
+        ok: true,
+        deduplicated: false,
+        adId,
+        type,
+        counts: { impressions: nextImpressions, clicks: nextClicks },
+      });
+    } catch {
+      res.json({ ok: true, deduplicated: false, adId, type, counts: { impressions: 0, clicks: 0 } });
     }
-    entry.lastEventAt = new Date().toISOString();
-    saveAnalytics(adAnalyticsState);
-
-    res.json({
-      ok: true,
-      deduplicated: false,
-      adId,
-      type,
-      counts: { impressions: entry.impressions, clicks: entry.clicks },
-    });
   });
 
-  // Server-authorized Ad Analytics (verified via HTTP-only session cookie RBAC)
+  // Server-authorized Ad Analytics (verified via HTTP-only session cookie RBAC, read from D1/SQLite)
   app.get('/api/ads/analytics', async (req, res) => {
     try {
       const resolved = await resolveSessionFromRequest(req);
@@ -413,20 +391,56 @@ export function createApiApp(): express.Express {
         res.status(403).json({ error: 'Administrator authorization required' });
         return;
       }
+      const rows = await resolved.db.all<AdStatsRow>(
+        'SELECT ad_id, ad_format, impressions, clicks, blocked_clicks, by_placement_json, last_event_at FROM ad_stats'
+      );
       let totalImpressions = 0;
       let totalClicks = 0;
-      for (const entry of Object.values(adAnalyticsState.byAd)) {
-        totalImpressions += entry.impressions;
-        totalClicks += entry.clicks;
+      let blockedFakeClicks = 0;
+      const byFormat: Record<string, { impressions: number; clicks: number }> = {};
+      const byAd: Record<
+        string,
+        {
+          impressions: number;
+          clicks: number;
+          byPlacement: Record<string, { impressions: number; clicks: number }>;
+          lastEventAt: string;
+        }
+      > = {};
+
+      for (const r of rows) {
+        const imp = Number(r.impressions || 0);
+        const clk = Number(r.clicks || 0);
+        const blk = Number(r.blocked_clicks || 0);
+        totalImpressions += imp;
+        totalClicks += clk;
+        blockedFakeClicks += blk;
+        const fmt = r.ad_format || 'direct_link';
+        if (!byFormat[fmt]) byFormat[fmt] = { impressions: 0, clicks: 0 };
+        byFormat[fmt].impressions += imp;
+        byFormat[fmt].clicks += clk;
+        let byPlacement: Record<string, { impressions: number; clicks: number }> = {};
+        try {
+          byPlacement = JSON.parse(r.by_placement_json || '{}');
+        } catch {
+          byPlacement = {};
+        }
+        byAd[r.ad_id] = {
+          impressions: imp,
+          clicks: clk,
+          byPlacement,
+          lastEventAt: r.last_event_at ? new Date(r.last_event_at).toISOString() : '',
+        };
       }
+
       const ctr = totalImpressions > 0 ? Number(((totalClicks / totalImpressions) * 100).toFixed(2)) : 0;
       res.json({
         totalImpressions,
         totalClicks,
         ctr,
-        blockedFakeClicks: adAnalyticsState.blockedFakeClicks,
-        byFormat: adAnalyticsState.byFormat,
-        byAd: adAnalyticsState.byAd,
+        blockedFakeClicks,
+        byFormat,
+        byAd,
       });
     } catch {
       res.status(403).json({ error: 'Administrator authorization required' });

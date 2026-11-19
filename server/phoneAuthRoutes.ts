@@ -40,6 +40,9 @@ export interface SessionAuthUser {
   referredBy: string;
   promotionalCredits: number;
   language: 'bn' | 'en';
+  adminNotes: string;
+  lastLoginAt: number;
+  lastLoginIp: string;
   sessionRevokedAt: number;
   createdAt: number;
   updatedAt: number;
@@ -62,9 +65,47 @@ interface UserRow {
   referred_by: string;
   promotional_credits: number;
   language: string;
+  admin_notes?: string | null;
+  last_login_at?: number | null;
+  last_login_ip?: string | null;
   session_revoked_at: number;
   created_at: number;
   updated_at: number;
+}
+
+interface PaymentMethodRow {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+  account_number: string;
+  account_name: string;
+  instructions_bn: string;
+  instructions_en: string;
+  requirements_bn: string;
+  requirements_en: string;
+  min_amount: number;
+  max_amount: number;
+  supports_deposit: number;
+  supports_withdrawal: number;
+  enabled: number;
+  sort_order: number;
+  updated_at: number;
+}
+
+interface EffectiveSiteSettings {
+  maintenanceMode: boolean;
+  registrationEnabled: boolean;
+  emailAuthEnabled: boolean;
+  phoneAuthEnabled: boolean;
+  withdrawalsEnabled: boolean;
+  minWithdrawalBdt: number;
+  referralEnabled: boolean;
+  referralBonusBdt: number;
+  invitedUserRewardBdt: number;
+  referralMaxRewardBdt: number;
+  referralEligibility: string;
+  loginAlertsEnabled: boolean;
 }
 
 interface AttemptRow {
@@ -74,6 +115,8 @@ interface AttemptRow {
   locked_until: number;
 }
 
+const DEFAULT_SUPER_ADMIN_EMAIL = 'ftake810@gmail.com';
+
 function getClientIp(req: express.Request): string {
   const cfIp = req.headers['cf-connecting-ip'];
   if (typeof cfIp === 'string' && cfIp.trim()) return cfIp.trim().slice(0, 64);
@@ -82,6 +125,11 @@ function getClientIp(req: express.Request): string {
     return forwarded.split(',')[0].trim().slice(0, 64);
   }
   return String(req.ip || 'unknown').slice(0, 64);
+}
+
+export function getConfiguredSuperAdminEmail(): string {
+  const fromEnv = normalizeEmailAddress(getRuntimeEnvVar('SUPER_ADMIN_EMAIL'));
+  return fromEnv || DEFAULT_SUPER_ADMIN_EMAIL;
 }
 
 function getConfiguredAdminPhones(): Set<string> {
@@ -106,16 +154,26 @@ function getConfiguredAdminEmails(): Set<string> {
   return set;
 }
 
+function isConfiguredSuperAdmin(
+  phoneE164: string | null | undefined,
+  emailNormalized: string | null | undefined
+): boolean {
+  const cleanEmail = typeof emailNormalized === 'string' ? emailNormalized.trim().toLowerCase() : '';
+  if (cleanEmail && cleanEmail === getConfiguredSuperAdminEmail()) return true;
+  const publicPhone = extractPublicPhone(phoneE164);
+  if (publicPhone && getConfiguredAdminPhones().has(publicPhone)) return true;
+  return false;
+}
+
 function resolveUserRole(
   phoneE164: string | null | undefined,
   emailNormalized: string | null | undefined,
   dbRole: string
 ): 'super_admin' | 'admin' | 'user' {
-  const publicPhone = extractPublicPhone(phoneE164);
-  if (publicPhone && getConfiguredAdminPhones().has(publicPhone)) return 'super_admin';
+  if (isConfiguredSuperAdmin(phoneE164, emailNormalized)) return 'super_admin';
   const cleanEmail = typeof emailNormalized === 'string' ? emailNormalized.trim().toLowerCase() : '';
-  if (cleanEmail && getConfiguredAdminEmails().has(cleanEmail)) return 'super_admin';
-  if (dbRole === 'super_admin' || dbRole === 'admin') return dbRole;
+  if (cleanEmail && getConfiguredAdminEmails().has(cleanEmail)) return 'admin';
+  if (dbRole === 'admin') return 'admin';
   return 'user';
 }
 
@@ -126,13 +184,59 @@ function resolveAuthMethod(row: UserRow): 'phone' | 'email' {
 }
 
 function getUserPrimaryIdentifier(user: { phone: string; email: string; uid: string }): string {
-  return user.phone || user.email || user.uid;
+  return user.email || user.phone || user.uid;
+}
+
+function mapPaymentMethodRow(row: PaymentMethodRow) {
+  return {
+    id: row.id,
+    code: row.code,
+    name: row.name,
+    type:
+      row.type === 'bank_transfer' || row.type === 'custom'
+        ? (row.type as 'bank_transfer' | 'custom')
+        : ('mobile_banking' as const),
+    accountNumber: row.account_number || '',
+    accountName: row.account_name || '',
+    instructionsBn: row.instructions_bn || '',
+    instructionsEn: row.instructions_en || '',
+    requirementsBn: row.requirements_bn || '',
+    requirementsEn: row.requirements_en || '',
+    minAmount: Number(row.min_amount || 50),
+    maxAmount: Number(row.max_amount || 100000),
+    supportsDeposit: row.supports_deposit === 1,
+    supportsWithdrawal: row.supports_withdrawal === 1,
+    enabled: row.enabled === 1,
+    sortOrder: Number(row.sort_order || 0),
+    updatedAt: Number(row.updated_at || 0),
+  };
+}
+
+async function getGlobalSiteSettings(db: AppDatabase): Promise<EffectiveSiteSettings> {
+  const row = await db.first<{ payload_json: string }>(
+    `SELECT payload_json FROM catalog_overrides WHERE collection = 'settings' AND doc_id = 'global' AND deleted = 0 LIMIT 1`
+  );
+  const raw = row ? parseJsonSafe<Record<string, unknown>>(row.payload_json, {}) : {};
+  return {
+    maintenanceMode: Boolean(raw.maintenanceMode ?? false),
+    registrationEnabled: raw.registrationEnabled !== false,
+    emailAuthEnabled: raw.emailAuthEnabled !== false,
+    phoneAuthEnabled: raw.phoneAuthEnabled !== false,
+    withdrawalsEnabled: raw.withdrawalsEnabled !== false,
+    minWithdrawalBdt: Math.max(10, Number(raw.minWithdrawalBdt ?? 50) || 50),
+    referralEnabled: raw.referralEnabled !== false,
+    referralBonusBdt: Math.max(0, Number(raw.referralBonusBdt ?? 50) || 0),
+    invitedUserRewardBdt: Math.max(0, Number(raw.invitedUserRewardBdt ?? 20) || 0),
+    referralMaxRewardBdt: Math.max(0, Number(raw.referralMaxRewardBdt ?? 5000) || 0),
+    referralEligibility: String(raw.referralEligibility || 'first_paid_order'),
+    loginAlertsEnabled: raw.loginAlertsEnabled !== false,
+  };
 }
 
 function toClientAuthUser(row: UserRow) {
   const publicPhone = extractPublicPhone(row.phone_e164);
   const publicEmail = (row.email_normalized || row.email || '').trim().toLowerCase();
-  const effectiveRole = resolveUserRole(publicPhone, row.email_normalized, row.role);
+  const effectiveRole = resolveUserRole(publicPhone, publicEmail, row.role);
   return {
     uid: row.uid,
     phone: publicPhone,
@@ -150,12 +254,12 @@ function toClientAuthUser(row: UserRow) {
 function toClientUserProfile(row: UserRow) {
   const publicPhone = extractPublicPhone(row.phone_e164);
   const publicEmail = (row.email_normalized || row.email || '').trim().toLowerCase();
-  const effectiveRole = resolveUserRole(publicPhone, row.email_normalized, row.role);
+  const effectiveRole = resolveUserRole(publicPhone, publicEmail, row.role);
   return {
     uid: row.uid,
     displayName: row.display_name,
     email: publicEmail,
-    role: effectiveRole !== 'user' ? 'admin' : 'user',
+    role: effectiveRole,
     authMethod: resolveAuthMethod(row),
     phone: publicPhone,
     photoUrl: row.photo_url || '',
@@ -164,6 +268,9 @@ function toClientUserProfile(row: UserRow) {
     promotionalCredits: Number(row.promotional_credits || 0),
     language: row.language === 'en' ? ('en' as const) : ('bn' as const),
     status: row.status === 'suspended' ? ('suspended' as const) : ('active' as const),
+    adminNotes: row.admin_notes || '',
+    lastLoginAt: Number(row.last_login_at || 0),
+    lastLoginIp: row.last_login_ip || '',
     sessionRevokedAt: Number(row.session_revoked_at || 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -300,8 +407,27 @@ export async function resolveSessionFromRequest(
 
   if (!row) return null;
   if (row.session_revoked_flag > 0 || row.session_expires_at <= now) return null;
-  if (row.session_revoked_at > 0 && row.session_created_at < row.session_revoked_at) return null;
-  if (row.status === 'suspended') return null;
+  const publicPhone = extractPublicPhone(row.phone_e164);
+  const publicEmail = (row.email_normalized || row.email || '').trim().toLowerCase();
+  const effectiveRole = resolveUserRole(publicPhone, publicEmail, row.role);
+
+  // Protect Super Admin from ever being suspended and keep DB role synced with env config
+  if (effectiveRole === 'super_admin' && row.status === 'suspended') {
+    await db
+      .run('UPDATE users SET status = ?, role = ?, updated_at = ? WHERE uid = ?', ['active', 'super_admin', now, row.uid])
+      .catch(() => {});
+    row.status = 'active';
+    row.role = 'super_admin';
+  } else if (row.status === 'suspended') {
+    return null;
+  }
+
+  if (effectiveRole !== row.role) {
+    await db
+      .run('UPDATE users SET role = ?, updated_at = ? WHERE uid = ?', [effectiveRole, now, row.uid])
+      .catch(() => {});
+    row.role = effectiveRole;
+  }
 
   if (now - row.session_last_seen_at > 5 * 60 * 1000) {
     await db
@@ -309,9 +435,6 @@ export async function resolveSessionFromRequest(
       .catch(() => {});
   }
 
-  const publicPhone = extractPublicPhone(row.phone_e164);
-  const publicEmail = (row.email_normalized || row.email || '').trim().toLowerCase();
-  const effectiveRole = resolveUserRole(publicPhone, row.email_normalized, row.role);
   return {
     db,
     rawRow: row,
@@ -328,6 +451,9 @@ export async function resolveSessionFromRequest(
       referredBy: row.referred_by || '',
       promotionalCredits: Number(row.promotional_credits || 0),
       language: row.language === 'en' ? 'en' : 'bn',
+      adminNotes: row.admin_notes || '',
+      lastLoginAt: Number(row.last_login_at || 0),
+      lastLoginIp: row.last_login_ip || '',
       sessionRevokedAt: Number(row.session_revoked_at || 0),
       createdAt: Number(row.created_at || 0),
       updatedAt: Number(row.updated_at || 0),
@@ -420,7 +546,14 @@ async function insertAuditLog(
   action: string,
   targetCollection: string,
   targetId: string,
-  summary: string
+  summary: string,
+  details?: {
+    targetUserId?: string;
+    previousValue?: string;
+    newValue?: string;
+    reason?: string;
+    transactionId?: string;
+  }
 ): Promise<void> {
   const now = Date.now();
   const id = generateSecureId('log', 8);
@@ -431,6 +564,11 @@ async function insertAuditLog(
     action,
     targetCollection,
     targetId,
+    targetUserId: details?.targetUserId || '',
+    previousValue: details?.previousValue || '',
+    newValue: details?.newValue || '',
+    reason: details?.reason || '',
+    transactionId: details?.transactionId || '',
     summary,
     createdAt: now,
   };
@@ -549,6 +687,44 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         }
       }
 
+      const siteSettings = await getGlobalSiteSettings(db);
+      const isSuperAdminCandidate = isConfiguredSuperAdmin(phoneE164, emailNormalized);
+
+      if (!isSuperAdminCandidate) {
+        if (siteSettings.maintenanceMode) {
+          res.status(503).json({
+            ok: false,
+            code: 'system/maintenance-mode',
+            error: 'ওয়েবসাইটে বর্তমানে রক্ষণাবেক্ষণ কাজ চলছে। অনুগ্রহ করে কিছুক্ষণ পর চেষ্টা করুন।',
+          });
+          return;
+        }
+        if (!siteSettings.registrationEnabled) {
+          res.status(403).json({
+            ok: false,
+            code: 'auth/registration-disabled',
+            error: 'অ্যাডমিন কর্তৃক নতুন অ্যাকাউন্ট রেজিস্ট্রেশন সাময়িকভাবে বন্ধ রাখা হয়েছে।',
+          });
+          return;
+        }
+        if (authMethod === 'email' && !siteSettings.emailAuthEnabled) {
+          res.status(403).json({
+            ok: false,
+            code: 'auth/method-disabled',
+            error: 'ইমেইল রেজিস্ট্রেশন বর্তমানে বন্ধ আছে। অনুগ্রহ করে মোবাইল নম্বর ব্যবহার করুন।',
+          });
+          return;
+        }
+        if (authMethod === 'phone' && !siteSettings.phoneAuthEnabled) {
+          res.status(403).json({
+            ok: false,
+            code: 'auth/method-disabled',
+            error: 'মোবাইল নম্বর রেজিস্ট্রেশন বর্তমানে বন্ধ আছে। অনুগ্রহ করে ইমেইল ব্যবহার করুন।',
+          });
+          return;
+        }
+      }
+
       if (password.length < 6 || password.length > 128) {
         res.status(400).json({
           ok: false,
@@ -624,17 +800,32 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         myReferralCode = generateReferralCode();
       }
 
-      // Resolve valid referrer if a referral code was provided
+      // Resolve valid referrer if referral system is enabled and code matches another user
       let validReferredBy = '';
       let referrerUid = '';
-      if (incomingRef && incomingRef !== myReferralCode) {
-        const refOwner = await db.first<{ uid: string; referral_code: string }>(
-          'SELECT uid, referral_code FROM users WHERE referral_code = ? LIMIT 1',
+      let suspiciousReferral = false;
+      let suspiciousReason = '';
+      if (siteSettings.referralEnabled && incomingRef && incomingRef !== myReferralCode) {
+        const refOwner = await db.first<{ uid: string; referral_code: string; last_login_ip?: string }>(
+          'SELECT uid, referral_code, last_login_ip FROM users WHERE referral_code = ? LIMIT 1',
           [incomingRef]
         );
-        if (refOwner) {
+        if (refOwner && refOwner.uid !== uid) {
           validReferredBy = refOwner.referral_code;
           referrerUid = refOwner.uid;
+          if (ip && ip !== 'unknown' && ip !== '127.0.0.1' && ip !== '::1' && refOwner.last_login_ip === ip) {
+            suspiciousReferral = true;
+            suspiciousReason = `Same IP address as referrer (${ip})`;
+          } else {
+            const recentSameReferrer = await db.first<{ cnt: number }>(
+              'SELECT COUNT(*) AS cnt FROM referrals WHERE referrer_uid = ? AND created_at > ?',
+              [refOwner.uid, now - 24 * 60 * 60 * 1000]
+            );
+            if (Number(recentSameReferrer?.cnt || 0) >= 5) {
+              suspiciousReferral = true;
+              suspiciousReason = 'High-velocity referrals (>5 in 24h)';
+            }
+          }
         }
       }
 
@@ -649,8 +840,9 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           `INSERT INTO users (
             uid, phone_e164, display_name, email, email_normalized, auth_method, photo_url,
             password_hash, recovery_hash, role, status, referral_code, referred_by,
-            promotional_credits, language, session_revoked_at, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, 'active', ?, ?, 0, ?, 0, ?, ?)`,
+            promotional_credits, language, admin_notes, last_login_at, last_login_ip,
+            session_revoked_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, 'active', ?, ?, 0, ?, '', ?, ?, 0, ?, ?)`,
           [
             uid,
             storedPhoneValue,
@@ -664,6 +856,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
             myReferralCode,
             validReferredBy,
             language,
+            now,
+            ip,
             now,
             now,
           ]
@@ -694,23 +888,28 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const primaryIdentifier =
         authMethod === 'email' ? (emailNormalized || '') : (phoneE164 || '');
 
-      if (referrerUid) {
+      if (referrerUid && siteSettings.referralEnabled) {
         const refId = generateSecureId('ref', 8);
+        const refStatus = suspiciousReferral ? 'flagged' : 'pending';
         const refPayload = {
           id: refId,
           referrerId: referrerUid,
           referredUserId: uid,
           referredEmail: primaryIdentifier,
           referralCode: validReferredBy,
-          rewardAmountBdt: 30,
-          status: 'pending',
+          rewardAmountBdt: siteSettings.referralBonusBdt,
+          invitedRewardBdt: siteSettings.invitedUserRewardBdt,
+          eligibilityRule: siteSettings.referralEligibility,
+          suspiciousFlag: suspiciousReferral,
+          suspiciousReason,
+          status: refStatus,
           createdAt: now,
           updatedAt: now,
         };
         await db
           .run(
             'INSERT OR IGNORE INTO referrals (id, referrer_uid, referred_uid, status, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-            [refId, referrerUid, uid, 'pending', JSON.stringify(refPayload), now]
+            [refId, referrerUid, uid, refStatus, JSON.stringify(refPayload), now]
           )
           .catch(() => {});
       }
@@ -835,6 +1034,27 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         limitKey = `login_phone:${phoneE164}`;
       }
 
+      const siteSettings = await getGlobalSiteSettings(db);
+      const isSuperAdminCandidate = isConfiguredSuperAdmin(phoneE164, emailNormalized);
+      if (!isSuperAdminCandidate) {
+        if (authMethod === 'email' && !siteSettings.emailAuthEnabled) {
+          res.status(403).json({
+            ok: false,
+            code: 'auth/method-disabled',
+            error: 'ইমেইল লগইন বর্তমানে বন্ধ রাখা হয়েছে।',
+          });
+          return;
+        }
+        if (authMethod === 'phone' && !siteSettings.phoneAuthEnabled) {
+          res.status(403).json({
+            ok: false,
+            code: 'auth/method-disabled',
+            error: 'মোবাইল নম্বর লগইন বর্তমানে বন্ধ রাখা হয়েছে।',
+          });
+          return;
+        }
+      }
+
       const accountLimit = await checkAttemptLimit(db, limitKey, 5, 15 * 60 * 1000);
       if (accountLimit.blocked) {
         const mins = Math.max(1, Math.ceil(accountLimit.retryAfterSec / 60));
@@ -889,7 +1109,14 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
 
-      if (userRow.status === 'suspended') {
+      const effectiveRole = resolveUserRole(
+        userRow.phone_e164,
+        userRow.email_normalized || userRow.email,
+        userRow.role
+      );
+
+      // Protect Super Admin from ever being locked out by suspended flag
+      if (userRow.status === 'suspended' && effectiveRole !== 'super_admin') {
         res.status(403).json({
           ok: false,
           code: 'auth/user-disabled',
@@ -898,20 +1125,35 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
 
-      // Sync configured super admin role if needed
-      const effectiveRole = resolveUserRole(userRow.phone_e164, userRow.email_normalized, userRow.role);
-      if (effectiveRole !== userRow.role) {
-        await db.run('UPDATE users SET role = ?, updated_at = ? WHERE uid = ?', [
-          effectiveRole,
-          Date.now(),
-          userRow.uid,
-        ]);
-        userRow.role = effectiveRole;
-      }
+      const now = Date.now();
+      const previousIp = String(userRow.last_login_ip || '');
+      const nextStatus = effectiveRole === 'super_admin' ? 'active' : userRow.status;
+
+      await db.run(
+        'UPDATE users SET role = ?, status = ?, last_login_at = ?, last_login_ip = ?, updated_at = ? WHERE uid = ?',
+        [effectiveRole, nextStatus, now, ip, now, userRow.uid]
+      );
+      userRow.role = effectiveRole;
+      userRow.status = nextStatus;
+      userRow.last_login_at = now;
+      userRow.last_login_ip = ip;
 
       await clearAttemptLimit(db, limitKey);
       await ensureWalletAccount(db, userRow.uid);
       await createSessionForUser(db, userRow.uid, req, res);
+
+      // Login security alert notification when logging in from a new IP or if alerts enabled
+      if (siteSettings.loginAlertsEnabled && previousIp && previousIp !== ip) {
+        await insertNotification(
+          db,
+          userRow.uid,
+          'নতুন লগইন নিরাপত্তা সতর্কতা',
+          'New Login Security Alert',
+          `আপনার অ্যাকাউন্টে নতুন আইপি (${ip}) থেকে সফলভাবে লগইন হয়েছে। এটি আপনি না হলে দ্রুত পাসওয়ার্ড পরিবর্তন করুন।`,
+          `New sign-in detected from IP ${ip}. If this wasn't you, change your password immediately.`,
+          'system'
+        ).catch(() => {});
+      }
 
       res.json({
         ok: true,
@@ -946,7 +1188,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         phone: user.phone,
         email: user.email,
         authMethod: user.authMethod,
-        role: user.role !== 'user' ? 'admin' : 'user',
+        role: user.role,
         adminRole: user.role,
         status: user.status,
         user: toClientAuthUser(rawRow),
@@ -1796,24 +2038,34 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const { db, user } = resolved;
       const body = (req.body || {}) as {
         amountBdt?: number;
-        method?: 'bkash' | 'nagad' | 'rocket';
+        method?: string;
         receiverNumber?: string;
         senderNumber?: string;
         transactionId?: string;
         receiptDataUrl?: string;
       };
       const amountBdt = Number(body.amountBdt || 0);
-      const method =
-        body.method === 'nagad' || body.method === 'rocket' ? body.method : 'bkash';
-      const senderNumber = String(body.senderNumber || '').trim().slice(0, 30);
+      const rawMethod = String(body.method || 'bkash').trim().toLowerCase().slice(0, 40);
+      const pmRow = await db.first<PaymentMethodRow>(
+        'SELECT * FROM payment_methods WHERE code = ? AND enabled = 1 AND supports_deposit = 1 LIMIT 1',
+        [rawMethod]
+      );
+      const method = pmRow
+        ? pmRow.code
+        : rawMethod === 'nagad' || rawMethod === 'rocket'
+          ? rawMethod
+          : 'bkash';
+      const senderNumber = String(body.senderNumber || '').trim().slice(0, 60);
       const transactionId = String(body.transactionId || '').trim().slice(0, 80);
       const txKey = normalizeTxIdKey(transactionId);
 
-      if (!Number.isFinite(amountBdt) || amountBdt < 10 || amountBdt > 500000) {
-        res.status(400).json({ ok: false, error: 'সঠিক টাকার পরিমাণ লিখুন (সর্বনিম্ন ৳১০)।' });
+      const minDep = Math.max(10, Number(pmRow?.min_amount ?? 10) || 10);
+      const maxDep = Math.max(minDep, Number(pmRow?.max_amount ?? 500000) || 500000);
+      if (!Number.isFinite(amountBdt) || amountBdt < minDep || amountBdt > maxDep) {
+        res.status(400).json({ ok: false, error: `সঠিক টাকার পরিমাণ লিখুন (৳${minDep} – ৳${maxDep})।` });
         return;
       }
-      if (senderNumber.length < 8 || txKey.length < 4) {
+      if (senderNumber.length < 4 || txKey.length < 4) {
         res.status(400).json({ ok: false, error: 'সঠিক প্রেরক নম্বর ও ট্রানজেকশন আইডি দিন।' });
         return;
       }
@@ -1901,29 +2153,94 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       const { db, user } = resolved;
-      const body = (req.body || {}) as {
-        amountBdt?: number;
-        method?: 'bkash' | 'nagad' | 'rocket';
-        accountNumber?: string;
-      };
-      const amountBdt = Number(body.amountBdt || 0);
-      const method =
-        body.method === 'nagad' || body.method === 'rocket' ? body.method : 'bkash';
-      const accountNumber = String(body.accountNumber || '').trim().slice(0, 30);
-
-      if (!Number.isFinite(amountBdt) || amountBdt < 50 || amountBdt > 100000) {
-        res.status(400).json({ ok: false, error: 'সর্বনিম্ন ৳৫০ থেকে উত্তোলন অনুরোধ করতে পারবেন।' });
+      const siteSettings = await getGlobalSiteSettings(db);
+      if (siteSettings.maintenanceMode && user.role === 'user') {
+        res.status(503).json({ ok: false, error: 'ওয়েবসাইট বর্তমানে মেইনটেন্যান্স মোডে আছে।' });
         return;
       }
-      if (accountNumber.length < 8) {
-        res.status(400).json({ ok: false, error: 'সঠিক বিকাশ/নগদ/রকেট নম্বর দিন।' });
+      if (!siteSettings.withdrawalsEnabled) {
+        res.status(403).json({ ok: false, error: 'উত্তোলন সুবিধা বর্তমানে সাময়িকভাবে বন্ধ আছে।' });
+        return;
+      }
+
+      const body = (req.body || {}) as {
+        amountBdt?: number;
+        method?: string;
+        accountNumber?: string;
+        accountHolderName?: string;
+      };
+      const amountBdt = Math.round(Number(body.amountBdt || 0) * 100) / 100;
+      const methodCode = String(body.method || 'bkash')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '')
+        .slice(0, 40);
+      const accountNumber = String(body.accountNumber || '').trim().slice(0, 120);
+      const accountHolderName = String(body.accountHolderName || '').trim().slice(0, 120);
+
+      const pmRow = await db.first<PaymentMethodRow>(
+        'SELECT * FROM payment_methods WHERE code = ? AND enabled = 1 AND supports_withdrawal = 1 LIMIT 1',
+        [methodCode]
+      );
+      if (!pmRow) {
+        res.status(400).json({
+          ok: false,
+          error: 'নির্বাচিত পেমেন্ট মাধ্যমটি বর্তমানে উত্তোলনের জন্য সক্রিয় নেই।',
+        });
+        return;
+      }
+
+      const minAllowed = Math.max(siteSettings.minWithdrawalBdt, Number(pmRow.min_amount || 0));
+      const maxAllowed = Math.max(minAllowed, Number(pmRow.max_amount || 250000));
+      if (!Number.isFinite(amountBdt) || amountBdt < minAllowed || amountBdt > maxAllowed) {
+        res.status(400).json({
+          ok: false,
+          error: `${pmRow.name}-এর মাধ্যমে সর্বনিম্ন ৳${minAllowed} থেকে সর্বোচ্চ ৳${maxAllowed} উত্তোলন করতে পারবেন।`,
+        });
+        return;
+      }
+      if (accountNumber.length < 6) {
+        res.status(400).json({
+          ok: false,
+          error: `${pmRow.name}-এর জন্য সঠিক অ্যাকাউন্ট / মোবাইল নম্বর দিন।`,
+        });
         return;
       }
 
       const now = Date.now();
+
+      // Anti-duplicate request guard (prevent double-clicks / duplicate pending spam)
+      const recentPending = await db.all<{ payload_json: string; created_at: number }>(
+        `SELECT payload_json, created_at FROM withdrawals WHERE user_id = ? AND status = 'Pending' ORDER BY created_at DESC LIMIT 10`,
+        [user.uid]
+      );
+      if (recentPending.length >= 3) {
+        res.status(429).json({
+          ok: false,
+          error: 'আপনার ইতিমধ্যে ৩টি উত্তোলন অনুরোধ অপেক্ষমাণ আছে। অনুগ্রহ করে প্রসেস হওয়ার পর আবার চেষ্টা করুন।',
+        });
+        return;
+      }
+      for (const rp of recentPending) {
+        const parsed = parseJsonSafe<Record<string, unknown>>(rp.payload_json, {});
+        if (
+          now - Number(rp.created_at || 0) < 30_000 &&
+          Number(parsed.amountBdt) === amountBdt &&
+          String(parsed.method || '') === methodCode &&
+          String(parsed.accountNumber || '') === accountNumber
+        ) {
+          res.status(409).json({
+            ok: false,
+            error: 'একই উত্তোলন অনুরোধ মাত্র জমা হয়েছে। ডুপ্লিকেট অনুরোধ রোধ করা হয়েছে।',
+          });
+          return;
+        }
+      }
+
       const id = generateSecureId('wdr', 8);
       const txId = generateSecureId('wtx', 8);
 
+      // Atomic deduction guarantees no negative balance and no race-condition double spend
       const deduct = await db.run(
         `UPDATE wallet_accounts
          SET available_balance_bdt = available_balance_bdt - ?,
@@ -1939,12 +2256,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       const wdrObj = {
         id,
+        walletTxId: txId,
         userId: user.uid,
         userEmail: getUserPrimaryIdentifier(user),
         userName: user.displayName,
         amountBdt,
-        method,
+        method: methodCode,
+        methodName: pmRow.name,
         accountNumber,
+        accountHolderName,
         status: 'Pending',
         createdAt: now,
         updatedAt: now,
@@ -1952,12 +2272,14 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const wtxObj = {
         id: txId,
         userId: user.uid,
+        userEmail: getUserPrimaryIdentifier(user),
         type: 'withdrawal',
         amountBdt,
-        method,
+        method: methodCode,
         senderNumber: accountNumber,
+        transactionId: id,
         status: 'Verification Pending',
-        note: `Withdrawal request to ${method.toUpperCase()} (${accountNumber})`,
+        note: `Withdrawal request via ${pmRow.name} (${accountNumber})`,
         createdAt: now,
         updatedAt: now,
       };
@@ -1968,10 +2290,20 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       );
       await db.run(
         'INSERT INTO wallet_transactions (id, user_id, type, amount_bdt, status, transaction_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [txId, user.uid, 'withdrawal', amountBdt, 'Verification Pending', '', JSON.stringify(wtxObj), now, now]
+        [txId, user.uid, 'withdrawal', amountBdt, 'Verification Pending', id, JSON.stringify(wtxObj), now, now]
       );
 
-      res.status(201).json({ ok: true, id });
+      await insertNotification(
+        db,
+        user.uid,
+        'উত্তোলন অনুরোধ জমা হয়েছে',
+        'Withdrawal Request Submitted',
+        `${pmRow.name} (${accountNumber})-এ ৳${amountBdt} উত্তোলনের অনুরোধ জমা হয়েছে।`,
+        `Your ৳${amountBdt} withdrawal request via ${pmRow.name} (${accountNumber}) is pending review.`,
+        'wallet'
+      );
+
+      res.status(201).json({ ok: true, id, walletTxId: txId, status: 'Pending' });
     } catch (err) {
       handleRouteError(res, err, 'উত্তোলন অনুরোধ জমা দেওয়া যায়নি।');
     }
@@ -2125,6 +2457,11 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       const { db, user } = resolved;
+      const siteSettings = await getGlobalSiteSettings(db);
+      if (!siteSettings.referralEnabled) {
+        res.json({ ok: true, registered: false, reason: 'Referral program is disabled.' });
+        return;
+      }
       const body = (req.body || {}) as { referralCode?: string };
       const code = String(body.referralCode || '')
         .trim()
@@ -2143,15 +2480,20 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         res.json({ ok: true, registered: false });
         return;
       }
-      const owner = await db.first<{ uid: string; referral_code: string }>(
-        'SELECT uid, referral_code FROM users WHERE referral_code = ? LIMIT 1',
+      const owner = await db.first<{ uid: string; referral_code: string; last_login_ip?: string }>(
+        'SELECT uid, referral_code, last_login_ip FROM users WHERE referral_code = ? LIMIT 1',
         [code]
       );
-      if (!owner) {
+      if (!owner || owner.uid === user.uid) {
         res.json({ ok: true, registered: false });
         return;
       }
       const now = Date.now();
+      const ip = getClientIp(req);
+      const suspiciousFlag = Boolean(
+        ip && ip !== 'unknown' && ip !== '127.0.0.1' && ip !== '::1' && owner.last_login_ip === ip
+      );
+      const status = suspiciousFlag ? 'flagged' : 'pending';
       const refId = generateSecureId('ref', 8);
       const payload = {
         id: refId,
@@ -2159,16 +2501,25 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         referredUserId: user.uid,
         referredEmail: getUserPrimaryIdentifier(user),
         referralCode: owner.referral_code,
-        rewardAmountBdt: 30,
-        status: 'pending',
+        rewardAmountBdt: siteSettings.referralBonusBdt,
+        invitedRewardBdt: siteSettings.invitedUserRewardBdt,
+        eligibilityRule: siteSettings.referralEligibility,
+        suspiciousFlag,
+        suspiciousReason: suspiciousFlag ? `Matching IP (${ip})` : '',
+        status,
         createdAt: now,
         updatedAt: now,
       };
       await db.run(
         'INSERT OR IGNORE INTO referrals (id, referrer_uid, referred_uid, status, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [refId, owner.uid, user.uid, 'pending', JSON.stringify(payload), now]
+        [refId, owner.uid, user.uid, status, JSON.stringify(payload), now]
       );
-      res.json({ ok: true, registered: true, referralId: refId, status: 'pending' });
+      await db.run('UPDATE users SET referred_by = ?, updated_at = ? WHERE uid = ? AND referred_by = ""', [
+        owner.referral_code,
+        now,
+        user.uid,
+      ]);
+      res.json({ ok: true, registered: true, referralId: refId, status });
     } catch (err) {
       handleRouteError(res, err, 'Referral registration failed.');
     }
@@ -2416,10 +2767,22 @@ export function createPhoneAuthAndAppRouter(): express.Router {
   // =========================================================================
   // 9. PUBLIC CATALOG OVERRIDES & APPROVED REVIEWS
   // =========================================================================
+  router.get('/payment-methods', async (_req, res) => {
+    try {
+      const db = await getAppDatabase();
+      const rows = await db.all<PaymentMethodRow>(
+        'SELECT * FROM payment_methods WHERE enabled = 1 ORDER BY sort_order ASC, name ASC'
+      );
+      res.json({ ok: true, paymentMethods: rows.map(mapPaymentMethodRow) });
+    } catch {
+      res.json({ ok: true, paymentMethods: [] });
+    }
+  });
+
   router.get('/catalog/overrides', async (_req, res) => {
     try {
       const db = await getAppDatabase();
-      const [overrideRows, reviewRows, announcementRows] = await Promise.all([
+      const [overrideRows, reviewRows, announcementRows, pmRows] = await Promise.all([
         db.all<{ collection: string; doc_id: string; deleted: number; payload_json: string }>(
           'SELECT collection, doc_id, deleted, payload_json FROM catalog_overrides'
         ),
@@ -2428,6 +2791,9 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         ),
         db.all<{ payload_json: string }>(
           'SELECT payload_json FROM announcements WHERE active = 1 ORDER BY created_at DESC LIMIT 30'
+        ),
+        db.all<PaymentMethodRow>(
+          'SELECT * FROM payment_methods WHERE enabled = 1 ORDER BY sort_order ASC, name ASC'
         ),
       ]);
 
@@ -2446,9 +2812,10 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         overrides,
         reviews: reviewRows.map((r) => parseJsonSafe(r.payload_json, {})),
         announcements: announcementRows.map((r) => parseJsonSafe(r.payload_json, {})),
+        paymentMethods: pmRows.map(mapPaymentMethodRow),
       });
     } catch {
-      res.json({ ok: true, overrides: {}, reviews: [], announcements: [] });
+      res.json({ ok: true, overrides: {}, reviews: [], announcements: [], paymentMethods: [] });
     }
   });
 
@@ -2481,6 +2848,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         phone: resolved.user.phone,
         email: resolved.user.email,
         role: resolved.user.role,
+        superAdminEmail: getConfiguredSuperAdminEmail(),
       });
     } catch {
       res.status(403).json({ ok: false, isAdmin: false });
@@ -2508,8 +2876,10 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         viewingSessionRows,
         adRewardTxRows,
         auditLogRows,
+        paymentMethodRows,
+        deletionRequestRows,
       ] = await Promise.all([
-        db.all<UserRow>('SELECT * FROM users ORDER BY created_at DESC LIMIT 500'),
+        db.all<UserRow>('SELECT * FROM users ORDER BY created_at DESC LIMIT 1000'),
         db.all<{
           uid: string;
           available_balance_bdt: number;
@@ -2518,8 +2888,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           total_spent_bdt: number;
           last_tx_id: string;
           updated_at: number;
-        }>('SELECT * FROM wallet_accounts LIMIT 500'),
-        db.all<{ payload_json: string }>('SELECT payload_json FROM wallet_transactions ORDER BY created_at DESC LIMIT 500'),
+        }>('SELECT * FROM wallet_accounts LIMIT 1000'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM wallet_transactions ORDER BY created_at DESC LIMIT 1000'),
         db.all<{ payload_json: string }>('SELECT payload_json FROM orders ORDER BY created_at DESC LIMIT 500'),
         db.all<{ payload_json: string }>('SELECT payload_json FROM payments ORDER BY created_at DESC LIMIT 500'),
         db.all<{ payload_json: string }>('SELECT payload_json FROM referrals ORDER BY created_at DESC LIMIT 500'),
@@ -2530,11 +2900,14 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         db.all<{ payload_json: string }>('SELECT payload_json FROM announcements ORDER BY created_at DESC LIMIT 200'),
         db.all<{ payload_json: string }>('SELECT payload_json FROM ad_viewing_sessions ORDER BY created_at DESC LIMIT 300'),
         db.all<{ payload_json: string }>('SELECT payload_json FROM ad_reward_transactions ORDER BY created_at DESC LIMIT 300'),
-        db.all<{ payload_json: string }>('SELECT payload_json FROM audit_logs ORDER BY created_at DESC LIMIT 200'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM audit_logs ORDER BY created_at DESC LIMIT 300'),
+        db.all<PaymentMethodRow>('SELECT * FROM payment_methods ORDER BY sort_order ASC, name ASC'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM deletion_requests ORDER BY created_at DESC LIMIT 200'),
       ]);
 
       res.json({
         ok: true,
+        superAdminEmail: getConfiguredSuperAdminEmail(),
         users: userRows.map(toClientUserProfile),
         wallets: walletRows.map((w) => ({
           uid: w.uid,
@@ -2557,6 +2930,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         viewingSessions: viewingSessionRows.map((r) => parseJsonSafe(r.payload_json, {})),
         adRewardTransactions: adRewardTxRows.map((r) => parseJsonSafe(r.payload_json, {})),
         auditLogs: auditLogRows.map((r) => parseJsonSafe(r.payload_json, {})),
+        paymentMethods: paymentMethodRows.map(mapPaymentMethodRow),
+        deletionRequests: deletionRequestRows.map((r) => parseJsonSafe(r.payload_json, {})),
       });
     } catch (err) {
       handleRouteError(res, err, 'অ্যাডমিন ডেটা লোড করা যায়নি।');
@@ -2933,30 +3308,49 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         note?: string;
       };
       const targetUid = String(body.targetUid || body.uid || '').trim();
+      const reason = String(body.reason || body.note || '').trim().slice(0, 300);
       if (!targetUid) {
         res.status(400).json({ ok: false, error: 'Target user ID required.' });
         return;
       }
+      if (reason.length < 3) {
+        res.status(400).json({
+          ok: false,
+          error: 'ব্যালেন্স পরিবর্তনের জন্য সুস্পষ্ট কারণ (কমপক্ষে ৩ অক্ষর) লেখা বাধ্যতামূলক।',
+        });
+        return;
+      }
+      const targetUser = await db.first<UserRow>('SELECT * FROM users WHERE uid = ? LIMIT 1', [targetUid]);
+      if (!targetUser) {
+        res.status(404).json({ ok: false, error: 'Target user not found.' });
+        return;
+      }
+
       const wallet = await ensureWalletAccount(db, targetUid);
-      let nextBal = wallet.availableBalanceBdt;
+      const previousBal = wallet.availableBalanceBdt;
+      let nextBal = previousBal;
       let delta = 0;
       const promoDelta = Number(body.promoDeltaBdt || 0);
       if (body.mode === 'add' || body.mode === 'deduct' || body.mode === 'set') {
-        const rawAmt = Math.max(0, Math.round(Number(body.amountBdt || 0)));
-        if (body.mode === 'add') nextBal = wallet.availableBalanceBdt + rawAmt;
+        const rawAmt = Math.max(0, Math.round(Number(body.amountBdt || 0) * 100) / 100);
+        if (body.mode === 'add') nextBal = previousBal + rawAmt;
         else if (body.mode === 'deduct') {
-          if (wallet.availableBalanceBdt < rawAmt) {
-            res.status(400).json({ ok: false, error: `Cannot deduct ৳${rawAmt} from ৳${wallet.availableBalanceBdt}.` });
+          if (previousBal < rawAmt) {
+            res.status(400).json({ ok: false, error: `Cannot deduct ৳${rawAmt} from ৳${previousBal}.` });
             return;
           }
-          nextBal = wallet.availableBalanceBdt - rawAmt;
+          nextBal = previousBal - rawAmt;
         } else {
           nextBal = rawAmt;
         }
-        delta = nextBal - wallet.availableBalanceBdt;
+        delta = Math.round((nextBal - previousBal) * 100) / 100;
       } else {
-        delta = Number(body.amountDeltaBdt || 0);
-        nextBal = Math.max(0, wallet.availableBalanceBdt + delta);
+        delta = Math.round(Number(body.amountDeltaBdt || 0) * 100) / 100;
+        if (previousBal + delta < 0) {
+          res.status(400).json({ ok: false, error: `Balance cannot become negative (current ৳${previousBal}).` });
+          return;
+        }
+        nextBal = Math.max(0, previousBal + delta);
       }
       const nextPromo = Math.max(0, wallet.promotionalCreditsBdt + promoDelta);
       const now = Date.now();
@@ -2968,16 +3362,18 @@ export function createPhoneAuthAndAppRouter(): express.Router {
          WHERE uid = ?`,
         [nextBal, nextPromo, txId, now, targetUid]
       );
-      const noteText = String(body.note || body.reason || 'Admin wallet adjustment').slice(0, 300);
+
       const wtx = {
         id: txId,
         userId: targetUid,
+        userEmail: targetUser.email_normalized || extractPublicPhone(targetUser.phone_e164) || targetUid,
         type: promoDelta > 0 && delta === 0 ? 'promo_credit' : 'admin_adjustment',
         method: 'system',
         transactionId: txId,
-        amountBdt: Math.max(1, Math.abs(delta || promoDelta)),
+        amountBdt: Math.abs(delta || promoDelta),
+        signedDeltaBdt: delta,
         status: 'Approved',
-        note: noteText,
+        note: reason,
         createdAt: now,
         updatedAt: now,
       };
@@ -2985,8 +3381,34 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         'INSERT INTO wallet_transactions (id, user_id, type, amount_bdt, status, transaction_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [txId, targetUid, wtx.type, wtx.amountBdt, 'Approved', txId, JSON.stringify(wtx), now, now]
       );
-      await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'WALLET_ADJUSTED', 'walletAccounts', targetUid, `Delta ৳${delta} / promo ৳${promoDelta}`);
-      res.json({ ok: true, nextBalance: nextBal });
+
+      await insertNotification(
+        db,
+        targetUid,
+        delta >= 0 ? 'ওয়ালেট ব্যালেন্স যুক্ত হয়েছে' : 'ওয়ালেট ব্যালেন্স সমন্বয় হয়েছে',
+        delta >= 0 ? 'Wallet Balance Credited' : 'Wallet Balance Adjusted',
+        `অ্যাডমিন কর্তৃক আপনার ব্যালেন্স ৳${previousBal} থেকে ৳${nextBal} করা হয়েছে। কারণ: ${reason}`,
+        `Your wallet balance was updated from ৳${previousBal} to ৳${nextBal}. Reason: ${reason}`,
+        'wallet'
+      );
+
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        'WALLET_ADJUSTED',
+        'walletAccounts',
+        targetUid,
+        `Adjusted balance ${delta >= 0 ? '+' : ''}৳${delta} for ${targetUser.display_name}`,
+        {
+          targetUserId: targetUid,
+          previousValue: `৳${previousBal}`,
+          newValue: `৳${nextBal}`,
+          reason,
+          transactionId: txId,
+        }
+      );
+      res.json({ ok: true, previousBalance: previousBal, nextBalance: nextBal, transactionId: txId });
     } catch (err) {
       handleRouteError(res, err, 'Failed to adjust wallet.');
     }
@@ -2997,21 +3419,252 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const admin = await requireAdminSession(req, res);
       if (!admin) return;
       const { db, user } = admin;
-      const body = (req.body || {}) as { uid?: string; targetUid?: string; status?: 'active' | 'suspended' };
+      const body = (req.body || {}) as {
+        uid?: string;
+        targetUid?: string;
+        status?: 'active' | 'suspended';
+        reason?: string;
+      };
       const targetUid = String(body.targetUid || body.uid || '').trim();
       const status = body.status === 'suspended' ? 'suspended' : 'active';
+      const reason = String(body.reason || '').trim().slice(0, 300);
+
+      const targetRow = await db.first<UserRow>('SELECT * FROM users WHERE uid = ? LIMIT 1', [targetUid]);
+      if (!targetRow) {
+        res.status(404).json({ ok: false, error: 'ব্যবহারকারী পাওয়া যায়নি।' });
+        return;
+      }
+
+      const targetRole = resolveUserRole(
+        targetRow.phone_e164,
+        targetRow.email_normalized || targetRow.email,
+        targetRow.role
+      );
+      if (targetRole === 'super_admin' || targetUid === user.uid) {
+        res.status(403).json({
+          ok: false,
+          code: 'admin/super-admin-protected',
+          error: 'সুপার অ্যাডমিন অ্যাকাউন্ট ব্লক, সাসপেন্ড বা নিষ্ক্রিয় করা যাবে না।',
+        });
+        return;
+      }
+
+      const previousStatus = targetRow.status || 'active';
       const now = Date.now();
       await db.run('UPDATE users SET status = ?, updated_at = ? WHERE uid = ?', [status, now, targetUid]);
       if (status === 'suspended') {
         await db.run('DELETE FROM sessions WHERE user_id = ?', [targetUid]);
       }
-      await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'USER_STATUS_UPDATED', 'users', targetUid, `Set ${status}`);
-      res.json({ ok: true });
+
+      await insertNotification(
+        db,
+        targetUid,
+        status === 'suspended' ? 'অ্যাকাউন্ট সাময়িকভাবে ব্লক করা হয়েছে' : 'অ্যাকাউন্ট পুনরায় সক্রিয় হয়েছে',
+        status === 'suspended' ? 'Account Suspended' : 'Account Activated',
+        status === 'suspended'
+          ? `আপনার অ্যাকাউন্ট সাময়িকভাবে সাসপেন্ড করা হয়েছে।${reason ? ` কারণ: ${reason}` : ''}`
+          : 'আপনার DIGITAL HUB অ্যাকাউন্ট পুনরায় সক্রিয় করা হয়েছে।',
+        status === 'suspended'
+          ? `Your account has been suspended.${reason ? ` Reason: ${reason}` : ''}`
+          : 'Your DIGITAL HUB account is now active again.',
+        'system'
+      );
+
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        status === 'suspended' ? 'USER_SUSPENDED' : 'USER_ACTIVATED',
+        'users',
+        targetUid,
+        `Changed ${targetRow.display_name} status from ${previousStatus} to ${status}`,
+        {
+          targetUserId: targetUid,
+          previousValue: previousStatus,
+          newValue: status,
+          reason: reason || `Status updated to ${status}`,
+        }
+      );
+      res.json({ ok: true, status });
     } catch (err) {
       handleRouteError(res, err, 'Failed to update user status.');
     }
   });
 
+  // Full User Profile Detail for Admin Inspection Drawer/Modal
+  router.get('/admin/users/:uid', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db } = admin;
+      const targetUid = String(req.params.uid || '').trim();
+      const userRow = await db.first<UserRow>('SELECT * FROM users WHERE uid = ? LIMIT 1', [targetUid]);
+      if (!userRow) {
+        res.status(404).json({ ok: false, error: 'User not found.' });
+        return;
+      }
+      const wallet = await ensureWalletAccount(db, targetUid);
+      const [txRows, wdrRows, refRows, orderRows, sessionRows, auditRows] = await Promise.all([
+        db.all<{ payload_json: string }>(
+          'SELECT payload_json FROM wallet_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 100',
+          [targetUid]
+        ),
+        db.all<{ payload_json: string }>(
+          'SELECT payload_json FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC LIMIT 100',
+          [targetUid]
+        ),
+        db.all<{ payload_json: string }>(
+          'SELECT payload_json FROM referrals WHERE referrer_uid = ? ORDER BY created_at DESC LIMIT 100',
+          [targetUid]
+        ),
+        db.all<{ payload_json: string }>(
+          'SELECT payload_json FROM orders WHERE customer_id = ? ORDER BY created_at DESC LIMIT 100',
+          [targetUid]
+        ),
+        db.all<{ id: string; ip_address: string; user_agent: string; created_at: number; last_seen_at: number; expires_at: number }>(
+          'SELECT id, ip_address, user_agent, created_at, last_seen_at, expires_at FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? ORDER BY last_seen_at DESC',
+          [targetUid, Date.now()]
+        ),
+        db.all<{ payload_json: string }>(
+          'SELECT payload_json FROM audit_logs ORDER BY created_at DESC LIMIT 200'
+        ),
+      ]);
+
+      const walletTxs = txRows.map((r) => parseJsonSafe<Record<string, unknown>>(r.payload_json, {}));
+      const withdrawals = wdrRows.map((r) => parseJsonSafe<Record<string, unknown>>(r.payload_json, {}));
+      const referrals = refRows.map((r) => parseJsonSafe<Record<string, unknown>>(r.payload_json, {}));
+      const orders = orderRows.map((r) => parseJsonSafe<Record<string, unknown>>(r.payload_json, {}));
+      const relatedAudits = auditRows
+        .map((r) => parseJsonSafe<Record<string, unknown>>(r.payload_json, {}))
+        .filter((a) => a.targetUserId === targetUid || a.targetId === targetUid)
+        .slice(0, 30);
+
+      const earningTypes = new Set(['referral', 'cashback', 'rewarded_ad', 'watch_earn_coin_redeem', 'promo_credit']);
+      const totalEarningsBdt = walletTxs
+        .filter((tx) => tx.status === 'Approved' && earningTypes.has(String(tx.type || '')))
+        .reduce((sum, tx) => sum + Number(tx.amountBdt || 0), 0);
+      const referralEarningsBdt = referrals
+        .filter((ref) => ref.status === 'credited')
+        .reduce((sum, ref) => sum + Number(ref.rewardAmountBdt || 0), 0);
+      const totalWithdrawnBdt = withdrawals
+        .filter((w) => w.status === 'Paid' || w.status === 'Approved')
+        .reduce((sum, w) => sum + Number(w.amountBdt || 0), 0);
+      const pendingWithdrawalBdt = withdrawals
+        .filter((w) => w.status === 'Pending' || w.status === 'Processing')
+        .reduce((sum, w) => sum + Number(w.amountBdt || 0), 0);
+
+      res.json({
+        ok: true,
+        profile: toClientUserProfile(userRow),
+        wallet,
+        summary: {
+          totalEarningsBdt,
+          referralEarningsBdt,
+          totalWithdrawnBdt,
+          pendingWithdrawalBdt,
+          referralCount: referrals.length,
+          orderCount: orders.length,
+          activeSessionCount: sessionRows.length,
+        },
+        walletTxs,
+        withdrawals,
+        referrals,
+        orders,
+        sessions: sessionRows.map((s) => ({
+          id: s.id,
+          ipAddress: s.ip_address,
+          userAgent: s.user_agent,
+          createdAt: s.created_at,
+          lastSeenAt: s.last_seen_at,
+          expiresAt: s.expires_at,
+        })),
+        auditLogs: relatedAudits,
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load user details.');
+    }
+  });
+
+  // Admin Edit Permitted User Info & Admin Notes
+  router.patch('/admin/users/:uid', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db, user } = admin;
+      const targetUid = String(req.params.uid || '').trim();
+      const targetRow = await db.first<UserRow>('SELECT * FROM users WHERE uid = ? LIMIT 1', [targetUid]);
+      if (!targetRow) {
+        res.status(404).json({ ok: false, error: 'User not found.' });
+        return;
+      }
+
+      const body = (req.body || {}) as {
+        displayName?: string;
+        phone?: string;
+        language?: 'bn' | 'en';
+        adminNotes?: string;
+        reason?: string;
+      };
+
+      const nextName =
+        typeof body.displayName === 'string' && body.displayName.trim().length >= 2
+          ? body.displayName.trim().slice(0, 120)
+          : targetRow.display_name;
+      const nextLanguage =
+        body.language === 'en' ? 'en' : body.language === 'bn' ? 'bn' : targetRow.language === 'en' ? 'en' : 'bn';
+      const nextNotes =
+        typeof body.adminNotes === 'string' ? body.adminNotes.trim().slice(0, 2000) : targetRow.admin_notes || '';
+
+      let nextPhone = targetRow.phone_e164;
+      if (typeof body.phone === 'string' && body.phone.trim()) {
+        const normalized = normalizeBangladeshPhone(body.phone);
+        if (!normalized) {
+          res.status(400).json({ ok: false, error: 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।' });
+          return;
+        }
+        if (normalized !== extractPublicPhone(targetRow.phone_e164)) {
+          const taken = await db.first<{ uid: string }>(
+            'SELECT uid FROM users WHERE phone_e164 = ? AND uid != ? LIMIT 1',
+            [normalized, targetUid]
+          );
+          if (taken) {
+            res.status(409).json({ ok: false, error: 'এই নম্বরটি অন্য অ্যাকাউন্টে ব্যবহৃত হচ্ছে।' });
+            return;
+          }
+          nextPhone = normalized;
+        }
+      }
+
+      const now = Date.now();
+      await db.run(
+        'UPDATE users SET display_name = ?, phone_e164 = ?, language = ?, admin_notes = ?, updated_at = ? WHERE uid = ?',
+        [nextName, nextPhone, nextLanguage, nextNotes, now, targetUid]
+      );
+
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        'USER_PROFILE_EDITED',
+        'users',
+        targetUid,
+        `Updated user info/notes for ${targetRow.display_name}`,
+        {
+          targetUserId: targetUid,
+          previousValue: `${targetRow.display_name} | Notes: ${(targetRow.admin_notes || '').slice(0, 60)}`,
+          newValue: `${nextName} | Notes: ${nextNotes.slice(0, 60)}`,
+          reason: String(body.reason || 'Admin user profile update').slice(0, 200),
+        }
+      );
+
+      const updated = await db.first<UserRow>('SELECT * FROM users WHERE uid = ?', [targetUid]);
+      res.json({ ok: true, profile: updated ? toClientUserProfile(updated) : toClientUserProfile(targetRow) });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to update user details.');
+    }
+  });
+
+  // 5-Stage Withdrawal Processing (Pending -> Approved -> Processing -> Paid / Rejected with atomic single refund)
   router.post('/admin/process-withdrawal', async (req, res) => {
     try {
       const admin = await requireAdminSession(req, res);
@@ -3019,54 +3672,601 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const { db, user } = admin;
       const body = (req.body || {}) as {
         withdrawalId?: string;
-        decision?: 'approve' | 'reject';
+        status?: 'Approved' | 'Processing' | 'Paid' | 'Rejected';
+        decision?: 'approve' | 'processing' | 'paid' | 'reject';
         adminNote?: string;
         rejectionReason?: string;
         payoutTrxId?: string;
         payoutReference?: string;
       };
       const wId = String(body.withdrawalId || '').trim();
-      const decision = body.decision;
       const row = await db.first<{ user_id: string; status: string; payload_json: string }>(
         'SELECT user_id, status, payload_json FROM withdrawals WHERE id = ?',
         [wId]
       );
-      if (!row || row.status !== 'Pending') {
-        res.status(409).json({ ok: false, error: 'Withdrawal already processed or missing.' });
+      if (!row) {
+        res.status(404).json({ ok: false, error: 'Withdrawal request not found.' });
         return;
       }
+
+      const previousStatus = row.status;
+      if (previousStatus === 'Paid' || previousStatus === 'Rejected') {
+        res.status(409).json({
+          ok: false,
+          error: `Withdrawal already finalized (${previousStatus}) and cannot be modified again.`,
+        });
+        return;
+      }
+
+      let nextStatus: 'Approved' | 'Processing' | 'Paid' | 'Rejected' | null = null;
+      if (
+        body.status === 'Approved' ||
+        body.status === 'Processing' ||
+        body.status === 'Paid' ||
+        body.status === 'Rejected'
+      ) {
+        nextStatus = body.status;
+      } else if (body.decision === 'approve') {
+        nextStatus = 'Approved';
+      } else if (body.decision === 'processing') {
+        nextStatus = 'Processing';
+      } else if (body.decision === 'paid') {
+        nextStatus = 'Paid';
+      } else if (body.decision === 'reject') {
+        nextStatus = 'Rejected';
+      }
+
+      if (!nextStatus || nextStatus === previousStatus) {
+        res.status(400).json({ ok: false, error: 'Invalid withdrawal status transition.' });
+        return;
+      }
+
       const now = Date.now();
       const existing = parseJsonSafe<Record<string, unknown>>(row.payload_json, {});
-      const status = decision === 'approve' ? 'Approved' : 'Rejected';
+      const payoutReference = String(
+        body.payoutReference || body.payoutTrxId || existing.payoutReference || ''
+      )
+        .trim()
+        .slice(0, 100);
+      const adminNote = String(body.adminNote ?? existing.adminNote ?? '').trim().slice(0, 400);
+      const rejectionReason = String(
+        body.rejectionReason ?? existing.rejectionReason ?? ''
+      )
+        .trim()
+        .slice(0, 400);
+
       const updated = {
         ...existing,
-        status,
-        adminNote: String(body.adminNote || '').slice(0, 300),
-        rejectionReason: String(body.rejectionReason || '').slice(0, 300),
-        payoutReference: String(body.payoutReference || body.payoutTrxId || '').slice(0, 80),
+        status: nextStatus,
+        adminNote,
+        rejectionReason: nextStatus === 'Rejected' ? rejectionReason : '',
+        payoutReference,
+        paidAt: nextStatus === 'Paid' ? now : existing.paidAt || null,
         processedBy: user.uid,
         updatedAt: now,
       };
-      await db.run('UPDATE withdrawals SET status = ?, payload_json = ?, updated_at = ? WHERE id = ?', [
-        status,
-        JSON.stringify(updated),
-        now,
-        wId,
-      ]);
-      if (decision === 'reject') {
-        const amt = Number(existing.amountBdt || 0);
-        if (amt > 0) {
-          await ensureWalletAccount(db, row.user_id);
+
+      // Atomic conditional update guarantees no concurrent double refund or double finalize
+      const updateResult = await db.run(
+        'UPDATE withdrawals SET status = ?, payload_json = ?, updated_at = ? WHERE id = ? AND status = ?',
+        [nextStatus, JSON.stringify(updated), now, wId, previousStatus]
+      );
+      if (updateResult.changes === 0) {
+        res.status(409).json({ ok: false, error: 'Withdrawal status changed concurrently. Please refresh.' });
+        return;
+      }
+
+      const amt = Number(existing.amountBdt || 0);
+      const linkedWalletTxId = String(existing.walletTxId || '');
+
+      if (nextStatus === 'Rejected' && amt > 0) {
+        await ensureWalletAccount(db, row.user_id);
+        const refundTxId = generateSecureId('wref', 8);
+        await db.run(
+          'UPDATE wallet_accounts SET available_balance_bdt = available_balance_bdt + ?, last_tx_id = ?, updated_at = ? WHERE uid = ?',
+          [amt, refundTxId, now, row.user_id]
+        );
+        const refundTx = {
+          id: refundTxId,
+          userId: row.user_id,
+          userEmail: String(existing.userEmail || ''),
+          type: 'withdrawal_refund',
+          method: 'system',
+          transactionId: wId,
+          amountBdt: amt,
+          status: 'Approved',
+          note: `Refund for rejected withdrawal #${wId}${rejectionReason ? ` (${rejectionReason})` : ''}`,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await db.run(
+          'INSERT INTO wallet_transactions (id, user_id, type, amount_bdt, status, transaction_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [refundTxId, row.user_id, 'withdrawal_refund', amt, 'Approved', wId, JSON.stringify(refundTx), now, now]
+        );
+      }
+
+      if (linkedWalletTxId) {
+        const wtxRow = await db.first<{ payload_json: string }>(
+          'SELECT payload_json FROM wallet_transactions WHERE id = ? LIMIT 1',
+          [linkedWalletTxId]
+        );
+        if (wtxRow) {
+          const txStatus =
+            nextStatus === 'Paid' || nextStatus === 'Approved'
+              ? 'Approved'
+              : nextStatus === 'Rejected'
+                ? 'Rejected'
+                : 'Verification Pending';
+          const nextWtx = {
+            ...parseJsonSafe<Record<string, unknown>>(wtxRow.payload_json, {}),
+            status: txStatus,
+            transactionId: payoutReference || wId,
+            rejectionReason: nextStatus === 'Rejected' ? rejectionReason : '',
+            updatedAt: now,
+          };
           await db.run(
-            'UPDATE wallet_accounts SET available_balance_bdt = available_balance_bdt + ?, updated_at = ? WHERE uid = ?',
-            [amt, now, row.user_id]
+            'UPDATE wallet_transactions SET status = ?, transaction_id = ?, payload_json = ?, updated_at = ? WHERE id = ?',
+            [txStatus, payoutReference || wId, JSON.stringify(nextWtx), now, linkedWalletTxId]
           );
         }
       }
-      await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'WITHDRAWAL_PROCESSED', 'withdrawals', wId, `${status} ${wId}`);
-      res.json({ ok: true });
+
+      const notifMap: Record<
+        'Approved' | 'Processing' | 'Paid' | 'Rejected',
+        { bnTitle: string; enTitle: string; bnMsg: string; enMsg: string }
+      > = {
+        Approved: {
+          bnTitle: 'উত্তোলন অনুরোধ অনুমোদিত হয়েছে',
+          enTitle: 'Withdrawal Approved',
+          bnMsg: `৳${amt} উত্তোলন অনুরোধ (#${wId}) অনুমোদিত হয়েছে। শীঘ্রই পেমেন্ট পাঠানো হবে।`,
+          enMsg: `Your ৳${amt} withdrawal (#${wId}) has been approved.`,
+        },
+        Processing: {
+          bnTitle: 'উত্তোলন পেমেন্ট প্রসেসিং চলছে',
+          enTitle: 'Withdrawal Processing',
+          bnMsg: `৳${amt} উত্তোলন অনুরোধ (#${wId}) বর্তমানে পেমেন্ট প্রসেসিংয়ে আছে।`,
+          enMsg: `Your ৳${amt} withdrawal (#${wId}) is now being processed.`,
+        },
+        Paid: {
+          bnTitle: 'উত্তোলন পেমেন্ট সম্পন্ন হয়েছে',
+          enTitle: 'Withdrawal Paid',
+          bnMsg: `৳${amt} পেমেন্ট সফলভাবে পাঠানো হয়েছে।${payoutReference ? ` রেফারেন্স: ${payoutReference}` : ''}`,
+          enMsg: `Your ৳${amt} withdrawal has been paid.${payoutReference ? ` Reference: ${payoutReference}` : ''}`,
+        },
+        Rejected: {
+          bnTitle: 'উত্তোলন অনুরোধ প্রত্যাখ্যাত (রিফান্ড সম্পন্ন)',
+          enTitle: 'Withdrawal Rejected (Refunded)',
+          bnMsg: `৳${amt} উত্তোলন অনুরোধ প্রত্যাখ্যাত হওয়ায় টাকা আপনার ওয়ালেটে ফেরত দেওয়া হয়েছে।${rejectionReason ? ` কারণ: ${rejectionReason}` : ''}`,
+          enMsg: `Your ৳${amt} withdrawal was rejected and refunded to your wallet.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`,
+        },
+      };
+
+      const msg = notifMap[nextStatus];
+      await insertNotification(db, row.user_id, msg.bnTitle, msg.enTitle, msg.bnMsg, msg.enMsg, 'wallet');
+
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        `WITHDRAWAL_${nextStatus.toUpperCase()}`,
+        'withdrawals',
+        wId,
+        `Withdrawal #${wId} (৳${amt}) changed from ${previousStatus} to ${nextStatus}`,
+        {
+          targetUserId: row.user_id,
+          previousValue: previousStatus,
+          newValue: nextStatus,
+          reason: rejectionReason || adminNote || `Marked ${nextStatus}`,
+          transactionId: payoutReference || wId,
+        }
+      );
+
+      res.json({ ok: true, status: nextStatus, paidAt: nextStatus === 'Paid' ? now : undefined });
     } catch (err) {
       handleRouteError(res, err, 'Failed to process withdrawal.');
+    }
+  });
+
+  // Configurable Payment Methods CRUD (bKash, Nagad, Rocket, Bank Transfer, Custom)
+  router.get('/admin/payment-methods', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const rows = await admin.db.all<PaymentMethodRow>(
+        'SELECT * FROM payment_methods ORDER BY sort_order ASC, name ASC'
+      );
+      res.json({ ok: true, paymentMethods: rows.map(mapPaymentMethodRow) });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load payment methods.');
+    }
+  });
+
+  router.post('/admin/payment-methods', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db, user } = admin;
+      const body = (req.body || {}) as {
+        id?: string;
+        code?: string;
+        name?: string;
+        type?: 'mobile_banking' | 'bank_transfer' | 'custom';
+        accountNumber?: string;
+        accountName?: string;
+        instructionsBn?: string;
+        instructionsEn?: string;
+        requirementsBn?: string;
+        requirementsEn?: string;
+        minAmount?: number;
+        maxAmount?: number;
+        supportsDeposit?: boolean;
+        supportsWithdrawal?: boolean;
+        enabled?: boolean;
+        sortOrder?: number;
+      };
+
+      const name = String(body.name || '').trim().slice(0, 80);
+      if (name.length < 2) {
+        res.status(400).json({ ok: false, error: 'Payment method name is required.' });
+        return;
+      }
+      const rawCode = String(body.code || name)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 40);
+      if (!rawCode) {
+        res.status(400).json({ ok: false, error: 'Valid method code required.' });
+        return;
+      }
+
+      const id = String(body.id || `pm_${rawCode}`).trim().slice(0, 64);
+      const existing = await db.first<PaymentMethodRow>('SELECT * FROM payment_methods WHERE id = ? LIMIT 1', [id]);
+      const type =
+        body.type === 'bank_transfer' || body.type === 'custom' ? body.type : 'mobile_banking';
+      const accountNumber = String(body.accountNumber || '').trim().slice(0, 120);
+      const accountName = String(body.accountName || '').trim().slice(0, 120);
+      const instructionsBn = String(body.instructionsBn || '').trim().slice(0, 800);
+      const instructionsEn = String(body.instructionsEn || '').trim().slice(0, 800);
+      const requirementsBn = String(body.requirementsBn || '').trim().slice(0, 400);
+      const requirementsEn = String(body.requirementsEn || '').trim().slice(0, 400);
+      const minAmount = Math.max(10, Number(body.minAmount ?? 50) || 50);
+      const maxAmount = Math.max(minAmount, Number(body.maxAmount ?? 100000) || 100000);
+      const supportsDeposit = body.supportsDeposit !== false ? 1 : 0;
+      const supportsWithdrawal = body.supportsWithdrawal !== false ? 1 : 0;
+      const enabled = body.enabled !== false ? 1 : 0;
+      const sortOrder = Number(body.sortOrder ?? existing?.sort_order ?? 10) || 0;
+      const now = Date.now();
+
+      await db.run(
+        `INSERT INTO payment_methods (
+          id, code, name, type, account_number, account_name,
+          instructions_bn, instructions_en, requirements_bn, requirements_en,
+          min_amount, max_amount, supports_deposit, supports_withdrawal, enabled, sort_order, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          type = excluded.type,
+          account_number = excluded.account_number,
+          account_name = excluded.account_name,
+          instructions_bn = excluded.instructions_bn,
+          instructions_en = excluded.instructions_en,
+          requirements_bn = excluded.requirements_bn,
+          requirements_en = excluded.requirements_en,
+          min_amount = excluded.min_amount,
+          max_amount = excluded.max_amount,
+          supports_deposit = excluded.supports_deposit,
+          supports_withdrawal = excluded.supports_withdrawal,
+          enabled = excluded.enabled,
+          sort_order = excluded.sort_order,
+          updated_at = excluded.updated_at`,
+        [
+          id,
+          existing?.code || rawCode,
+          name,
+          type,
+          accountNumber,
+          accountName,
+          instructionsBn,
+          instructionsEn,
+          requirementsBn,
+          requirementsEn,
+          minAmount,
+          maxAmount,
+          supportsDeposit,
+          supportsWithdrawal,
+          enabled,
+          sortOrder,
+          now,
+        ]
+      );
+
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        existing ? 'PAYMENT_METHOD_UPDATED' : 'PAYMENT_METHOD_CREATED',
+        'payment_methods',
+        id,
+        `${existing ? 'Updated' : 'Created'} payment method ${name}`,
+        {
+          previousValue: existing ? `${existing.name} (${existing.account_number}, enabled=${existing.enabled})` : 'none',
+          newValue: `${name} (${accountNumber}, enabled=${enabled})`,
+          reason: 'Admin payment method configuration',
+        }
+      );
+
+      const saved = await db.first<PaymentMethodRow>('SELECT * FROM payment_methods WHERE id = ?', [id]);
+      res.status(existing ? 200 : 201).json({
+        ok: true,
+        paymentMethod: saved ? mapPaymentMethodRow(saved) : null,
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to save payment method.');
+    }
+  });
+
+  router.delete('/admin/payment-methods/:id', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const id = String(req.params.id || '').trim();
+      const existing = await admin.db.first<PaymentMethodRow>('SELECT * FROM payment_methods WHERE id = ?', [id]);
+      if (!existing) {
+        res.status(404).json({ ok: false, error: 'Payment method not found.' });
+        return;
+      }
+      await admin.db.run('DELETE FROM payment_methods WHERE id = ?', [id]);
+      await insertAuditLog(
+        admin.db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        'PAYMENT_METHOD_DELETED',
+        'payment_methods',
+        id,
+        `Deleted payment method ${existing.name}`,
+        { previousValue: existing.name, newValue: 'deleted', reason: 'Admin removed payment method' }
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to delete payment method.');
+    }
+  });
+
+  // Direct Targeted or Broadcast System Notifications
+  router.post('/admin/notifications/send', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db, user } = admin;
+      const body = (req.body || {}) as {
+        targetUid?: string;
+        titleBn?: string;
+        titleEn?: string;
+        messageBn?: string;
+        messageEn?: string;
+        type?: 'order' | 'payment' | 'wallet' | 'referral' | 'system';
+      };
+      const targetUid = String(body.targetUid || 'ALL').trim();
+      const titleBn = String(body.titleBn || body.titleEn || '').trim().slice(0, 160);
+      const titleEn = String(body.titleEn || body.titleBn || '').trim().slice(0, 160);
+      const messageBn = String(body.messageBn || body.messageEn || '').trim().slice(0, 1000);
+      const messageEn = String(body.messageEn || body.messageBn || '').trim().slice(0, 1000);
+      const type =
+        body.type === 'order' || body.type === 'payment' || body.type === 'wallet' || body.type === 'referral'
+          ? body.type
+          : 'system';
+
+      if (titleBn.length < 2 || messageBn.length < 2) {
+        res.status(400).json({ ok: false, error: 'নোটিফিকেশনের শিরোনাম এবং বার্তা লিখুন।' });
+        return;
+      }
+
+      let recipientCount = 0;
+      if (targetUid === 'ALL') {
+        const activeUsers = await db.all<{ uid: string }>(
+          `SELECT uid FROM users WHERE status = 'active' LIMIT 1000`
+        );
+        for (const u of activeUsers) {
+          await insertNotification(db, u.uid, titleBn, titleEn, messageBn, messageEn, type);
+          recipientCount += 1;
+        }
+      } else {
+        const exists = await db.first<{ uid: string }>('SELECT uid FROM users WHERE uid = ? LIMIT 1', [targetUid]);
+        if (!exists) {
+          res.status(404).json({ ok: false, error: 'নির্বাচিত ব্যবহারকারী পাওয়া যায়নি।' });
+          return;
+        }
+        await insertNotification(db, targetUid, titleBn, titleEn, messageBn, messageEn, type);
+        recipientCount = 1;
+      }
+
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        'NOTIFICATION_SENT',
+        'notifications',
+        targetUid,
+        `Sent notification "${titleEn}" to ${targetUid === 'ALL' ? `${recipientCount} users` : targetUid}`,
+        {
+          targetUserId: targetUid === 'ALL' ? '' : targetUid,
+          newValue: titleEn,
+          reason: messageEn.slice(0, 140),
+        }
+      );
+
+      res.status(201).json({ ok: true, recipientCount });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to send notification.');
+    }
+  });
+
+  // Security Console Endpoints (Active Sessions, Rate-Limit Lockouts, Suspicious Referrals, Deletion Requests)
+  router.get('/admin/security', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db } = admin;
+      const now = Date.now();
+      const [sessionRows, attemptRows, deletionRows, flaggedRefRows] = await Promise.all([
+        db.all<{
+          id: string;
+          user_id: string;
+          ip_address: string;
+          user_agent: string;
+          created_at: number;
+          last_seen_at: number;
+          expires_at: number;
+          display_name: string;
+          email: string;
+          phone_e164: string | null;
+          role: string;
+        }>(
+          `SELECT s.id, s.user_id, s.ip_address, s.user_agent, s.created_at, s.last_seen_at, s.expires_at,
+                  u.display_name, u.email, u.phone_e164, u.role
+           FROM sessions s
+           INNER JOIN users u ON u.uid = s.user_id
+           WHERE s.revoked_at = 0 AND s.expires_at > ?
+           ORDER BY s.last_seen_at DESC
+           LIMIT 200`,
+          [now]
+        ),
+        db.all<AttemptRow>(
+          'SELECT attempt_key, attempts, window_start, locked_until FROM auth_attempts ORDER BY locked_until DESC, attempts DESC LIMIT 100'
+        ),
+        db.all<{ payload_json: string }>(
+          'SELECT payload_json FROM deletion_requests ORDER BY created_at DESC LIMIT 100'
+        ),
+        db.all<{ payload_json: string }>(
+          `SELECT payload_json FROM referrals WHERE status = 'flagged' ORDER BY created_at DESC LIMIT 100`
+        ),
+      ]);
+
+      res.json({
+        ok: true,
+        superAdminEmail: getConfiguredSuperAdminEmail(),
+        activeSessions: sessionRows.map((s) => ({
+          id: s.id,
+          userId: s.user_id,
+          userName: s.display_name,
+          userIdentifier: s.email || extractPublicPhone(s.phone_e164) || s.user_id,
+          role: resolveUserRole(s.phone_e164, s.email, s.role),
+          ipAddress: s.ip_address,
+          userAgent: s.user_agent,
+          createdAt: s.created_at,
+          lastSeenAt: s.last_seen_at,
+          expiresAt: s.expires_at,
+          isCurrent: s.id === admin.user.sessionId,
+        })),
+        authAttempts: attemptRows.map((a) => ({
+          key: a.attempt_key,
+          attempts: Number(a.attempts || 0),
+          windowStart: Number(a.window_start || 0),
+          lockedUntil: Number(a.locked_until || 0),
+          isLocked: Number(a.locked_until || 0) > now,
+        })),
+        deletionRequests: deletionRows.map((r) => parseJsonSafe(r.payload_json, {})),
+        flaggedReferrals: flaggedRefRows.map((r) => parseJsonSafe(r.payload_json, {})),
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load security telemetry.');
+    }
+  });
+
+  router.post('/admin/security/revoke-session', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const body = (req.body || {}) as { sessionId?: string; targetUid?: string };
+      const sessionId = String(body.sessionId || '').trim();
+      const targetUid = String(body.targetUid || '').trim();
+
+      if (sessionId) {
+        const sess = await admin.db.first<{ user_id: string }>('SELECT user_id FROM sessions WHERE id = ?', [sessionId]);
+        if (!sess) {
+          res.status(404).json({ ok: false, error: 'Session not found.' });
+          return;
+        }
+        await admin.db.run('DELETE FROM sessions WHERE id = ?', [sessionId]);
+        await insertAuditLog(
+          admin.db,
+          admin.user.uid,
+          getUserPrimaryIdentifier(admin.user),
+          'SESSION_REVOKED',
+          'sessions',
+          sessionId,
+          `Revoked session ${sessionId} for ${sess.user_id}`,
+          { targetUserId: sess.user_id, reason: 'Admin security session revocation' }
+        );
+        res.json({ ok: true });
+        return;
+      }
+
+      if (targetUid) {
+        const targetRow = await admin.db.first<UserRow>('SELECT * FROM users WHERE uid = ?', [targetUid]);
+        if (targetRow) {
+          const targetRole = resolveUserRole(
+            targetRow.phone_e164,
+            targetRow.email_normalized || targetRow.email,
+            targetRow.role
+          );
+          if (targetRole === 'super_admin' && targetUid !== admin.user.uid) {
+            res.status(403).json({ ok: false, error: 'Cannot revoke Super Admin sessions.' });
+            return;
+          }
+        }
+        const now = Date.now();
+        await admin.db.run('DELETE FROM sessions WHERE user_id = ?', [targetUid]);
+        await admin.db.run('UPDATE users SET session_revoked_at = ?, updated_at = ? WHERE uid = ?', [
+          now,
+          now,
+          targetUid,
+        ]);
+        await insertAuditLog(
+          admin.db,
+          admin.user.uid,
+          getUserPrimaryIdentifier(admin.user),
+          'ALL_SESSIONS_REVOKED',
+          'sessions',
+          targetUid,
+          `Revoked all sessions for ${targetUid}`,
+          { targetUserId: targetUid, reason: 'Admin forced logout across all devices' }
+        );
+        res.json({ ok: true });
+        return;
+      }
+
+      res.status(400).json({ ok: false, error: 'sessionId or targetUid required.' });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to revoke session.');
+    }
+  });
+
+  router.post('/admin/security/unlock-attempt', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const key = String((req.body as { key?: string })?.key || '').trim();
+      if (!key) {
+        res.status(400).json({ ok: false, error: 'Attempt key required.' });
+        return;
+      }
+      await admin.db.run('DELETE FROM auth_attempts WHERE attempt_key = ?', [key]);
+      await insertAuditLog(
+        admin.db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        'RATE_LIMIT_UNLOCKED',
+        'auth_attempts',
+        key,
+        `Cleared brute-force lockout for ${key}`,
+        { previousValue: 'locked', newValue: 'unlocked', reason: 'Admin manual security unlock' }
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to unlock attempt key.');
     }
   });
 
@@ -3098,6 +4298,16 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       await db.run(
         'INSERT INTO announcements (id, active, payload_json, created_at) VALUES (?, 1, ?, ?)',
         [id, JSON.stringify(payload), now]
+      );
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        'ANNOUNCEMENT_PUBLISHED',
+        'announcements',
+        id,
+        `Published announcement: ${payload.titleEn || payload.titleBn}`,
+        { newValue: payload.titleEn || payload.titleBn }
       );
       res.status(201).json({ ok: true, id });
     } catch (err) {
@@ -3132,7 +4342,17 @@ export function createPhoneAuthAndAppRouter(): express.Router {
     try {
       const admin = await requireAdminSession(req, res);
       if (!admin) return;
-      await admin.db.run('DELETE FROM announcements WHERE id = ?', [String(req.params.id || '').trim()]);
+      const id = String(req.params.id || '').trim();
+      await admin.db.run('DELETE FROM announcements WHERE id = ?', [id]);
+      await insertAuditLog(
+        admin.db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        'ANNOUNCEMENT_DELETED',
+        'announcements',
+        id,
+        `Deleted announcement ${id}`
+      );
       res.json({ ok: true });
     } catch (err) {
       handleRouteError(res, err, 'Failed to delete announcement.');
@@ -3155,7 +4375,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       }
       const now = Date.now();
       const existing = parseJsonSafe<Record<string, unknown>>(row.payload_json, {});
-      const status = String(body.status || 'Resolved');
+      const status = String(body.status || 'resolved');
       const next = {
         ...existing,
         adminReply: String(body.adminReply || '').slice(0, 2000),
@@ -3165,6 +4385,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       await admin.db.run(
         'UPDATE support_tickets SET status = ?, payload_json = ?, updated_at = ? WHERE id = ?',
         [status, JSON.stringify(next), now, id]
+      );
+      await insertNotification(
+        admin.db,
+        row.user_id,
+        'সাপোর্ট টিকেটের উত্তর এসেছে',
+        'Support Ticket Updated',
+        `আপনার টিকেট "${String(existing.subject || id)}"-এ অ্যাডমিন উত্তর দিয়েছেন।`,
+        `Admin replied to your support ticket "${String(existing.subject || id)}".`,
+        'system'
       );
       res.json({ ok: true });
     } catch (err) {
@@ -3184,12 +4413,16 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         adminNote?: string;
       };
       const id = String(body.claimId || '').trim();
-      const row = await admin.db.first<{ user_id: string; payload_json: string }>(
-        'SELECT user_id, payload_json FROM rewarded_claims WHERE id = ?',
+      const row = await admin.db.first<{ user_id: string; status: string; payload_json: string }>(
+        'SELECT user_id, status, payload_json FROM rewarded_claims WHERE id = ?',
         [id]
       );
       if (!row) {
         res.status(404).json({ ok: false, error: 'Claim not found' });
+        return;
+      }
+      if (row.status === 'Credited' || row.status === 'Rejected') {
+        res.status(409).json({ ok: false, error: `Claim already settled (${row.status}).` });
         return;
       }
       const now = Date.now();
@@ -3212,11 +4445,43 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       ]);
       if (isCredit && rewardBdt > 0) {
         await ensureWalletAccount(admin.db, row.user_id);
+        const txId = generateSecureId('rad', 8);
         await admin.db.run(
-          'UPDATE wallet_accounts SET available_balance_bdt = available_balance_bdt + ?, updated_at = ? WHERE uid = ?',
-          [rewardBdt, now, row.user_id]
+          'UPDATE wallet_accounts SET available_balance_bdt = available_balance_bdt + ?, last_tx_id = ?, updated_at = ? WHERE uid = ?',
+          [rewardBdt, txId, now, row.user_id]
+        );
+        const wtx = {
+          id: txId,
+          userId: row.user_id,
+          type: 'rewarded_ad',
+          method: 'system',
+          transactionId: id,
+          amountBdt: rewardBdt,
+          status: 'Approved',
+          note: `Ad reward credit (${String(existing.networkName || id)})`,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await admin.db.run(
+          'INSERT INTO wallet_transactions (id, user_id, type, amount_bdt, status, transaction_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, row.user_id, 'rewarded_ad', rewardBdt, 'Approved', id, JSON.stringify(wtx), now, now]
         );
       }
+      await insertAuditLog(
+        admin.db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        isCredit ? 'REWARD_CLAIM_CREDITED' : 'REWARD_CLAIM_REJECTED',
+        'rewarded_claims',
+        id,
+        `${status} reward claim #${id} (৳${rewardBdt})`,
+        {
+          targetUserId: row.user_id,
+          previousValue: row.status,
+          newValue: status,
+          reason: body.rejectionReason || body.adminNote || '',
+        }
+      );
       res.json({ ok: true, status });
     } catch (err) {
       handleRouteError(res, err, 'Failed to settle claim.');
@@ -3235,12 +4500,16 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         adminNote?: string;
       };
       const id = String(body.txId || '').trim();
-      const row = await admin.db.first<{ user_id: string; coins: number; payload_json: string }>(
-        'SELECT user_id, coins, payload_json FROM ad_reward_transactions WHERE id = ?',
+      const row = await admin.db.first<{ user_id: string; status: string; coins: number; payload_json: string }>(
+        'SELECT user_id, status, coins, payload_json FROM ad_reward_transactions WHERE id = ?',
         [id]
       );
       if (!row) {
         res.status(404).json({ ok: false, error: 'Redemption not found' });
+        return;
+      }
+      if (row.status === 'Credited' || row.status === 'Rejected') {
+        res.status(409).json({ ok: false, error: `Redemption already settled (${row.status}).` });
         return;
       }
       const now = Date.now();
@@ -3257,9 +4526,26 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         const amt = Math.max(0, Number(body.amountBdt ?? existing.bdtEquivalent ?? existing.amountBdt ?? 0));
         if (amt > 0) {
           await ensureWalletAccount(admin.db, row.user_id);
+          const wtxId = generateSecureId('wer', 8);
           await admin.db.run(
-            'UPDATE wallet_accounts SET available_balance_bdt = available_balance_bdt + ?, updated_at = ? WHERE uid = ?',
-            [amt, now, row.user_id]
+            'UPDATE wallet_accounts SET available_balance_bdt = available_balance_bdt + ?, last_tx_id = ?, updated_at = ? WHERE uid = ?',
+            [amt, wtxId, now, row.user_id]
+          );
+          const wtx = {
+            id: wtxId,
+            userId: row.user_id,
+            type: 'watch_earn_coin_redeem',
+            method: 'system',
+            transactionId: id,
+            amountBdt: amt,
+            status: 'Approved',
+            note: `Watch & Earn coin redemption (${row.coins} coins -> ৳${amt})`,
+            createdAt: now,
+            updatedAt: now,
+          };
+          await admin.db.run(
+            'INSERT INTO wallet_transactions (id, user_id, type, amount_bdt, status, transaction_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [wtxId, row.user_id, 'watch_earn_coin_redeem', amt, 'Approved', id, JSON.stringify(wtx), now, now]
           );
         }
       } else if (row.coins > 0) {
@@ -3282,34 +4568,109 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         referralId?: string;
         decision?: 'approve' | 'credit' | 'reject' | 'revoke';
         rewardBdt?: number;
+        reason?: string;
       };
       const id = String(body.referralId || '').trim();
-      const row = await admin.db.first<{ referrer_uid: string; payload_json: string }>(
-        'SELECT referrer_uid, payload_json FROM referrals WHERE id = ?',
+      const row = await admin.db.first<{ referrer_uid: string; referred_uid: string; status: string; payload_json: string }>(
+        'SELECT referrer_uid, referred_uid, status, payload_json FROM referrals WHERE id = ?',
         [id]
       );
       if (!row) {
         res.status(404).json({ ok: false, error: 'Referral not found' });
         return;
       }
+      if (row.status === 'credited' || row.status === 'revoked') {
+        res.status(409).json({ ok: false, error: `Referral already settled (${row.status}).` });
+        return;
+      }
+
+      const siteSettings = await getGlobalSiteSettings(admin.db);
       const now = Date.now();
       const existing = parseJsonSafe<Record<string, unknown>>(row.payload_json, {});
       const isCredit = body.decision === 'approve' || body.decision === 'credit';
       const status = isCredit ? 'credited' : 'revoked';
-      const rewardBdt = Number(body.rewardBdt ?? existing.rewardAmountBdt ?? existing.rewardBdt ?? 30);
+      const rewardBdt = Math.max(0, Number(body.rewardBdt ?? existing.rewardAmountBdt ?? siteSettings.referralBonusBdt));
+
+      // Enforce maximum referral reward cap per referrer if configured
+      if (isCredit && siteSettings.referralMaxRewardBdt > 0) {
+        const creditedRows = await admin.db.all<{ payload_json: string }>(
+          `SELECT payload_json FROM referrals WHERE referrer_uid = ? AND status = 'credited'`,
+          [row.referrer_uid]
+        );
+        const alreadyEarned = creditedRows.reduce(
+          (acc, r) => acc + Number(parseJsonSafe<Record<string, unknown>>(r.payload_json, {}).rewardAmountBdt || 0),
+          0
+        );
+        if (alreadyEarned + rewardBdt > siteSettings.referralMaxRewardBdt) {
+          res.status(400).json({
+            ok: false,
+            error: `Referrer has reached the maximum referral reward cap (৳${siteSettings.referralMaxRewardBdt}).`,
+          });
+          return;
+        }
+      }
+
       const next = { ...existing, status, rewardAmountBdt: rewardBdt, updatedAt: now };
-      await admin.db.run('UPDATE referrals SET status = ?, payload_json = ? WHERE id = ?', [
-        status,
-        JSON.stringify(next),
-        id,
-      ]);
+      const upd = await admin.db.run(
+        'UPDATE referrals SET status = ?, payload_json = ? WHERE id = ? AND status = ?',
+        [status, JSON.stringify(next), id, row.status]
+      );
+      if (upd.changes === 0) {
+        res.status(409).json({ ok: false, error: 'Referral already updated.' });
+        return;
+      }
+
+      let txId = '';
       if (isCredit && rewardBdt > 0) {
         await ensureWalletAccount(admin.db, row.referrer_uid);
+        txId = generateSecureId('rfr', 8);
         await admin.db.run(
-          'UPDATE wallet_accounts SET available_balance_bdt = available_balance_bdt + ?, updated_at = ? WHERE uid = ?',
-          [rewardBdt, now, row.referrer_uid]
+          'UPDATE wallet_accounts SET available_balance_bdt = available_balance_bdt + ?, last_tx_id = ?, updated_at = ? WHERE uid = ?',
+          [rewardBdt, txId, now, row.referrer_uid]
+        );
+        const wtx = {
+          id: txId,
+          userId: row.referrer_uid,
+          type: 'referral',
+          method: 'system',
+          transactionId: id,
+          amountBdt: rewardBdt,
+          status: 'Approved',
+          note: `Referral reward credited (${String(existing.referredEmail || row.referred_uid)})`,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await admin.db.run(
+          'INSERT INTO wallet_transactions (id, user_id, type, amount_bdt, status, transaction_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, row.referrer_uid, 'referral', rewardBdt, 'Approved', id, JSON.stringify(wtx), now, now]
+        );
+        await insertNotification(
+          admin.db,
+          row.referrer_uid,
+          'রেফারেল বোনাস যুক্ত হয়েছে!',
+          'Referral Bonus Credited!',
+          `আপনার রেফারেল বোনাস ৳${rewardBdt} ওয়ালেটে যুক্ত করা হয়েছে।`,
+          `৳${rewardBdt} referral bonus has been credited to your wallet.`,
+          'referral'
         );
       }
+
+      await insertAuditLog(
+        admin.db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        isCredit ? 'REFERRAL_CREDITED' : 'REFERRAL_REVOKED',
+        'referrals',
+        id,
+        `${status} referral #${id} (৳${rewardBdt})`,
+        {
+          targetUserId: row.referrer_uid,
+          previousValue: row.status,
+          newValue: status,
+          reason: String(body.reason || `Admin ${status} referral`),
+          transactionId: txId || id,
+        }
+      );
       res.json({ ok: true, status });
     } catch (err) {
       handleRouteError(res, err, 'Failed to settle referral.');
@@ -3381,6 +4742,18 @@ export function createPhoneAuthAndAppRouter(): express.Router {
          ON CONFLICT(collection, doc_id) DO UPDATE SET deleted = 0, payload_json = excluded.payload_json, updated_at = excluded.updated_at`,
         [col, docId, JSON.stringify({ ...body.data, id: docId, updatedAt: now }), now]
       );
+      if (col === 'settings' || col === 'advertisements' || col === 'banners' || col === 'managedAdUnits') {
+        await insertAuditLog(
+          admin.db,
+          admin.user.uid,
+          getUserPrimaryIdentifier(admin.user),
+          col === 'settings' ? 'SETTINGS_UPDATED' : `${col.toUpperCase()}_SAVED`,
+          col,
+          docId,
+          `Saved ${col}/${docId}`,
+          { newValue: String((body.data as { siteName?: string; titleEn?: string; titleBn?: string }).siteName || (body.data as { titleEn?: string }).titleEn || docId) }
+        );
+      }
       res.json({ ok: true });
     } catch (err) {
       handleRouteError(res, err, 'Failed to save catalog item.');
@@ -3399,6 +4772,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
          VALUES (?, ?, 1, '{}', ?)
          ON CONFLICT(collection, doc_id) DO UPDATE SET deleted = 1, updated_at = excluded.updated_at`,
         [col, docId, now]
+      );
+      await insertAuditLog(
+        admin.db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        `${col.toUpperCase()}_DELETED`,
+        col,
+        docId,
+        `Deleted ${col}/${docId}`
       );
       res.json({ ok: true });
     } catch (err) {

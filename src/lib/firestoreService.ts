@@ -24,12 +24,15 @@ import {
 } from './seedData';
 import { DIGITAL_HUB_AD_PROVIDER_CONFIG, mergeAdUnitsWithOverrides } from './adProviderConfig';
 import {
+  AccountDeletionRequest,
   AdNetworkConfig,
   AdPlacementSlot,
   AdRevenueEntry,
   AdRewardTransaction,
   AdViewingSession,
   AdminRecord,
+  AdminSecurityPayload,
+  AdminUserDetailPayload,
   Advertisement,
   Announcement,
   AppNotification,
@@ -44,16 +47,19 @@ import {
   OrderStatus,
   Payment,
   PaymentMethod,
+  PaymentMethodConfig,
   Product,
   Referral,
   Review,
   RewardedAdClaim,
+  ServerAdAnalytics,
   SiteSettings,
   SupportTicket,
   UserProfile,
   WalletAccount,
   WalletTransaction,
   WithdrawalRequest,
+  WithdrawalStatus,
 } from '../types/marketplace';
 
 export { normalizeBangladeshPhoneClient };
@@ -204,6 +210,7 @@ interface CatalogOverridesPayload {
   overrides: Record<string, CatalogOverrideRow[]>;
   reviews: Review[];
   announcements: Announcement[];
+  paymentMethods: PaymentMethodConfig[];
 }
 
 let catalogOverridesCache: { ts: number; data: CatalogOverridesPayload } | null = null;
@@ -225,18 +232,19 @@ async function fetchCatalogOverrides(force = false): Promise<CatalogOverridesPay
         headers: { Accept: 'application/json' },
       });
       if (!resp.ok) {
-        return { overrides: {}, reviews: [], announcements: [] };
+        return { overrides: {}, reviews: [], announcements: [], paymentMethods: [] };
       }
       const json = (await resp.json().catch(() => ({}))) as Partial<CatalogOverridesPayload>;
       const payload: CatalogOverridesPayload = {
         overrides: json.overrides || {},
         reviews: Array.isArray(json.reviews) ? json.reviews : [],
         announcements: Array.isArray(json.announcements) ? json.announcements : [],
+        paymentMethods: Array.isArray(json.paymentMethods) ? json.paymentMethods : [],
       };
       catalogOverridesCache = { ts: Date.now(), data: payload };
       return payload;
     } catch {
-      return { overrides: {}, reviews: [], announcements: [] };
+      return { overrides: {}, reviews: [], announcements: [], paymentMethods: [] };
     } finally {
       catalogOverridesInFlight = null;
     }
@@ -725,6 +733,24 @@ export function subscribeAnnouncements(cb: (items: Announcement[]) => void): Uns
   };
 }
 
+export function subscribePaymentMethods(cb: (items: PaymentMethodConfig[]) => void): Unsubscribe {
+  const emit = async (force = false) => {
+    const { paymentMethods } = await fetchCatalogOverrides(force);
+    cb(paymentMethods);
+  };
+  emit(false).catch(() => cb([]));
+  const unsub1 = subscribeCatalogInvalidation(() => {
+    emit(true).catch(() => {});
+  });
+  const unsub2 = subscribeDashboardInvalidation(() => {
+    emit(true).catch(() => {});
+  });
+  return () => {
+    unsub1();
+    unsub2();
+  };
+}
+
 export async function seedMarketplaceToFirestore(_forceOverwrite = false): Promise<{ addedCount: number }> {
   notifyCatalogInvalidation();
   return { addedCount: 0 };
@@ -928,7 +954,7 @@ export async function submitAddMoneyDeposit(params: {
   userId: string;
   userEmail: string;
   amountBdt: number;
-  method: PaymentMethod;
+  method: string;
   receiverNumber: string;
   senderNumber: string;
   transactionId: string;
@@ -953,8 +979,9 @@ export async function submitWithdrawalRequest(params: {
   userId: string;
   userEmail: string;
   wallet: WalletAccount;
-  method: PaymentMethod;
+  method: string;
   accountNumber: string;
+  accountHolderName?: string;
   amountBdt: number;
 }): Promise<string> {
   const res = await apiJson<{ ok: true; id: string }>('/api/wallet/withdraw', {
@@ -963,6 +990,7 @@ export async function submitWithdrawalRequest(params: {
       amountBdt: Math.round(Number(params.amountBdt) || 0),
       method: params.method,
       accountNumber: params.accountNumber.trim(),
+      accountHolderName: (params.accountHolderName || '').trim(),
     },
   });
   notifyDashboardInvalidation();
@@ -1287,7 +1315,8 @@ export async function trackAdEvent(
 // ADMIN DASHBOARD SNAPSHOT CACHE & SUBSCRIPTIONS (COOKIE RBAC)
 // =========================================================================
 
-interface AdminDashboardPayload {
+export interface AdminDashboardPayload {
+  superAdminEmail?: string;
   users: UserProfile[];
   wallets: WalletAccount[];
   walletTxs: WalletTransaction[];
@@ -1302,6 +1331,8 @@ interface AdminDashboardPayload {
   viewingSessions: AdViewingSession[];
   adRewardTransactions: AdRewardTransaction[];
   auditLogs: AuditLog[];
+  paymentMethods?: PaymentMethodConfig[];
+  deletionRequests?: AccountDeletionRequest[];
 }
 
 let adminSnapshotCache: { ts: number; data: AdminDashboardPayload } | null = null;
@@ -1552,19 +1583,120 @@ export async function adminAdjustWalletBalance(params: {
   currentWallet?: WalletAccount;
   mode: 'add' | 'deduct' | 'set';
   amountBdt: number;
+  reason?: string;
   note?: string;
-}): Promise<{ nextBalance: number }> {
-  const res = await apiJson<{ ok: true; nextBalance: number }>('/api/admin/wallet/adjust', {
+}): Promise<{ previousBalance: number; nextBalance: number; transactionId: string }> {
+  const cleanReason = (params.reason ?? params.note ?? '').trim();
+  const res = await apiJson<{ ok: true; previousBalance: number; nextBalance: number; transactionId: string }>(
+    '/api/admin/wallet/adjust',
+    {
+      method: 'POST',
+      body: {
+        targetUid: sanitizeId(params.targetUid),
+        mode: params.mode,
+        amountBdt: Math.round(Number(params.amountBdt) || 0),
+        reason: cleanReason,
+      },
+    }
+  );
+  notifyDashboardInvalidation();
+  return {
+    previousBalance: res.previousBalance,
+    nextBalance: res.nextBalance,
+    transactionId: res.transactionId,
+  };
+}
+
+export async function adminFetchUserDetail(uid: string): Promise<AdminUserDetailPayload> {
+  const res = await apiJson<AdminUserDetailPayload & { ok: true }>(
+    `/api/admin/users/${encodeURIComponent(uid)}`,
+    { method: 'GET' }
+  );
+  return res;
+}
+
+export async function adminUpdateUserProfile(
+  uid: string,
+  updates: { displayName?: string; phone?: string; language?: 'bn' | 'en'; adminNotes?: string; reason?: string }
+): Promise<UserProfile> {
+  const res = await apiJson<{ ok: true; profile: UserProfile }>(
+    `/api/admin/users/${encodeURIComponent(uid)}`,
+    { method: 'PATCH', body: updates }
+  );
+  notifyDashboardInvalidation();
+  return res.profile;
+}
+
+export async function adminFetchPaymentMethods(): Promise<PaymentMethodConfig[]> {
+  const res = await apiJson<{ ok: true; paymentMethods: PaymentMethodConfig[] }>('/api/admin/payment-methods', {
+    method: 'GET',
+  });
+  return res.paymentMethods || [];
+}
+
+export async function adminSavePaymentMethod(
+  pm: Partial<PaymentMethodConfig> & { name: string }
+): Promise<PaymentMethodConfig | null> {
+  const res = await apiJson<{ ok: true; paymentMethod: PaymentMethodConfig | null }>('/api/admin/payment-methods', {
     method: 'POST',
-    body: {
-      targetUid: sanitizeId(params.targetUid),
-      mode: params.mode,
-      amountBdt: Math.round(Number(params.amountBdt) || 0),
-      note: params.note || 'Admin balance update',
-    },
+    body: pm,
   });
   notifyDashboardInvalidation();
-  return { nextBalance: res.nextBalance };
+  notifyCatalogInvalidation();
+  return res.paymentMethod;
+}
+
+export async function adminDeletePaymentMethod(id: string): Promise<void> {
+  await apiJson(`/api/admin/payment-methods/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  notifyDashboardInvalidation();
+  notifyCatalogInvalidation();
+}
+
+export async function adminSendNotification(params: {
+  targetUid: string;
+  titleBn: string;
+  titleEn: string;
+  messageBn: string;
+  messageEn: string;
+  type?: 'order' | 'payment' | 'wallet' | 'referral' | 'system';
+}): Promise<{ recipientCount: number }> {
+  const res = await apiJson<{ ok: true; recipientCount: number }>('/api/admin/notifications/send', {
+    method: 'POST',
+    body: params,
+  });
+  notifyDashboardInvalidation();
+  return { recipientCount: res.recipientCount || 0 };
+}
+
+export async function adminFetchSecurityOverview(): Promise<AdminSecurityPayload> {
+  const res = await apiJson<AdminSecurityPayload & { ok: true }>('/api/admin/security', { method: 'GET' });
+  return res;
+}
+
+export async function adminRevokeSession(params: { sessionId?: string; targetUid?: string }): Promise<void> {
+  await apiJson('/api/admin/security/revoke-session', { method: 'POST', body: params });
+  notifyDashboardInvalidation();
+}
+
+export async function adminUnlockAuthAttempt(key: string): Promise<void> {
+  await apiJson('/api/admin/security/unlock-attempt', { method: 'POST', body: { key } });
+  notifyDashboardInvalidation();
+}
+
+export async function fetchServerAdAnalytics(): Promise<ServerAdAnalytics> {
+  try {
+    const resp = await fetch(apiUrl('/api/ads/analytics'), {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (!resp.ok) {
+      return { totalImpressions: 0, totalClicks: 0, ctr: 0, blockedFakeClicks: 0, byAd: {} };
+    }
+    return (await resp.json()) as ServerAdAnalytics;
+  } catch {
+    return { totalImpressions: 0, totalClicks: 0, ctr: 0, blockedFakeClicks: 0, byAd: {} };
+  }
 }
 
 export async function adminUpdateUserStatusServer(
@@ -1600,7 +1732,7 @@ export async function adminSendPromoReward(params: {
     body: {
       targetUid: params.userId,
       promoDeltaBdt: Math.max(0, Math.round(params.bonusBdt)),
-      note: `${params.titleEn}: ${params.messageEn}`.slice(0, 280),
+      reason: `${params.titleEn}: ${params.messageEn}`.slice(0, 280),
     },
   });
   notifyDashboardInvalidation();
@@ -1608,16 +1740,18 @@ export async function adminSendPromoReward(params: {
 
 export async function adminProcessWithdrawalServer(params: {
   withdrawalId: string;
-  decision: 'approve' | 'reject';
+  status?: Exclude<WithdrawalStatus, 'Pending'>;
+  decision?: 'approve' | 'processing' | 'paid' | 'reject';
   payoutReference?: string;
   adminNote?: string;
   rejectionReason?: string;
-}): Promise<void> {
-  await apiJson('/api/admin/process-withdrawal', {
+}): Promise<{ status: WithdrawalStatus; paidAt?: number }> {
+  const res = await apiJson<{ ok: true; status: WithdrawalStatus; paidAt?: number }>('/api/admin/process-withdrawal', {
     method: 'POST',
     body: params,
   });
   notifyDashboardInvalidation();
+  return { status: res.status, paidAt: res.paidAt };
 }
 
 export async function adminBroadcastAnnouncementServer(params: {
@@ -1905,7 +2039,14 @@ export async function adminSaveSiteSettings(settings: SiteSettings): Promise<voi
   const cleaned: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(settings)) {
     if (v !== undefined) {
-      if ((k === 'bkashLogoUrl' || k === 'nagadLogoUrl' || k === 'rocketLogoUrl') && typeof v === 'string') {
+      if (
+        (k === 'bkashLogoUrl' ||
+          k === 'nagadLogoUrl' ||
+          k === 'rocketLogoUrl' ||
+          k === 'logoUrl' ||
+          k === 'faviconUrl') &&
+        typeof v === 'string'
+      ) {
         cleaned[k] = v.trim().slice(0, 200000);
       } else {
         cleaned[k] = v;

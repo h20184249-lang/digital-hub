@@ -116,9 +116,32 @@ export interface UserProfile {
   promotionalCredits: number;
   language?: Language;
   status: 'active' | 'suspended';
+  adminNotes?: string;
+  lastLoginAt?: number;
+  lastLoginIp?: string;
   sessionRevokedAt?: number;
   createdAt: unknown;
   updatedAt: unknown;
+}
+
+export interface PaymentMethodConfig {
+  id: string;
+  code: string;
+  name: string;
+  type: 'mobile_banking' | 'bank_transfer' | 'custom';
+  accountNumber: string;
+  accountName: string;
+  instructionsBn: string;
+  instructionsEn: string;
+  requirementsBn: string;
+  requirementsEn: string;
+  minAmount: number;
+  maxAmount: number;
+  supportsDeposit: boolean;
+  supportsWithdrawal: boolean;
+  enabled: boolean;
+  sortOrder: number;
+  updatedAt?: number;
 }
 
 export interface AccountDeletionRequest {
@@ -287,10 +310,11 @@ export interface WalletTransaction {
     | 'watch_earn_coin_redeem'
     | 'withdrawal'
     | 'withdrawal_refund';
-  method: PaymentMethod | 'wallet' | 'system';
+  method: PaymentMethod | 'wallet' | 'system' | string;
   senderNumber?: string;
   transactionId: string;
   amountBdt: number;
+  signedDeltaBdt?: number;
   receiptDataUrl?: string;
   status: 'Verification Pending' | 'Approved' | 'Rejected';
   note?: string;
@@ -307,11 +331,13 @@ export interface Advertisement {
   descriptionBn?: string;
   descriptionEn?: string;
   targetUrl: string;
-  mediaType: 'external' | 'video';
+  mediaType: 'external' | 'video' | 'image';
   adFormat?: AdFormat;
   networkName?: string;
   mediaUrl?: string;
   thumbnailUrl?: string;
+  durationSeconds?: number;
+  rewardAmountBdt?: number;
   placement: AdPlacement;
   priority: number;
   sortOrder: number;
@@ -500,7 +526,7 @@ export interface AppNotification {
   titleEn: string;
   messageBn: string;
   messageEn: string;
-  type: 'order' | 'payment' | 'promo' | 'support' | 'wallet';
+  type: 'order' | 'payment' | 'promo' | 'support' | 'wallet' | 'referral' | 'system';
   read: boolean;
   createdAt?: unknown;
 }
@@ -521,8 +547,12 @@ export interface SupportTicket {
 export interface SiteSettings {
   id: string;
   siteName: string;
+  logoUrl?: string;
+  faviconUrl?: string;
   taglineBn?: string;
   taglineEn?: string;
+  descriptionBn?: string;
+  descriptionEn?: string;
   announcementBn?: string;
   announcementEn?: string;
   bkashNumber: string;
@@ -543,10 +573,16 @@ export interface SiteSettings {
   nagadNoteEn?: string;
   rocketNoteBn?: string;
   rocketNoteEn?: string;
+  registrationEnabled?: boolean;
+  emailAuthEnabled?: boolean;
+  phoneAuthEnabled?: boolean;
+  withdrawalsEnabled?: boolean;
+  minWithdrawalBdt?: number;
   referralBonusBdt: number;
   invitedUserRewardBdt?: number;
   referralEnabled?: boolean;
   referralMinOrderBdt?: number;
+  referralMaxRewardBdt?: number;
   referralEligibility?: 'verified_signup' | 'first_paid_order' | 'first_rewarded_ad';
   cashbackEnabled?: boolean;
   cashbackPercent?: number;
@@ -563,6 +599,10 @@ export interface SiteSettings {
   watchEarnMinRedeemCoins?: number;
   adsEnabled: boolean;
   maintenanceMode?: boolean;
+  defaultTheme?: 'light' | 'dark';
+  loginAlertsEnabled?: boolean;
+  contactEmail?: string;
+  contactPhone?: string;
   supportContact?: string;
   whatsappLink?: string;
   telegramLink?: string;
@@ -579,18 +619,25 @@ export interface SiteSettings {
   updatedAt?: unknown;
 }
 
+export type WithdrawalStatus = 'Pending' | 'Approved' | 'Processing' | 'Paid' | 'Rejected';
+
 export interface WithdrawalRequest {
   id: string;
   userId: string;
+  userName?: string;
   userEmail: string;
-  method: PaymentMethod;
+  method: string;
+  methodName?: string;
   accountNumber: string;
+  accountHolderName?: string;
   amountBdt: number;
-  status: 'Pending' | 'Approved' | 'Rejected';
+  status: WithdrawalStatus;
+  walletTxId?: string;
   payoutReference?: string;
   adminNote?: string;
   rejectionReason?: string;
   processedBy?: string;
+  paidAt?: unknown;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -629,8 +676,66 @@ export interface AuditLog {
   action: string;
   targetCollection: string;
   targetId: string;
+  targetUserId?: string;
+  previousValue?: string;
+  newValue?: string;
+  reason?: string;
+  transactionId?: string;
   summary: string;
   createdAt?: unknown;
+}
+
+export interface AdminUserDetailPayload {
+  profile: UserProfile;
+  wallet: WalletAccount;
+  summary: {
+    totalEarningsBdt: number;
+    referralEarningsBdt: number;
+    totalWithdrawnBdt: number;
+    pendingWithdrawalBdt: number;
+    referralCount: number;
+    orderCount: number;
+    activeSessionCount: number;
+  };
+  walletTxs: WalletTransaction[];
+  withdrawals: WithdrawalRequest[];
+  referrals: Referral[];
+  orders: Order[];
+  sessions: Array<{
+    id: string;
+    ipAddress: string;
+    userAgent: string;
+    createdAt: number;
+    lastSeenAt: number;
+    expiresAt: number;
+  }>;
+  auditLogs: AuditLog[];
+}
+
+export interface AdminSecurityPayload {
+  superAdminEmail: string;
+  activeSessions: Array<{
+    id: string;
+    userId: string;
+    userName: string;
+    userIdentifier: string;
+    role: 'super_admin' | 'admin' | 'user';
+    ipAddress: string;
+    userAgent: string;
+    createdAt: number;
+    lastSeenAt: number;
+    expiresAt: number;
+    isCurrent: boolean;
+  }>;
+  authAttempts: Array<{
+    key: string;
+    attempts: number;
+    windowStart: number;
+    lockedUntil: number;
+    isLocked: boolean;
+  }>;
+  deletionRequests: AccountDeletionRequest[];
+  flaggedReferrals: Referral[];
 }
 
 export interface ServerAdAnalytics {

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
@@ -9,15 +10,30 @@
     --dh-orange-light: #FF9B19;
     --dh-bg: #F3F6FF;
     --dh-card: #FFFFFF;
+    --dh-border: #E6ECFA;
     --dh-text: #172033;
-    --dh-muted: #777777;
+    --dh-muted: #64748B;
+  }
+
+  .dark {
+    --dh-bg: #0B1120;
+    --dh-card: #111827;
+    --dh-border: #1F2937;
+    --dh-text: #F8FAFC;
+    --dh-muted: #94A3B8;
   }
 
   html {
     font-family: var(--font-sans);
     scroll-behavior: smooth;
-    background-color: #F3F6FF;
-    color: #172033;
+    background-color: var(--dh-bg);
+    color: var(--dh-text);
+  }
+
+  body {
+    background-color: var(--dh-bg);
+    color: var(--dh-text);
+    transition: background-color 180ms ease, color 180ms ease;
   }
 
   h1, h2, h3, .font-display {
@@ -31,9 +47,13 @@
 }
 
 .dh-card {
-  background-color: #FFFFFF;
-  border: 1px solid #E6ECFA;
+  background-color: var(--dh-card);
+  border: 1px solid var(--dh-border);
   box-shadow: 0 4px 18px rgba(23, 32, 51, 0.045);
+}
+
+.dark .dh-card {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
 .dh-card-hover {
@@ -43,7 +63,7 @@
 .dh-card-hover:hover {
   transform: translateY(-2px);
   border-color: rgba(255, 133, 0, 0.45);
-  box-shadow: 0 10px 26px rgba(255, 133, 0, 0.1);
+  box-shadow: 0 10px 26px rgba(255, 133, 0, 0.12);
 }
 
 .dh-orange-gradient {

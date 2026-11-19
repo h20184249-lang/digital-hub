@@ -18,7 +18,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import { AuthMethod, AuthUser, Language, UserProfile } from '../types/marketplace';
+import { AuthMethod, AuthUser, Language, SiteSettings, UserProfile } from '../types/marketplace';
 import {
   AuthApiError,
   loginWithEmail,
@@ -35,6 +35,7 @@ interface AuthModalProps {
   open: boolean;
   onClose: () => void;
   lang: Language;
+  settings?: SiteSettings;
   initialMode?: 'login' | 'register';
   initialReferralCode?: string;
   onReferralCapture: (code: string) => void;
@@ -91,6 +92,7 @@ export function AuthModal({
   open,
   onClose,
   lang,
+  settings,
   initialMode = 'login',
   initialReferralCode = '',
   onReferralCapture,
@@ -98,8 +100,14 @@ export function AuthModal({
   supportTelegramUrl = 'https://t.me/zenvoofficial',
   supportWhatsappUrl = 'https://wa.me/8801352838945',
 }: AuthModalProps) {
+  const registrationAllowed = settings?.registrationEnabled !== false;
+  const phoneAuthAllowed = settings?.phoneAuthEnabled !== false;
+  const emailAuthAllowed = settings?.emailAuthEnabled !== false;
+
   const [mode, setMode] = useState<ModalMode>(initialMode);
-  const [authMethod, setAuthMethod] = useState<AuthMethod>('phone');
+  const [authMethod, setAuthMethod] = useState<AuthMethod>(() =>
+    !phoneAuthAllowed && emailAuthAllowed ? 'email' : 'phone'
+  );
   const [fullName, setFullName] = useState('');
   const [phoneInput, setPhoneInput] = useState('');
   const [emailInput, setEmailInput] = useState('');
@@ -122,7 +130,12 @@ export function AuthModal({
 
   useEffect(() => {
     if (open) {
-      setMode(initialMode);
+      setMode(initialMode === 'register' && !registrationAllowed ? 'login' : initialMode);
+      if (!phoneAuthAllowed && emailAuthAllowed) {
+        setAuthMethod('email');
+      } else if (phoneAuthAllowed && !emailAuthAllowed) {
+        setAuthMethod('phone');
+      }
       setErrorMsg('');
       setErrorCode('');
       setIssuedRecoveryCode('');
@@ -137,7 +150,7 @@ export function AuthModal({
         setReferralCode(initialReferralCode);
       }
     }
-  }, [open, initialMode, initialReferralCode]);
+  }, [open, initialMode, initialReferralCode, registrationAllowed, phoneAuthAllowed, emailAuthAllowed]);
 
   const normalizedPhone = useMemo(() => normalizeBangladeshPhoneClient(phoneInput), [phoneInput]);
   const normalizedEmail = useMemo(() => normalizeEmailAddressClient(emailInput), [emailInput]);
@@ -492,26 +505,26 @@ export function AuthModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-[#172033]/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-[#172033]/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
       role="dialog"
       aria-modal="true"
     >
-      <div className="relative w-full max-w-[440px] bg-white rounded-3xl shadow-2xl border border-[#E6ECFA] overflow-hidden my-auto">
+      <div className="relative w-full max-w-[440px] bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-[#E6ECFA] dark:border-slate-800 overflow-hidden my-auto">
         {/* Header Bar */}
-        <div className="px-5 py-4 bg-[#FFF7EE] border-b border-[#F3DFC8] flex items-center justify-between">
-          <DigitalHubLogo compact />
+        <div className="px-5 py-4 bg-[#FFF7EE] dark:bg-slate-800/80 border-b border-[#F3DFC8] dark:border-slate-800 flex items-center justify-between">
+          <DigitalHubLogo compact siteName={settings?.siteName} logoUrl={settings?.logoUrl} />
           <button
             type="button"
             onClick={onClose}
             aria-label="Close authentication modal"
-            className="w-8 h-8 rounded-xl bg-white border border-[#E6ECFA] text-[#777777] hover:text-[#172033] flex items-center justify-center transition-colors"
+            className="w-8 h-8 rounded-xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-700 text-[#777777] dark:text-slate-300 hover:text-[#172033] dark:hover:text-white flex items-center justify-center transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Body */}
-        <div className="p-5 sm:p-6 space-y-5 max-h-[82vh] overflow-y-auto">
+        <div className="p-5 sm:p-6 space-y-5 max-h-[82vh] overflow-y-auto text-[#172033] dark:text-slate-100">
           {/* Post-Registration / Post-Reset Recovery Code Screen */}
           {issuedRecoveryCode && issuedKind ? (
             <div className="space-y-4">
@@ -685,10 +698,11 @@ export function AuthModal({
                 <button
                   type="button"
                   onClick={() => switchMethod('phone')}
-                  className={`py-2.5 px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 border transition-all ${
+                  disabled={!phoneAuthAllowed && mode === 'register'}
+                  className={`py-2.5 px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 border transition-all disabled:opacity-45 ${
                     authMethod === 'phone'
-                      ? 'bg-[#FFF7EE] border-[#FF8500] text-[#172033] shadow-xs'
-                      : 'bg-[#F3F6FF] border-[#E6ECFA] text-[#64748B] hover:text-[#172033]'
+                      ? 'bg-[#FFF7EE] dark:bg-orange-500/15 border-[#FF8500] text-[#172033] dark:text-white shadow-xs'
+                      : 'bg-[#F3F6FF] dark:bg-slate-800 border-[#E6ECFA] dark:border-slate-700 text-[#64748B] dark:text-slate-300 hover:text-[#172033] dark:hover:text-white'
                   }`}
                 >
                   <Phone className={`w-3.5 h-3.5 shrink-0 ${authMethod === 'phone' ? 'text-[#FF8500]' : ''}`} />
@@ -697,16 +711,25 @@ export function AuthModal({
                 <button
                   type="button"
                   onClick={() => switchMethod('email')}
-                  className={`py-2.5 px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 border transition-all ${
+                  disabled={!emailAuthAllowed && mode === 'register'}
+                  className={`py-2.5 px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 border transition-all disabled:opacity-45 ${
                     authMethod === 'email'
-                      ? 'bg-[#FFF7EE] border-[#FF8500] text-[#172033] shadow-xs'
-                      : 'bg-[#F3F6FF] border-[#E6ECFA] text-[#64748B] hover:text-[#172033]'
+                      ? 'bg-[#FFF7EE] dark:bg-orange-500/15 border-[#FF8500] text-[#172033] dark:text-white shadow-xs'
+                      : 'bg-[#F3F6FF] dark:bg-slate-800 border-[#E6ECFA] dark:border-slate-700 text-[#64748B] dark:text-slate-300 hover:text-[#172033] dark:hover:text-white'
                   }`}
                 >
                   <Mail className={`w-3.5 h-3.5 shrink-0 ${authMethod === 'email' ? 'text-[#FF8500]' : ''}`} />
                   <span>{lang === 'bn' ? 'ইমেইল দিয়ে' : 'With Email'}</span>
                 </button>
               </div>
+
+              {mode === 'register' && !registrationAllowed && (
+                <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs font-semibold text-amber-800 dark:text-amber-300">
+                  {lang === 'bn'
+                    ? 'নতুন পাবলিক রেজিস্ট্রেশন বর্তমানে অ্যাডমিন দ্বারা সাময়িকভাবে বন্ধ রাখা হয়েছে।'
+                    : 'New public registration is currently paused by the administrator.'}
+                </div>
+              )}
 
               {/* Error Banner */}
               {errorMsg && (

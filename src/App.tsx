@@ -11,6 +11,7 @@ import {
   Gift,
   HelpCircle,
   LayoutGrid,
+  Lock,
   Search,
   Send,
   Share2,
@@ -20,6 +21,7 @@ import {
   TrendingUp,
   Tv,
   Users,
+  Wrench,
   Zap,
 } from 'lucide-react';
 import { testConnection } from './lib/firebase';
@@ -41,6 +43,7 @@ import {
   ManagedAdUnitConfig,
   Order,
   Payment,
+  PaymentMethodConfig,
   Product,
   ProductPackage,
   Referral,
@@ -64,6 +67,7 @@ import {
   subscribeCoupons,
   subscribeDashboardInvalidation,
   subscribeManagedAdUnits,
+  subscribePaymentMethods,
   subscribeProducts,
   subscribeSiteSettings,
 } from './lib/firestoreService';
@@ -93,6 +97,7 @@ import { ProductDetailPage } from './components/ProductDetailPage';
 import { WalletAndAddMoney } from './components/WalletAndAddMoney';
 import { CustomerDashboard } from './components/CustomerDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
+import { DigitalHubLogo } from './components/DigitalHubLogo';
 import {
   CategoryCatalogPage,
   OffersPage,
@@ -128,6 +133,16 @@ export default function App() {
   const [coupons, setCoupons] = useState<Coupon[]>(DEFAULT_COUPONS);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [settings, setSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodConfig[]>([]);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem('dh_theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+    } catch {
+      // Non-fatal
+    }
+    return 'light';
+  });
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -211,6 +226,7 @@ export default function App() {
     const u8 = subscribeAdNetworks(setAdNetworks);
     const u9 = subscribeManagedAdUnits(setAdUnitOverrides);
     const u10 = subscribeAnnouncements(setAnnouncements);
+    const u11 = subscribePaymentMethods(setPaymentMethods);
     return () => {
       u1();
       u2();
@@ -222,8 +238,47 @@ export default function App() {
       u8();
       u9();
       u10();
+      u11();
     };
   }, []);
+
+  useEffect(() => {
+    try {
+      const hasUserPref = localStorage.getItem('dh_theme');
+      if (!hasUserPref && (settings.defaultTheme === 'dark' || settings.defaultTheme === 'light')) {
+        setTheme(settings.defaultTheme);
+      }
+    } catch {
+      // Non-fatal
+    }
+  }, [settings.defaultTheme]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      try {
+        localStorage.setItem('dh_theme', next);
+      } catch {
+        // Non-fatal
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!settings.faviconUrl) return;
+    let link = document.querySelector<HTMLLinkElement>("link[rel='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = settings.faviconUrl;
+  }, [settings.faviconUrl]);
 
   useEffect(() => {
     langRef.current = lang;
@@ -293,8 +348,19 @@ export default function App() {
           setUser(session.user);
           setProfile(session.profile);
           setIsAdmin(session.isAdmin);
-          if (!session.isAdmin) {
+          const path = window.location.pathname;
+          if (session.user.role === 'super_admin') {
+            setAuthModalOpen(false);
+            setRoute((prev) =>
+              prev === 'home' || path === '/login' || path === '/register' || path === '/admin'
+                ? 'admin'
+                : prev
+            );
+          } else if (!session.isAdmin) {
             setRoute((prev) => (prev === 'admin' ? 'account' : prev));
+            if (path === '/login' || path === '/register') {
+              setAuthModalOpen(false);
+            }
           }
         } else {
           clearAuthState();
@@ -347,41 +413,42 @@ export default function App() {
   };
 
   useEffect(() => {
+    const brand = (settings.siteName || 'DIGITAL HUB').trim();
     const titleMap: Record<AppRoute, string> = {
-      home: 'DIGITAL HUB — Your Complete Digital Services Marketplace',
-      services: 'All Digital & Gaming Services — DIGITAL HUB',
-      'gaming-store': 'Gaming Top-Ups & Passes — DIGITAL HUB',
-      'gift-cards': 'Gift Cards & Game Vouchers — DIGITAL HUB',
-      'streaming-store': 'Streaming & OTT Subscriptions — DIGITAL HUB',
-      'telegram-store': 'Telegram Store — DIGITAL HUB',
-      'vip-groups': 'Telegram VIP Groups — DIGITAL HUB',
-      'telegram-stars': 'Telegram Stars — DIGITAL HUB',
-      'ai-marketplace': 'AI Tools Marketplace — DIGITAL HUB',
-      'software-store': 'Software Store — DIGITAL HUB',
-      'digital-products': 'Digital Products — DIGITAL HUB',
-      'graphic-design': 'Graphic Design Services — DIGITAL HUB',
-      'social-media': 'Social Media Services — DIGITAL HUB',
+      home: `${brand} — Your Complete Digital Services Marketplace`,
+      services: `All Digital & Gaming Services — ${brand}`,
+      'gaming-store': `Gaming Top-Ups & Passes — ${brand}`,
+      'gift-cards': `Gift Cards & Game Vouchers — ${brand}`,
+      'streaming-store': `Streaming & OTT Subscriptions — ${brand}`,
+      'telegram-store': `Telegram Store — ${brand}`,
+      'vip-groups': `Telegram VIP Groups — ${brand}`,
+      'telegram-stars': `Telegram Stars — ${brand}`,
+      'ai-marketplace': `AI Tools Marketplace — ${brand}`,
+      'software-store': `Software Store — ${brand}`,
+      'digital-products': `Digital Products — ${brand}`,
+      'graphic-design': `Graphic Design Services — ${brand}`,
+      'social-media': `Social Media Services — ${brand}`,
       'product-detail': detailProduct
-        ? `${detailProduct.titleEn} — DIGITAL HUB`
-        : 'Service Details — DIGITAL HUB',
-      offers: 'Special Offers & Coupons — DIGITAL HUB',
-      ads: 'Sponsored Partner Network — DIGITAL HUB',
-      'watch-earn': 'Watch & Earn — DIGITAL HUB',
-      orders: 'My Orders — DIGITAL HUB',
-      'add-money': 'Add Money — DIGITAL HUB',
-      wallet: 'My Wallet — DIGITAL HUB',
-      account: 'My Account — DIGITAL HUB',
-      support: 'Customer Support — DIGITAL HUB',
-      about: 'About Us — DIGITAL HUB',
-      contact: 'Contact Us — DIGITAL HUB',
-      privacy: 'Privacy Policy — DIGITAL HUB',
-      terms: 'Terms & Conditions — DIGITAL HUB',
-      refund: 'Refund Policy — DIGITAL HUB',
-      admin: 'Administrator Dashboard — DIGITAL HUB',
+        ? `${detailProduct.titleEn} — ${brand}`
+        : `Service Details — ${brand}`,
+      offers: `Special Offers & Coupons — ${brand}`,
+      ads: `Sponsored Partner Network — ${brand}`,
+      'watch-earn': `Watch & Earn — ${brand}`,
+      orders: `My Orders — ${brand}`,
+      'add-money': `Add Money — ${brand}`,
+      wallet: `My Wallet — ${brand}`,
+      account: `My Account — ${brand}`,
+      support: `Customer Support — ${brand}`,
+      about: `About Us — ${brand}`,
+      contact: `Contact Us — ${brand}`,
+      privacy: `Privacy Policy — ${brand}`,
+      terms: `Terms & Conditions — ${brand}`,
+      refund: `Refund Policy — ${brand}`,
+      admin: `Super Admin Dashboard — ${brand}`,
     };
-    document.title = titleMap[route] || 'DIGITAL HUB';
+    document.title = titleMap[route] || brand;
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [route, detailProduct]);
+  }, [route, detailProduct, settings.siteName]);
 
   const handleAddToCart = (product: Product, qty = 1, selectedPackage?: ProductPackage) => {
     const pkg =
@@ -521,35 +588,43 @@ export default function App() {
     'social-media',
   ].includes(route);
 
-  return (
-    <div className="min-h-screen flex flex-col bg-[#F3F6FF] text-[#172033] pb-20 lg:pb-0">
-      <Navbar
-        route={route}
-        setRoute={(r) => {
-          setCatalogSearchQuery('');
-          setRoute(r);
-        }}
-        lang={lang}
-        setLang={setLang}
-        user={user}
-        profile={profile}
-        walletBalanceBdt={wallet?.availableBalanceBdt || 0}
-        cartCount={cartCount}
-        onOpenCart={() => setCartOpen(true)}
-        isAdmin={isAdmin}
-        unreadNotifications={unreadNotifications}
-        onOpenAuth={() => {
-          setAuthInitialMode('login');
-          setAuthModalOpen(true);
-        }}
-        onOpenRegister={() => {
-          setAuthInitialMode('register');
-          setAuthModalOpen(true);
-        }}
-        announcementText={lang === 'bn' ? settings.announcementBn : settings.announcementEn}
-      />
+  const isMaintenanceBlocked = Boolean(settings.maintenanceMode && !isAdmin);
 
-      {route !== 'admin' && (
+  return (
+    <div className="min-h-screen flex flex-col bg-[#F3F6FF] dark:bg-slate-950 text-[#172033] dark:text-slate-100 pb-20 lg:pb-0 transition-colors">
+      {!isMaintenanceBlocked && route !== 'admin' && (
+        <Navbar
+          route={route}
+          setRoute={(r) => {
+            setCatalogSearchQuery('');
+            setRoute(r);
+          }}
+          lang={lang}
+          setLang={setLang}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          siteName={settings.siteName}
+          logoUrl={settings.logoUrl}
+          user={user}
+          profile={profile}
+          walletBalanceBdt={wallet?.availableBalanceBdt || 0}
+          cartCount={cartCount}
+          onOpenCart={() => setCartOpen(true)}
+          isAdmin={isAdmin}
+          unreadNotifications={unreadNotifications}
+          onOpenAuth={() => {
+            setAuthInitialMode('login');
+            setAuthModalOpen(true);
+          }}
+          onOpenRegister={() => {
+            setAuthInitialMode('register');
+            setAuthModalOpen(true);
+          }}
+          announcementText={lang === 'bn' ? settings.announcementBn : settings.announcementEn}
+        />
+      )}
+
+      {!isMaintenanceBlocked && route !== 'admin' && (
         <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 lg:px-8 pt-2">
           <ManagedPlacementSlot
             placement="top_header"
@@ -568,9 +643,75 @@ export default function App() {
       )}
 
       <main className="flex-1">
+        {isMaintenanceBlocked ? (
+          <div className="min-h-[82vh] flex items-center justify-center px-4 py-12">
+            <div className="max-w-lg w-full rounded-3xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 shadow-lg p-7 sm:p-9 text-center space-y-5">
+              <div className="flex justify-center">
+                <DigitalHubLogo siteName={settings.siteName} logoUrl={settings.logoUrl} />
+              </div>
+              <div className="w-14 h-14 rounded-2xl bg-[#FFF3E5] dark:bg-orange-950/50 text-[#FF8500] flex items-center justify-center mx-auto">
+                <Wrench className="w-7 h-7" />
+              </div>
+              <div className="space-y-2">
+                <h1 className="text-2xl font-extrabold text-[#172033] dark:text-slate-100">
+                  {lang === 'bn' ? 'সিস্টেম রক্ষণাবেক্ষণ চলছে' : 'Scheduled Maintenance in Progress'}
+                </h1>
+                <p className="text-sm text-[#777777] dark:text-slate-400 leading-relaxed">
+                  {lang === 'bn'
+                    ? `${settings.siteName || 'DIGITAL HUB'} বর্তমানে আপগ্রেড ও নিরাপত্তার কাজে সাময়িকভাবে বন্ধ আছে। খুব শীঘ্রই আমরা ফিরে আসছি।`
+                    : `${settings.siteName || 'DIGITAL HUB'} is temporarily offline for scheduled maintenance and upgrades. Please check back shortly.`}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-2 text-xs">
+                {settings.contactEmail && (
+                  <a
+                    href={`mailto:${settings.contactEmail}`}
+                    className="px-3.5 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 text-[#172033] dark:text-slate-200 font-semibold"
+                  >
+                    {settings.contactEmail}
+                  </a>
+                )}
+                {settings.telegramLink && (
+                  <a
+                    href={settings.telegramLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 rounded-xl bg-[#0088cc]/10 text-[#0088cc] font-bold"
+                  >
+                    Telegram Support
+                  </a>
+                )}
+                {settings.whatsappLink && (
+                  <a
+                    href={settings.whatsappLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-[#16A34A] font-bold"
+                  >
+                    WhatsApp
+                  </a>
+                )}
+              </div>
+              <div className="pt-3 border-t border-[#E6ECFA] dark:border-slate-800 flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthInitialMode('login');
+                    setAuthModalOpen(true);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-[#172033] dark:bg-[#FF8500] text-white text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  {lang === 'bn' ? 'অ্যাডমিন লগইন' : 'Admin Sign In'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+        <>
         {user && profile?.status === 'suspended' && (
           <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pt-4">
-            <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-[#DC2626] text-xs sm:text-sm font-bold flex flex-wrap items-center justify-between gap-2">
+            <div className="p-3.5 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 text-[#DC2626] text-xs sm:text-sm font-bold flex flex-wrap items-center justify-between gap-2">
               <span>
                 {lang === 'bn'
                   ? 'সতর্কতা: আপনার অ্যাকাউন্টটি অ্যাডমিন কর্তৃক সাময়িকভাবে ব্লক করা হয়েছে। নতুন অর্ডার বা উইথড্রয়াল বন্ধ রয়েছে।'
@@ -1272,6 +1413,7 @@ export default function App() {
             wallet={wallet}
             walletTxs={walletTxs}
             withdrawals={withdrawals}
+            paymentMethods={paymentMethods}
             settings={settings}
             onOpenAuth={() => setAuthModalOpen(true)}
           />
@@ -1330,6 +1472,9 @@ export default function App() {
         {route === 'admin' && (
           <AdminDashboard
             lang={lang}
+            setLang={setLang}
+            theme={theme}
+            onToggleTheme={toggleTheme}
             user={user}
             isAdmin={isAdmin}
             categories={categories}
@@ -1338,13 +1483,17 @@ export default function App() {
             adNetworks={adNetworks}
             managedAdUnits={managedAdUnits}
             banners={banners}
+            paymentMethods={paymentMethods}
             settings={settings}
+            onBackToStore={() => setRoute('home')}
             onLogout={handleLogout}
           />
         )}
+        </>
+        )}
       </main>
 
-      {route !== 'admin' && (
+      {!isMaintenanceBlocked && route !== 'admin' && (
         <SocialBarWidget
           advertisements={advertisements}
           adNetworks={adNetworks}
@@ -1354,7 +1503,7 @@ export default function App() {
       )}
 
       {/* Footer with all Storefront & Policy Links */}
-      {route !== 'admin' && (
+      {!isMaintenanceBlocked && route !== 'admin' && (
         <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 lg:px-8 mt-6">
           <ManagedPlacementSlot
             placement="footer"
@@ -1365,15 +1514,15 @@ export default function App() {
         </div>
       )}
 
-      <footer className="bg-white border-t border-[#E6ECFA] mt-8">
+      {!isMaintenanceBlocked && route !== 'admin' && (
+      <footer className="bg-white dark:bg-slate-900 border-t border-[#E6ECFA] dark:border-slate-800 mt-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 grid grid-cols-2 md:grid-cols-4 gap-6 text-xs">
           <div className="col-span-2 md:col-span-1 space-y-2">
             <p className="font-display font-extrabold text-base">
-              <span className="text-[#172033]">DIGITAL</span>{' '}
-              <span className="text-[#FF8500]">HUB</span>
+              <span className="text-[#172033] dark:text-slate-100">{settings.siteName || 'DIGITAL HUB'}</span>
             </p>
-            <p className="text-[#777777]">{lang === 'bn' ? settings.taglineBn : settings.taglineEn}</p>
-            <p className="text-[11px] font-mono-num text-[#777777]">
+            <p className="text-[#777777] dark:text-slate-400">{lang === 'bn' ? settings.taglineBn : settings.taglineEn}</p>
+            <p className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400">
               bKash: {settings.bkashNumber} · Nagad: {settings.nagadNumber} · Rocket: {settings.rocketNumber}
             </p>
           </div>
@@ -1474,15 +1623,17 @@ export default function App() {
             </div>
           </div>
         </div>
-        <div className="border-t border-[#E6ECFA] py-3 px-4 text-center text-[11px] text-[#777777]">
+        <div className="border-t border-[#E6ECFA] dark:border-slate-800 py-3 px-4 text-center text-[11px] text-[#777777] dark:text-slate-400">
           © {new Date().getFullYear()} {t(lang, 'footerRights')}
         </div>
       </footer>
+      )}
 
       <AuthModal
         open={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
         lang={lang}
+        settings={settings}
         initialMode={authInitialMode}
         initialReferralCode={capturedReferral}
         onReferralCapture={(code) => {

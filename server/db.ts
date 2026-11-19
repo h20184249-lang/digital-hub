@@ -358,7 +358,144 @@ const SCHEMA_STATEMENTS: string[] = [
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (collection, doc_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS payment_methods (
+    id TEXT PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'mobile_banking',
+    account_number TEXT NOT NULL DEFAULT '',
+    account_name TEXT NOT NULL DEFAULT '',
+    instructions_bn TEXT NOT NULL DEFAULT '',
+    instructions_en TEXT NOT NULL DEFAULT '',
+    requirements_bn TEXT NOT NULL DEFAULT '',
+    requirements_en TEXT NOT NULL DEFAULT '',
+    min_amount REAL NOT NULL DEFAULT 50,
+    max_amount REAL NOT NULL DEFAULT 100000,
+    supports_deposit INTEGER NOT NULL DEFAULT 1,
+    supports_withdrawal INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_payment_methods_sort ON payment_methods(sort_order ASC, name ASC)`,
+  `CREATE TABLE IF NOT EXISTS ad_stats (
+    ad_id TEXT PRIMARY KEY,
+    ad_format TEXT NOT NULL DEFAULT 'direct_link',
+    impressions INTEGER NOT NULL DEFAULT 0,
+    clicks INTEGER NOT NULL DEFAULT 0,
+    blocked_clicks INTEGER NOT NULL DEFAULT 0,
+    by_placement_json TEXT NOT NULL DEFAULT '{}',
+    last_event_at INTEGER NOT NULL DEFAULT 0
+  )`,
 ];
+
+async function seedDefaultPaymentMethodsIfEmpty(db: AppDatabase): Promise<void> {
+  const existing = await db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM payment_methods');
+  if (Number(existing?.cnt || 0) > 0) return;
+  const now = Date.now();
+  const defaults = [
+    {
+      id: 'pm_bkash',
+      code: 'bkash',
+      name: 'bKash',
+      type: 'mobile_banking',
+      accountNumber: '01727936180',
+      accountName: 'Personal',
+      instructionsBn: 'বিকাশ অ্যাপ থেকে Send Money করে সঠিক TrxID ও প্রেরক নম্বর জমা দিন।',
+      instructionsEn: 'Use bKash Send Money and submit the exact TrxID and sender number.',
+      requirementsBn: '১১ ডিজিটের বৈধ বাংলাদেশি বিকাশ নম্বর প্রয়োজন।',
+      requirementsEn: 'Valid 11-digit Bangladesh bKash number required.',
+      minAmount: 50,
+      maxAmount: 100000,
+      supportsDeposit: 1,
+      supportsWithdrawal: 1,
+      enabled: 1,
+      sortOrder: 1,
+    },
+    {
+      id: 'pm_nagad',
+      code: 'nagad',
+      name: 'Nagad',
+      type: 'mobile_banking',
+      accountNumber: '01772558301',
+      accountName: 'Personal',
+      instructionsBn: 'নগদ অ্যাপ থেকে Send Money করে সঠিক TrxID ও স্ক্রিনশট দিন।',
+      instructionsEn: 'Send Money via Nagad app and submit the exact TrxID and receipt.',
+      requirementsBn: '১১ ডিজিটের বৈধ বাংলাদেশি নগদ নম্বর প্রয়োজন।',
+      requirementsEn: 'Valid 11-digit Bangladesh Nagad number required.',
+      minAmount: 50,
+      maxAmount: 100000,
+      supportsDeposit: 1,
+      supportsWithdrawal: 1,
+      enabled: 1,
+      sortOrder: 2,
+    },
+    {
+      id: 'pm_rocket',
+      code: 'rocket',
+      name: 'Rocket',
+      type: 'mobile_banking',
+      accountNumber: '01799792541',
+      accountName: 'Personal',
+      instructionsBn: 'রকেট থেকে Send Money করে সঠিক TrxID ও স্ক্রিনশট দিন।',
+      instructionsEn: 'Send Money via Rocket and submit the exact TrxID and receipt.',
+      requirementsBn: '১১ বা ১২ ডিজিটের বৈধ রকেট নম্বর প্রয়োজন।',
+      requirementsEn: 'Valid 11 or 12-digit Rocket number required.',
+      minAmount: 50,
+      maxAmount: 100000,
+      supportsDeposit: 1,
+      supportsWithdrawal: 1,
+      enabled: 1,
+      sortOrder: 3,
+    },
+    {
+      id: 'pm_bank_transfer',
+      code: 'bank_transfer',
+      name: 'Bank Transfer',
+      type: 'bank_transfer',
+      accountNumber: '',
+      accountName: 'Bank Account / Routing Info',
+      instructionsBn: 'ব্যাংক ট্রান্সফারের জন্য অ্যাকাউন্ট নম্বর, অ্যাকাউন্টের নাম ও ব্যাংকের নাম উল্লেখ করুন।',
+      instructionsEn: 'Provide your Bank Name, Account Holder Name, Account Number, and Branch/Routing info.',
+      requirementsBn: 'ব্যাংকের নাম, অ্যাকাউন্ট নম্বর ও শাখার তথ্য দিন (সর্বনিম্ন ৳৫০০)।',
+      requirementsEn: 'Bank Name, Account Number & Branch details required (min ৳500).',
+      minAmount: 500,
+      maxAmount: 250000,
+      supportsDeposit: 0,
+      supportsWithdrawal: 1,
+      enabled: 1,
+      sortOrder: 4,
+    },
+  ];
+  for (const pm of defaults) {
+    await db.run(
+      `INSERT OR IGNORE INTO payment_methods (
+        id, code, name, type, account_number, account_name,
+        instructions_bn, instructions_en, requirements_bn, requirements_en,
+        min_amount, max_amount, supports_deposit, supports_withdrawal, enabled, sort_order, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        pm.id,
+        pm.code,
+        pm.name,
+        pm.type,
+        pm.accountNumber,
+        pm.accountName,
+        pm.instructionsBn,
+        pm.instructionsEn,
+        pm.requirementsBn,
+        pm.requirementsEn,
+        pm.minAmount,
+        pm.maxAmount,
+        pm.supportsDeposit,
+        pm.supportsWithdrawal,
+        pm.enabled,
+        pm.sortOrder,
+        now,
+      ]
+    );
+  }
+}
 
 async function ensureSchema(db: AppDatabase): Promise<void> {
   if (schemaInitializedFor.has(db)) return;
@@ -366,7 +503,7 @@ async function ensureSchema(db: AppDatabase): Promise<void> {
     await db.run(stmt);
   }
 
-  // Non-destructive upgrade for existing databases created by 0001_phone_auth.sql
+  // Non-destructive upgrade for existing databases created by 0001/0002 migrations
   const columns = await db.all<{ name: string; notnull: number }>('PRAGMA table_info(users)');
   const colNames = new Set(columns.map((c) => c.name));
   const phoneCol = columns.find((c) => c.name === 'phone_e164');
@@ -380,7 +517,18 @@ async function ensureSchema(db: AppDatabase): Promise<void> {
   if (!colNames.has('email_normalized')) {
     await db.run(`ALTER TABLE users ADD COLUMN email_normalized TEXT`);
   }
+  if (!colNames.has('admin_notes')) {
+    await db.run(`ALTER TABLE users ADD COLUMN admin_notes TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!colNames.has('last_login_at')) {
+    await db.run(`ALTER TABLE users ADD COLUMN last_login_at INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!colNames.has('last_login_ip')) {
+    await db.run(`ALTER TABLE users ADD COLUMN last_login_ip TEXT NOT NULL DEFAULT ''`);
+  }
   await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users(email_normalized)`);
+
+  await seedDefaultPaymentMethodsIfEmpty(db);
 
   schemaInitializedFor.add(db);
 }
