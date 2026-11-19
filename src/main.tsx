@@ -1,7 +1,22 @@
 import { createRoot } from 'react-dom/client';
 import { Capacitor } from '@capacitor/core';
+import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
+import { initPWAInstallCapture } from './hooks/usePWAInstall.ts';
 import './index.css';
+
+// Capture `beforeinstallprompt` and `appinstalled` before React mounts
+initPWAInstallCapture();
+
+// Register Service Worker on web (skip inside native Capacitor shell)
+if (!Capacitor.isNativePlatform() && 'serviceWorker' in navigator) {
+  registerSW({
+    immediate: true,
+    onRegisterError(error) {
+      console.warn('PWA Service Worker registration failed:', error);
+    },
+  });
+}
 
 async function initNativeAndroidShell() {
   if (!Capacitor.isNativePlatform()) return;

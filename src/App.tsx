@@ -98,6 +98,7 @@ import { WalletAndAddMoney } from './components/WalletAndAddMoney';
 import { CustomerDashboard } from './components/CustomerDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { DigitalHubLogo } from './components/DigitalHubLogo';
+import { MobileAppDownloadCard } from './components/MobileAppDownloadCard';
 import {
   CategoryCatalogPage,
   OffersPage,
@@ -844,6 +845,9 @@ export default function App() {
                 );
               })}
             </section>
+
+            {/* Download Our Mobile App (PWA Install Card) */}
+            <MobileAppDownloadCard lang={lang} siteName={settings.siteName} />
 
             {/* Homepage Top Ad Placement */}
             <BannerSlotView
