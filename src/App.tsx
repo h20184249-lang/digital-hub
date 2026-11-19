@@ -99,6 +99,7 @@ import { CustomerDashboard } from './components/CustomerDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
 import { DigitalHubLogo } from './components/DigitalHubLogo';
 import { MobileAppDownloadCard } from './components/MobileAppDownloadCard';
+import { CapCutRechargeSection } from './components/CapCutRechargeSection';
 import {
   CategoryCatalogPage,
   OffersPage,
@@ -167,6 +168,7 @@ export default function App() {
   });
   const [cartOpen, setCartOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [selectedPackageId, setSelectedPackageId] = useState<string | undefined>(undefined);
   const [capturedReferral, setCapturedReferral] = useState<string>(() => {
     const params = new URLSearchParams(window.location.search);
     const refParam = (params.get('ref') || '').trim();
@@ -409,7 +411,14 @@ export default function App() {
   };
 
   const openQuickOrder = (p: Product) => {
+    setSelectedPackageId(undefined);
     setModalInitialTab(p.packages && p.packages.length > 0 ? 'details' : 'checkout');
+    setSelectedProduct(p);
+  };
+
+  const openPackageCheckout = (p: Product, pkg: ProductPackage) => {
+    setSelectedPackageId(pkg.id);
+    setModalInitialTab('checkout');
     setSelectedProduct(p);
   };
 
@@ -862,6 +871,14 @@ export default function App() {
               units={managedAdUnits}
               adsEnabled={settings.adsEnabled}
               lang={lang}
+            />
+
+            {/* CapCut Premium Recharge Package Section */}
+            <CapCutRechargeSection
+              products={products}
+              lang={lang}
+              onOrderPackage={openPackageCheckout}
+              onAddToCart={(prod, pkg) => handleAddToCart(prod, 1, pkg)}
             />
 
             {/* 3. GAMING TOP-UPS & PASSES (MangoTopUp Core) */}
@@ -1696,7 +1713,11 @@ export default function App() {
       <ProductCheckoutModal
         product={selectedProduct}
         initialTab={modalInitialTab}
-        onClose={() => setSelectedProduct(null)}
+        initialPackageId={selectedPackageId}
+        onClose={() => {
+          setSelectedProduct(null);
+          setSelectedPackageId(undefined);
+        }}
         lang={lang}
         settings={settings}
         user={user}

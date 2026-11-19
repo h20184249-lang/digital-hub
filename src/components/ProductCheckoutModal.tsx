@@ -59,6 +59,7 @@ import { NativeAdRow } from './AutomaticAdEngine';
 interface ProductCheckoutModalProps {
   product: Product | null;
   initialTab?: 'details' | 'checkout';
+  initialPackageId?: string;
   onClose: () => void;
   lang: Language;
   settings: SiteSettings;
@@ -77,6 +78,7 @@ interface ProductCheckoutModalProps {
 export function ProductCheckoutModal({
   product,
   initialTab = 'details',
+  initialPackageId,
   onClose,
   lang,
   settings,
@@ -109,14 +111,15 @@ export function ProductCheckoutModal({
 
   useEffect(() => {
     const pkgs = product ? getNormalizedPackages(product) : [];
+    const matchedPkg = initialPackageId ? pkgs.find((p) => p.id === initialPackageId) : undefined;
     setTab(initialTab);
     setQuantity(1);
     setError('');
     setDoneOrderNumber('');
     setReferenceAttachmentUrl('');
-    setSelectedPackage(pkgs[0] || null);
+    setSelectedPackage(matchedPkg || pkgs[0] || null);
     setServiceValues(createInitialServiceOrderValues(user?.email || '', product || undefined));
-  }, [product?.id, initialTab]);
+  }, [product?.id, initialTab, initialPackageId]);
 
   useEffect(() => {
     if (user?.email && !serviceValues.deliveryEmail) {

@@ -192,6 +192,11 @@ export function ServiceOrderFormFields({
   })();
 
   const subEmailLabel = (() => {
+    if (bk === 'capcut') {
+      return lang === 'bn'
+        ? 'CapCut অ্যাকাউন্ট ইমেইল (Account Info) *'
+        : 'CapCut Account Email (Account Info) *';
+    }
     if (bk === 'canva') return lang === 'bn' ? 'ক্যানভা টিম ইনভাইট ইমেইল *' : 'Canva Account Email (For Team Invite) *';
     if (['photoshop', 'illustrator', 'premiere', 'lightroom', 'adobe'].includes(bk)) {
       return lang === 'bn' ? 'Adobe ID ডেলিভারি ইমেইল *' : 'Adobe ID Email (For License Invite) *';
