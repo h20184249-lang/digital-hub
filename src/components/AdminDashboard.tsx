@@ -521,7 +521,7 @@ export function AdminDashboard({
         <div className="dh-card rounded-3xl p-8 text-center space-y-3">
           <Shield className="w-10 h-10 text-[#FF8500] mx-auto animate-pulse" />
           <h2 className="text-lg font-bold text-[#172033]">Verifying Admin Security Session...</h2>
-          <p className="text-xs text-[#777777]">Checking backend RBAC session authorization for {user?.phone || 'your account'}</p>
+          <p className="text-xs text-[#777777]">Checking backend RBAC session authorization for {user?.phone || user?.email || 'your account'}</p>
         </div>
       </div>
     );
@@ -1047,7 +1047,7 @@ export function AdminDashboard({
         <aside className="lg:w-64 shrink-0 dh-card rounded-3xl p-3 space-y-1 self-start lg:sticky lg:top-20">
           <div className="px-3 py-2.5 border-b border-[#E6ECFA] mb-1">
             <p className="text-xs font-extrabold text-[#FF8500] uppercase tracking-wider">Admin Control</p>
-            <p className="text-[11px] text-[#777777] truncate">{user.phone || user.displayName}</p>
+            <p className="text-[11px] text-[#777777] truncate">{user.phone || user.email || user.displayName}</p>
           </div>
 
           <div className="flex lg:flex-col gap-1 overflow-x-auto lg:overflow-visible pb-2 lg:pb-0">
@@ -1173,7 +1173,7 @@ export function AdminDashboard({
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search name or mobile number..."
+                  placeholder="Search name, mobile, or email..."
                   className="px-3.5 py-2 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs"
                 />
               </div>
@@ -1215,16 +1215,19 @@ export function AdminDashboard({
                             >
                               {u.status}
                             </span>
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase bg-[#FFF3E5] text-[#FF8500]">
+                              {u.authMethod === 'email' ? 'EMAIL' : 'PHONE'}
+                            </span>
                           </div>
                           <p className="text-xs text-[#777777] font-mono-num">
-                            {u.email} · Wallet: <strong className="text-[#172033]">৳{userWallet?.availableBalanceBdt ?? 0}</strong> · Promo: ৳{u.promotionalCredits}
+                            {[u.phone, u.email].filter(Boolean).join(' · ') || u.uid} · Wallet: <strong className="text-[#172033]">৳{userWallet?.availableBalanceBdt ?? 0}</strong> · Promo: ৳{u.promotionalCredits}
                           </p>
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
                             onClick={() => {
-                              setWalletAdjTarget({ uid: u.uid, email: u.email, name: u.displayName });
+                              setWalletAdjTarget({ uid: u.uid, email: u.phone || u.email || u.uid, name: u.displayName });
                               setWalletAdjMode('add');
                               setWalletAdjAmount('100');
                               setWalletAdjNote('');
@@ -5637,7 +5640,7 @@ export function AdminDashboard({
                         Strict Role-Based Admin Security Lock
                       </h2>
                       <p className="text-xs text-[#777777]">
-                        Active Admin Session: <strong className="font-mono-num text-[#172033]">{user.phone || user.displayName}</strong>{' '}
+                        Active Admin Session: <strong className="font-mono-num text-[#172033]">{user.phone || user.email || user.displayName}</strong>{' '}
                         <span className="uppercase font-bold text-[#FF8500]">({user.role})</span>
                       </p>
                     </div>

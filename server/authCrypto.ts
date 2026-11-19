@@ -69,6 +69,40 @@ export function normalizeBangladeshPhone(raw: unknown): string | null {
   return null;
 }
 
+const EMAIL_VALIDATION_REGEX =
+  /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+export function normalizeEmailAddress(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized || normalized.length > 254) return null;
+  if (/\s/.test(normalized) || normalized.includes('..')) return null;
+  const atIdx = normalized.indexOf('@');
+  if (atIdx <= 0 || atIdx !== normalized.lastIndexOf('@')) return null;
+  const localPart = normalized.slice(0, atIdx);
+  const domainPart = normalized.slice(atIdx + 1);
+  if (localPart.length > 64 || domainPart.length < 3 || domainPart.length > 253) return null;
+  if (localPart.startsWith('.') || localPart.endsWith('.')) return null;
+  if (!EMAIL_VALIDATION_REGEX.test(normalized)) return null;
+  return normalized;
+}
+
+export function evaluatePasswordStrength(password: string): { score: number; acceptable: boolean } {
+  if (typeof password !== 'string' || password.length < 6 || password.length > 128) {
+    return { score: 0, acceptable: false };
+  }
+  let score = 0;
+  if (password.length >= 6) score += 1;
+  if (password.length >= 8) score += 1;
+  if (/[A-Z]/.test(password) && /[a-z]/.test(password)) score += 1;
+  if (/\d/.test(password) || /[^A-Za-z0-9]/.test(password)) score += 1;
+  // Require at least Fair strength (8+ chars OR mix of letters + digits/symbols)
+  const hasLetterAndNumberOrSymbol =
+    /[A-Za-z]/.test(password) && (/\d/.test(password) || /[^A-Za-z0-9]/.test(password));
+  const acceptable = password.length >= 8 || hasLetterAndNumberOrSymbol;
+  return { score, acceptable };
+}
+
 export function normalizeRecoveryCodeInput(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   return raw.toUpperCase().replace(/[^A-Z0-9]/g, '');

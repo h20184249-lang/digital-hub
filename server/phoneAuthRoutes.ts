@@ -1,12 +1,14 @@
 import express from 'express';
 import {
   clearSessionCookie,
+  evaluatePasswordStrength,
   generateRecoveryCode,
   generateReferralCode,
   generateSecureId,
   generateSessionToken,
   hashSecretPbkdf2,
   normalizeBangladeshPhone,
+  normalizeEmailAddress,
   normalizeRecoveryCodeInput,
   parseCookies,
   runDummyPasswordWork,
@@ -16,13 +18,21 @@ import {
   sha256Hex,
   verifySecretPbkdf2,
 } from './authCrypto.ts';
-import { AppDatabase, DatabaseNotConfiguredError, getAppDatabase, getRuntimeEnvVar } from './db.ts';
+import {
+  AppDatabase,
+  DatabaseNotConfiguredError,
+  extractPublicPhone,
+  getAppDatabase,
+  getEmptyPhoneStorageValue,
+  getRuntimeEnvVar,
+} from './db.ts';
 
 export interface SessionAuthUser {
   uid: string;
   phone: string;
   displayName: string;
   email: string;
+  authMethod: 'phone' | 'email';
   photoURL: string;
   role: 'super_admin' | 'admin' | 'user';
   status: 'active' | 'suspended';
@@ -38,9 +48,11 @@ export interface SessionAuthUser {
 
 interface UserRow {
   uid: string;
-  phone_e164: string;
+  phone_e164: string | null;
   display_name: string;
   email: string;
+  email_normalized?: string | null;
+  auth_method?: string | null;
   photo_url: string;
   password_hash: string;
   recovery_hash: string;
@@ -83,19 +95,50 @@ function getConfiguredAdminPhones(): Set<string> {
   return set;
 }
 
-function resolveUserRole(phoneE164: string, dbRole: string): 'super_admin' | 'admin' | 'user' {
-  if (getConfiguredAdminPhones().has(phoneE164)) return 'super_admin';
+function getConfiguredAdminEmails(): Set<string> {
+  const raw = getRuntimeEnvVar('ADMIN_EMAILS');
+  const set = new Set<string>();
+  if (!raw) return set;
+  for (const part of raw.split(',')) {
+    const normalized = normalizeEmailAddress(part.trim());
+    if (normalized) set.add(normalized);
+  }
+  return set;
+}
+
+function resolveUserRole(
+  phoneE164: string | null | undefined,
+  emailNormalized: string | null | undefined,
+  dbRole: string
+): 'super_admin' | 'admin' | 'user' {
+  const publicPhone = extractPublicPhone(phoneE164);
+  if (publicPhone && getConfiguredAdminPhones().has(publicPhone)) return 'super_admin';
+  const cleanEmail = typeof emailNormalized === 'string' ? emailNormalized.trim().toLowerCase() : '';
+  if (cleanEmail && getConfiguredAdminEmails().has(cleanEmail)) return 'super_admin';
   if (dbRole === 'super_admin' || dbRole === 'admin') return dbRole;
   return 'user';
 }
 
+function resolveAuthMethod(row: UserRow): 'phone' | 'email' {
+  if (row.auth_method === 'email') return 'email';
+  if (row.auth_method === 'phone') return 'phone';
+  return extractPublicPhone(row.phone_e164) ? 'phone' : 'email';
+}
+
+function getUserPrimaryIdentifier(user: { phone: string; email: string; uid: string }): string {
+  return user.phone || user.email || user.uid;
+}
+
 function toClientAuthUser(row: UserRow) {
-  const effectiveRole = resolveUserRole(row.phone_e164, row.role);
+  const publicPhone = extractPublicPhone(row.phone_e164);
+  const publicEmail = (row.email_normalized || row.email || '').trim().toLowerCase();
+  const effectiveRole = resolveUserRole(publicPhone, row.email_normalized, row.role);
   return {
     uid: row.uid,
-    phone: row.phone_e164,
+    phone: publicPhone,
     displayName: row.display_name,
-    email: row.email || '',
+    email: publicEmail,
+    authMethod: resolveAuthMethod(row),
     photoURL: row.photo_url || '',
     role: effectiveRole,
     status: row.status === 'suspended' ? 'suspended' : 'active',
@@ -105,14 +148,16 @@ function toClientAuthUser(row: UserRow) {
 }
 
 function toClientUserProfile(row: UserRow) {
-  const effectiveRole = resolveUserRole(row.phone_e164, row.role);
+  const publicPhone = extractPublicPhone(row.phone_e164);
+  const publicEmail = (row.email_normalized || row.email || '').trim().toLowerCase();
+  const effectiveRole = resolveUserRole(publicPhone, row.email_normalized, row.role);
   return {
     uid: row.uid,
     displayName: row.display_name,
-    email: row.email || '',
+    email: publicEmail,
     role: effectiveRole !== 'user' ? 'admin' : 'user',
-    authMethod: 'phone' as const,
-    phone: row.phone_e164,
+    authMethod: resolveAuthMethod(row),
+    phone: publicPhone,
     photoUrl: row.photo_url || '',
     referralCode: row.referral_code,
     referredBy: row.referred_by || '',
@@ -264,15 +309,18 @@ export async function resolveSessionFromRequest(
       .catch(() => {});
   }
 
-  const effectiveRole = resolveUserRole(row.phone_e164, row.role);
+  const publicPhone = extractPublicPhone(row.phone_e164);
+  const publicEmail = (row.email_normalized || row.email || '').trim().toLowerCase();
+  const effectiveRole = resolveUserRole(publicPhone, row.email_normalized, row.role);
   return {
     db,
     rawRow: row,
     user: {
       uid: row.uid,
-      phone: row.phone_e164,
+      phone: publicPhone,
       displayName: row.display_name,
-      email: row.email || '',
+      email: publicEmail,
+      authMethod: resolveAuthMethod(row),
       photoURL: row.photo_url || '',
       role: effectiveRole,
       status: row.status === 'suspended' ? 'suspended' : 'active',
@@ -417,7 +465,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
   const router = express.Router();
 
   // =========================================================================
-  // 1. REGISTRATION (Phone +880 & Password — PBKDF2-SHA256 + HTTP-only Cookie)
+  // 1. REGISTRATION (Phone +880 OR Email & Password — PBKDF2-SHA256 + HTTP-only Cookie)
   // =========================================================================
   router.post('/auth/register', async (req, res) => {
     try {
@@ -435,16 +483,29 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       }
 
       const body = (req.body || {}) as {
+        authMethod?: unknown;
         fullName?: unknown;
         phone?: unknown;
+        email?: unknown;
         password?: unknown;
         confirmPassword?: unknown;
         referralCode?: unknown;
         language?: unknown;
       };
 
+      const rawMethod = typeof body.authMethod === 'string' ? body.authMethod.trim().toLowerCase() : '';
+      const hasRawPhone = typeof body.phone === 'string' && body.phone.trim().length > 0;
+      const hasRawEmail = typeof body.email === 'string' && body.email.trim().length > 0;
+      const authMethod: 'phone' | 'email' =
+        rawMethod === 'email'
+          ? 'email'
+          : rawMethod === 'phone'
+            ? 'phone'
+            : !hasRawPhone && hasRawEmail
+              ? 'email'
+              : 'phone';
+
       const fullName = typeof body.fullName === 'string' ? body.fullName.trim().slice(0, 120) : '';
-      const phoneE164 = normalizeBangladeshPhone(body.phone);
       const password = typeof body.password === 'string' ? body.password : '';
       const confirmPassword =
         typeof body.confirmPassword === 'string' ? body.confirmPassword : undefined;
@@ -462,19 +523,45 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         });
         return;
       }
-      if (!phoneE164) {
-        res.status(400).json({
-          ok: false,
-          code: 'auth/invalid-phone-number',
-          error: 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন (যেমন: 017XXXXXXXX বা +88017XXXXXXXX)।',
-        });
-        return;
+
+      let phoneE164: string | null = null;
+      let emailNormalized: string | null = null;
+
+      if (authMethod === 'email') {
+        emailNormalized = normalizeEmailAddress(body.email);
+        if (!emailNormalized) {
+          res.status(400).json({
+            ok: false,
+            code: 'auth/invalid-email',
+            error: 'সঠিক ইমেইল ঠিকানা লিখুন (যেমন: name@gmail.com)।',
+          });
+          return;
+        }
+      } else {
+        phoneE164 = normalizeBangladeshPhone(body.phone);
+        if (!phoneE164) {
+          res.status(400).json({
+            ok: false,
+            code: 'auth/invalid-phone-number',
+            error: 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন (যেমন: 017XXXXXXXX বা +88017XXXXXXXX)।',
+          });
+          return;
+        }
       }
+
       if (password.length < 6 || password.length > 128) {
         res.status(400).json({
           ok: false,
           code: 'auth/weak-password',
           error: 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।',
+        });
+        return;
+      }
+      if (authMethod === 'email' && !evaluatePasswordStrength(password).acceptable) {
+        res.status(400).json({
+          ok: false,
+          code: 'auth/weak-password',
+          error: 'আরও শক্তিশালী পাসওয়ার্ড দিন (কমপক্ষে ৮ অক্ষর অথবা অক্ষর ও সংখ্যার সমন্বয়ে ৬+ অক্ষর)।',
         });
         return;
       }
@@ -489,18 +576,33 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       await recordFailedAttempt(db, `reg_ip:${ip}`, 10, 15 * 60 * 1000, 15 * 60 * 1000);
 
-      // Enforce unique Bangladesh mobile number
-      const existing = await db.first<{ uid: string }>(
-        'SELECT uid FROM users WHERE phone_e164 = ? LIMIT 1',
-        [phoneE164]
-      );
-      if (existing) {
-        res.status(409).json({
-          ok: false,
-          code: 'auth/phone-already-in-use',
-          error: 'এই মোবাইল নম্বর দিয়ে আগে থেকেই অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
-        });
-        return;
+      // Enforce strict uniqueness per identifier without merging accounts
+      if (authMethod === 'email' && emailNormalized) {
+        const existingEmail = await db.first<{ uid: string }>(
+          'SELECT uid FROM users WHERE email_normalized = ? LIMIT 1',
+          [emailNormalized]
+        );
+        if (existingEmail) {
+          res.status(409).json({
+            ok: false,
+            code: 'auth/email-already-in-use',
+            error: 'এই ইমেইল ঠিকানা দিয়ে আগে থেকেই অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
+          });
+          return;
+        }
+      } else if (phoneE164) {
+        const existingPhone = await db.first<{ uid: string }>(
+          'SELECT uid FROM users WHERE phone_e164 = ? LIMIT 1',
+          [phoneE164]
+        );
+        if (existingPhone) {
+          res.status(409).json({
+            ok: false,
+            code: 'auth/phone-already-in-use',
+            error: 'এই মোবাইল নম্বর দিয়ে আগে থেকেই অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
+          });
+          return;
+        }
       }
 
       const now = Date.now();
@@ -536,19 +638,26 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         }
       }
 
-      const initialRole = getConfiguredAdminPhones().has(phoneE164) ? 'super_admin' : 'user';
+      const initialRole = resolveUserRole(phoneE164, emailNormalized, 'user');
+      const storedPhoneValue =
+        authMethod === 'phone' ? phoneE164 : getEmptyPhoneStorageValue(db, uid);
+      const storedEmailDisplay = authMethod === 'email' && emailNormalized ? emailNormalized : '';
+      const storedEmailNormalized = authMethod === 'email' ? emailNormalized : null;
 
       try {
         await db.run(
           `INSERT INTO users (
-            uid, phone_e164, display_name, email, photo_url, password_hash, recovery_hash,
-            role, status, referral_code, referred_by, promotional_credits, language,
-            session_revoked_at, created_at, updated_at
-          ) VALUES (?, ?, ?, '', '', ?, ?, ?, 'active', ?, ?, 0, ?, 0, ?, ?)`,
+            uid, phone_e164, display_name, email, email_normalized, auth_method, photo_url,
+            password_hash, recovery_hash, role, status, referral_code, referred_by,
+            promotional_credits, language, session_revoked_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, 'active', ?, ?, 0, ?, 0, ?, ?)`,
           [
             uid,
-            phoneE164,
+            storedPhoneValue,
             fullName,
+            storedEmailDisplay,
+            storedEmailNormalized,
+            authMethod,
             passwordHash,
             recoveryHash,
             initialRole,
@@ -562,11 +671,19 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       } catch (insertErr) {
         const msg = insertErr instanceof Error ? insertErr.message : '';
         if (msg.toUpperCase().includes('UNIQUE')) {
-          res.status(409).json({
-            ok: false,
-            code: 'auth/phone-already-in-use',
-            error: 'এই মোবাইল নম্বর দিয়ে আগে থেকেই অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
-          });
+          if (authMethod === 'email') {
+            res.status(409).json({
+              ok: false,
+              code: 'auth/email-already-in-use',
+              error: 'এই ইমেইল ঠিকানা দিয়ে আগে থেকেই অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
+            });
+          } else {
+            res.status(409).json({
+              ok: false,
+              code: 'auth/phone-already-in-use',
+              error: 'এই মোবাইল নম্বর দিয়ে আগে থেকেই অ্যাকাউন্ট রয়েছে। অনুগ্রহ করে লগইন করুন।',
+            });
+          }
           return;
         }
         throw insertErr;
@@ -574,13 +691,16 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       await ensureWalletAccount(db, uid);
 
+      const primaryIdentifier =
+        authMethod === 'email' ? (emailNormalized || '') : (phoneE164 || '');
+
       if (referrerUid) {
         const refId = generateSecureId('ref', 8);
         const refPayload = {
           id: refId,
           referrerId: referrerUid,
           referredUserId: uid,
-          referredEmail: phoneE164,
+          referredEmail: primaryIdentifier,
           referralCode: validReferredBy,
           rewardAmountBdt: 30,
           status: 'pending',
@@ -600,8 +720,10 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         uid,
         'DIGITAL HUB-এ স্বাগতম!',
         'Welcome to DIGITAL HUB!',
-        `আপনার মোবাইল নম্বর (${phoneE164}) দিয়ে অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে।`,
-        `Your account with ${phoneE164} has been created successfully.`,
+        authMethod === 'email'
+          ? `আপনার ইমেইল (${primaryIdentifier}) দিয়ে অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে।`
+          : `আপনার মোবাইল নম্বর (${primaryIdentifier}) দিয়ে অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে।`,
+        `Your account with ${primaryIdentifier} has been created successfully.`,
         'system'
       );
 
@@ -629,7 +751,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
   });
 
   // =========================================================================
-  // 2. LOGIN (Phone +880 & Password — Brute-force protected + HTTP-only Cookie)
+  // 2. LOGIN (Phone +880 OR Email & Password — Brute-force protected + HTTP-only Cookie)
   // =========================================================================
   router.post('/auth/login', async (req, res) => {
     try {
@@ -646,54 +768,109 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
 
-      const body = (req.body || {}) as { phone?: unknown; password?: unknown };
-      const phoneE164 = normalizeBangladeshPhone(body.phone);
+      const body = (req.body || {}) as {
+        authMethod?: unknown;
+        phone?: unknown;
+        email?: unknown;
+        identifier?: unknown;
+        password?: unknown;
+      };
+
+      const rawMethod = typeof body.authMethod === 'string' ? body.authMethod.trim().toLowerCase() : '';
+      const rawPhone = typeof body.phone === 'string' ? body.phone.trim() : '';
+      const rawEmail = typeof body.email === 'string' ? body.email.trim() : '';
+      const rawIdentifier = typeof body.identifier === 'string' ? body.identifier.trim() : '';
       const password = typeof body.password === 'string' ? body.password : '';
 
-      if (!phoneE164) {
-        res.status(400).json({
-          ok: false,
-          code: 'auth/invalid-phone-number',
-          error: 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন (যেমন: 017XXXXXXXX বা +88017XXXXXXXX)।',
-        });
-        return;
-      }
-      if (!password || password.length < 6) {
-        res.status(400).json({
-          ok: false,
-          code: 'auth/invalid-credential',
-          error: 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।',
-        });
-        return;
+      const authMethod: 'phone' | 'email' =
+        rawMethod === 'email'
+          ? 'email'
+          : rawMethod === 'phone'
+            ? 'phone'
+            : !rawPhone && (rawEmail.length > 0 || rawIdentifier.includes('@'))
+              ? 'email'
+              : 'phone';
+
+      let phoneE164: string | null = null;
+      let emailNormalized: string | null = null;
+      let limitKey = '';
+
+      if (authMethod === 'email') {
+        emailNormalized = normalizeEmailAddress(rawEmail || rawIdentifier);
+        if (!emailNormalized) {
+          res.status(400).json({
+            ok: false,
+            code: 'auth/invalid-email',
+            error: 'সঠিক ইমেইল ঠিকানা লিখুন (যেমন: name@gmail.com)।',
+          });
+          return;
+        }
+        if (!password || password.length < 6) {
+          res.status(400).json({
+            ok: false,
+            code: 'auth/invalid-credential',
+            error: 'ইমেইল ঠিকানা অথবা পাসওয়ার্ড সঠিক নয়।',
+          });
+          return;
+        }
+        limitKey = `login_email:${emailNormalized}`;
+      } else {
+        phoneE164 = normalizeBangladeshPhone(rawPhone || rawIdentifier);
+        if (!phoneE164) {
+          res.status(400).json({
+            ok: false,
+            code: 'auth/invalid-phone-number',
+            error: 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন (যেমন: 017XXXXXXXX বা +88017XXXXXXXX)।',
+          });
+          return;
+        }
+        if (!password || password.length < 6) {
+          res.status(400).json({
+            ok: false,
+            code: 'auth/invalid-credential',
+            error: 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।',
+          });
+          return;
+        }
+        limitKey = `login_phone:${phoneE164}`;
       }
 
-      const phoneLimitKey = `login_phone:${phoneE164}`;
-      const phoneLimit = await checkAttemptLimit(db, phoneLimitKey, 5, 15 * 60 * 1000);
-      if (phoneLimit.blocked) {
-        const mins = Math.max(1, Math.ceil(phoneLimit.retryAfterSec / 60));
+      const accountLimit = await checkAttemptLimit(db, limitKey, 5, 15 * 60 * 1000);
+      if (accountLimit.blocked) {
+        const mins = Math.max(1, Math.ceil(accountLimit.retryAfterSec / 60));
         res.status(429).json({
           ok: false,
           code: 'auth/too-many-requests',
-          error: `নিরাপত্তার জন্য এই নম্বরে লগইন সাময়িকভাবে সীমিত করা হয়েছে। ${mins} মিনিট পর আবার চেষ্টা করুন।`,
+          error:
+            authMethod === 'email'
+              ? `নিরাপত্তার জন্য এই ইমেইলে লগইন সাময়িকভাবে সীমিত করা হয়েছে। ${mins} মিনিট পর আবার চেষ্টা করুন।`
+              : `নিরাপত্তার জন্য এই নম্বরে লগইন সাময়িকভাবে সীমিত করা হয়েছে। ${mins} মিনিট পর আবার চেষ্টা করুন।`,
         });
         return;
       }
 
-      const userRow = await db.first<UserRow>(
-        'SELECT * FROM users WHERE phone_e164 = ? LIMIT 1',
-        [phoneE164]
-      );
+      const userRow =
+        authMethod === 'email' && emailNormalized
+          ? await db.first<UserRow>('SELECT * FROM users WHERE email_normalized = ? LIMIT 1', [
+              emailNormalized,
+            ])
+          : await db.first<UserRow>('SELECT * FROM users WHERE phone_e164 = ? LIMIT 1', [phoneE164]);
+
+      const invalidCredMsg =
+        authMethod === 'email'
+          ? 'ইমেইল ঠিকানা অথবা পাসওয়ার্ড সঠিক নয়।'
+          : 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।';
 
       if (!userRow) {
         await runDummyPasswordWork(password);
         await Promise.all([
-          recordFailedAttempt(db, phoneLimitKey, 5, 15 * 60 * 1000, 15 * 60 * 1000),
+          recordFailedAttempt(db, limitKey, 5, 15 * 60 * 1000, 15 * 60 * 1000),
           recordFailedAttempt(db, `login_ip:${ip}`, 25, 15 * 60 * 1000, 15 * 60 * 1000),
         ]);
         res.status(401).json({
           ok: false,
           code: 'auth/invalid-credential',
-          error: 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।',
+          error: invalidCredMsg,
         });
         return;
       }
@@ -701,13 +878,13 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const passwordValid = await verifySecretPbkdf2(password, userRow.password_hash);
       if (!passwordValid) {
         await Promise.all([
-          recordFailedAttempt(db, phoneLimitKey, 5, 15 * 60 * 1000, 15 * 60 * 1000),
+          recordFailedAttempt(db, limitKey, 5, 15 * 60 * 1000, 15 * 60 * 1000),
           recordFailedAttempt(db, `login_ip:${ip}`, 25, 15 * 60 * 1000, 15 * 60 * 1000),
         ]);
         res.status(401).json({
           ok: false,
           code: 'auth/invalid-credential',
-          error: 'মোবাইল নম্বর অথবা পাসওয়ার্ড সঠিক নয়।',
+          error: invalidCredMsg,
         });
         return;
       }
@@ -722,7 +899,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       }
 
       // Sync configured super admin role if needed
-      const effectiveRole = resolveUserRole(userRow.phone_e164, userRow.role);
+      const effectiveRole = resolveUserRole(userRow.phone_e164, userRow.email_normalized, userRow.role);
       if (effectiveRole !== userRow.role) {
         await db.run('UPDATE users SET role = ?, updated_at = ? WHERE uid = ?', [
           effectiveRole,
@@ -732,7 +909,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         userRow.role = effectiveRole;
       }
 
-      await clearAttemptLimit(db, phoneLimitKey);
+      await clearAttemptLimit(db, limitKey);
       await ensureWalletAccount(db, userRow.uid);
       await createSessionForUser(db, userRow.uid, req, res);
 
@@ -767,6 +944,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         authenticated: true,
         uid: user.uid,
         phone: user.phone,
+        email: user.email,
+        authMethod: user.authMethod,
         role: user.role !== 'user' ? 'admin' : 'user',
         adminRole: user.role,
         status: user.status,
@@ -942,25 +1121,61 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       }
 
       const body = (req.body || {}) as {
+        authMethod?: unknown;
         phone?: unknown;
+        email?: unknown;
         recoveryCode?: unknown;
         newPassword?: unknown;
         confirmPassword?: unknown;
       };
-      const phoneE164 = normalizeBangladeshPhone(body.phone);
+      const rawMethod = typeof body.authMethod === 'string' ? body.authMethod.trim().toLowerCase() : '';
+      const hasRawPhone = typeof body.phone === 'string' && body.phone.trim().length > 0;
+      const hasRawEmail = typeof body.email === 'string' && body.email.trim().length > 0;
+      const authMethod: 'phone' | 'email' =
+        rawMethod === 'email'
+          ? 'email'
+          : rawMethod === 'phone'
+            ? 'phone'
+            : !hasRawPhone && hasRawEmail
+              ? 'email'
+              : 'phone';
+
       const normalizedRecovery = normalizeRecoveryCodeInput(body.recoveryCode);
       const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
       const confirmPassword =
         typeof body.confirmPassword === 'string' ? body.confirmPassword : undefined;
 
-      if (!phoneE164) {
-        res.status(400).json({
-          ok: false,
-          code: 'auth/invalid-phone-number',
-          error: 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।',
-        });
-        return;
+      let phoneE164: string | null = null;
+      let emailNormalized: string | null = null;
+      let resetLimitKey = '';
+      let loginLimitKey = '';
+
+      if (authMethod === 'email') {
+        emailNormalized = normalizeEmailAddress(body.email);
+        if (!emailNormalized) {
+          res.status(400).json({
+            ok: false,
+            code: 'auth/invalid-email',
+            error: 'সঠিক ইমেইল ঠিকানা লিখুন।',
+          });
+          return;
+        }
+        resetLimitKey = `reset_email:${emailNormalized}`;
+        loginLimitKey = `login_email:${emailNormalized}`;
+      } else {
+        phoneE164 = normalizeBangladeshPhone(body.phone);
+        if (!phoneE164) {
+          res.status(400).json({
+            ok: false,
+            code: 'auth/invalid-phone-number',
+            error: 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।',
+          });
+          return;
+        }
+        resetLimitKey = `reset_phone:${phoneE164}`;
+        loginLimitKey = `login_phone:${phoneE164}`;
       }
+
       if (normalizedRecovery.length < 8) {
         res.status(400).json({
           ok: false,
@@ -986,10 +1201,9 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
 
-      const phoneLimitKey = `reset_phone:${phoneE164}`;
-      const phoneLimit = await checkAttemptLimit(db, phoneLimitKey, 5, 15 * 60 * 1000);
-      if (phoneLimit.blocked) {
-        const mins = Math.max(1, Math.ceil(phoneLimit.retryAfterSec / 60));
+      const accountLimit = await checkAttemptLimit(db, resetLimitKey, 5, 15 * 60 * 1000);
+      if (accountLimit.blocked) {
+        const mins = Math.max(1, Math.ceil(accountLimit.retryAfterSec / 60));
         res.status(429).json({
           ok: false,
           code: 'auth/too-many-requests',
@@ -998,20 +1212,28 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
 
-      const userRow = await db.first<UserRow>(
-        'SELECT * FROM users WHERE phone_e164 = ? LIMIT 1',
-        [phoneE164]
-      );
+      const userRow =
+        authMethod === 'email' && emailNormalized
+          ? await db.first<UserRow>('SELECT * FROM users WHERE email_normalized = ? LIMIT 1', [
+              emailNormalized,
+            ])
+          : await db.first<UserRow>('SELECT * FROM users WHERE phone_e164 = ? LIMIT 1', [phoneE164]);
+
+      const invalidCodeMsg =
+        authMethod === 'email'
+          ? 'ইমেইল ঠিকানা অথবা ব্যাকআপ রিকভারি কোড সঠিক নয়।'
+          : 'মোবাইল নম্বর অথবা ব্যাকআপ রিকভারি কোড সঠিক নয়।';
+
       if (!userRow) {
         await runDummyPasswordWork(normalizedRecovery);
         await Promise.all([
-          recordFailedAttempt(db, phoneLimitKey, 5, 15 * 60 * 1000, 15 * 60 * 1000),
+          recordFailedAttempt(db, resetLimitKey, 5, 15 * 60 * 1000, 15 * 60 * 1000),
           recordFailedAttempt(db, `reset_ip:${ip}`, 10, 15 * 60 * 1000, 15 * 60 * 1000),
         ]);
         res.status(401).json({
           ok: false,
           code: 'auth/invalid-recovery-code',
-          error: 'মোবাইল নম্বর অথবা ব্যাকআপ রিকভারি কোড সঠিক নয়।',
+          error: invalidCodeMsg,
         });
         return;
       }
@@ -1019,13 +1241,13 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const codeValid = await verifySecretPbkdf2(normalizedRecovery, userRow.recovery_hash);
       if (!codeValid) {
         await Promise.all([
-          recordFailedAttempt(db, phoneLimitKey, 5, 15 * 60 * 1000, 15 * 60 * 1000),
+          recordFailedAttempt(db, resetLimitKey, 5, 15 * 60 * 1000, 15 * 60 * 1000),
           recordFailedAttempt(db, `reset_ip:${ip}`, 10, 15 * 60 * 1000, 15 * 60 * 1000),
         ]);
         res.status(401).json({
           ok: false,
           code: 'auth/invalid-recovery-code',
-          error: 'মোবাইল নম্বর অথবা ব্যাকআপ রিকভারি কোড সঠিক নয়।',
+          error: invalidCodeMsg,
         });
         return;
       }
@@ -1042,8 +1264,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         [newPasswordHash, nextRecoveryHash, now, now, userRow.uid]
       );
       await db.run('DELETE FROM sessions WHERE user_id = ?', [userRow.uid]);
-      await clearAttemptLimit(db, phoneLimitKey);
-      await clearAttemptLimit(db, `login_phone:${phoneE164}`);
+      await clearAttemptLimit(db, resetLimitKey);
+      await clearAttemptLimit(db, loginLimitKey);
 
       res.json({
         ok: true,
@@ -1171,8 +1393,13 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         body.language === 'en' ? 'en' : body.language === 'bn' ? 'bn' : user.language;
       const nextPhotoUrl =
         typeof body.photoUrl === 'string' ? body.photoUrl.slice(0, 250000) : rawRow.photo_url;
+      // Never auto-merge accounts: keep primary login email immutable for email accounts
       const nextEmail =
-        typeof body.email === 'string' ? body.email.trim().toLowerCase().slice(0, 200) : rawRow.email;
+        resolveAuthMethod(rawRow) === 'email'
+          ? (rawRow.email_normalized || rawRow.email || '')
+          : typeof body.email === 'string'
+            ? body.email.trim().toLowerCase().slice(0, 200)
+            : rawRow.email;
 
       let nextPhone = rawRow.phone_e164;
       if (typeof body.phone === 'string' && body.phone.trim()) {
@@ -1185,7 +1412,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           });
           return;
         }
-        if (normalized !== rawRow.phone_e164) {
+        if (normalized !== extractPublicPhone(rawRow.phone_e164)) {
           const taken = await db.first<{ uid: string }>(
             'SELECT uid FROM users WHERE phone_e164 = ? AND uid != ? LIMIT 1',
             [normalized, user.uid]
@@ -1327,7 +1554,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         id: orderId,
         orderNumber,
         customerId: user.uid,
-        customerEmail: user.phone,
+        customerEmail: getUserPrimaryIdentifier(user),
         customerName: user.displayName,
         productId: String(body.productId || 'custom').slice(0, 128),
         productTitleBn: String(body.productTitleBn || '').slice(0, 200),
@@ -1459,7 +1686,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         id: orderId,
         orderNumber,
         customerId: user.uid,
-        customerEmail: user.phone,
+        customerEmail: getUserPrimaryIdentifier(user),
         customerName: user.displayName,
         productId: String(body.productId || 'custom').slice(0, 128),
         productTitleBn: String(body.productTitleBn || '').slice(0, 200),
@@ -1472,7 +1699,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         totalPriceBdt,
         paymentMethod: 'wallet',
         transactionId: `WALLET-${orderNumber}`,
-        senderNumber: user.phone,
+        senderNumber: getUserPrimaryIdentifier(user),
         deliveryNote: String(body.deliveryNote || '').slice(0, 1500),
         referenceAttachmentUrl: String(body.referenceAttachmentUrl || '').slice(0, 400000),
         status: 'Processing',
@@ -1483,7 +1710,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const wtxObj = {
         id: txId,
         userId: user.uid,
-        userEmail: user.phone,
+        userEmail: getUserPrimaryIdentifier(user),
         type: 'purchase',
         method: 'wallet',
         transactionId: orderObj.transactionId,
@@ -1713,7 +1940,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const wdrObj = {
         id,
         userId: user.uid,
-        userEmail: user.phone,
+        userEmail: getUserPrimaryIdentifier(user),
         userName: user.displayName,
         amountBdt,
         method,
@@ -1771,7 +1998,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const payload = {
         id,
         userId: user.uid,
-        userEmail: user.phone,
+        userEmail: getUserPrimaryIdentifier(user),
         subject,
         message,
         orderNumber,
@@ -1874,7 +2101,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const payload = {
         id,
         userId: user.uid,
-        userEmail: user.phone,
+        userEmail: getUserPrimaryIdentifier(user),
         reason: String(body.reason || '').trim().slice(0, 500),
         status: 'pending',
         createdAt: now,
@@ -1930,7 +2157,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         id: refId,
         referrerId: owner.uid,
         referredUserId: user.uid,
-        referredEmail: user.phone,
+        referredEmail: getUserPrimaryIdentifier(user),
         referralCode: owner.referral_code,
         rewardAmountBdt: 30,
         status: 'pending',
@@ -1971,7 +2198,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const payload = {
         id,
         userId: user.uid,
-        userEmail: user.phone,
+        userEmail: getUserPrimaryIdentifier(user),
         networkId,
         networkName: String(body.networkName || networkId).slice(0, 120),
         amountBdt,
@@ -2060,7 +2287,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const payload = {
         id: sessionId,
         userId: user.uid,
-        userEmail: user.phone,
+        userEmail: getUserPrimaryIdentifier(user),
         unitId,
         provider,
         sessionToken,
@@ -2156,7 +2383,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         id,
         sessionId: id,
         userId: user.uid,
-        userEmail: user.phone,
+        userEmail: getUserPrimaryIdentifier(user),
         provider: 'WALLET',
         type: 'coin_redemption',
         coins: -coins,
@@ -2252,6 +2479,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         isAdmin: true,
         uid: resolved.user.uid,
         phone: resolved.user.phone,
+        email: resolved.user.email,
         role: resolved.user.role,
       });
     } catch {
@@ -2417,7 +2645,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       await insertAuditLog(
         db,
         user.uid,
-        user.phone,
+        getUserPrimaryIdentifier(user),
         decision === 'approve' ? 'PAYMENT_APPROVED' : 'PAYMENT_REJECTED',
         'payments',
         paymentId,
@@ -2524,7 +2752,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       await insertAuditLog(
         db,
         user.uid,
-        user.phone,
+        getUserPrimaryIdentifier(user),
         decision === 'approve' ? 'ADD_MONEY_APPROVED' : 'ADD_MONEY_REJECTED',
         'walletTransactions',
         walletTxId,
@@ -2567,7 +2795,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         now,
         orderId,
       ]);
-      await insertAuditLog(db, user.uid, user.phone, 'ORDER_STATUS_UPDATED', 'orders', orderId, `Set status ${status}`);
+      await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'ORDER_STATUS_UPDATED', 'orders', orderId, `Set status ${status}`);
       res.json({ ok: true });
     } catch (err) {
       handleRouteError(res, err, 'Failed to update order status.');
@@ -2612,7 +2840,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         `Your order #${String(existing.orderNumber || orderId)} has been completed.`,
         'order'
       );
-      await insertAuditLog(db, user.uid, user.phone, 'ORDER_COMPLETED', 'orders', orderId, `Completed order ${orderId}`);
+      await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'ORDER_COMPLETED', 'orders', orderId, `Completed order ${orderId}`);
       res.json({ ok: true, awardedCashbackBdt: 0, awardedReferralBdt: 0 });
     } catch (err) {
       handleRouteError(res, err, 'Failed to complete order.');
@@ -2682,7 +2910,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           [txId, row.customer_id, 'refund', amount, 'Approved', txId, JSON.stringify(wtx), now, now]
         );
       }
-      await insertAuditLog(db, user.uid, user.phone, 'ORDER_REFUND_CANCEL', 'orders', orderId, `Cancelled order ${orderId}`);
+      await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'ORDER_REFUND_CANCEL', 'orders', orderId, `Cancelled order ${orderId}`);
       res.json({ ok: true, status: 'Cancelled', refundedBdt });
     } catch (err) {
       handleRouteError(res, err, 'Failed to refund/cancel order.');
@@ -2757,7 +2985,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         'INSERT INTO wallet_transactions (id, user_id, type, amount_bdt, status, transaction_id, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [txId, targetUid, wtx.type, wtx.amountBdt, 'Approved', txId, JSON.stringify(wtx), now, now]
       );
-      await insertAuditLog(db, user.uid, user.phone, 'WALLET_ADJUSTED', 'walletAccounts', targetUid, `Delta ৳${delta} / promo ৳${promoDelta}`);
+      await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'WALLET_ADJUSTED', 'walletAccounts', targetUid, `Delta ৳${delta} / promo ৳${promoDelta}`);
       res.json({ ok: true, nextBalance: nextBal });
     } catch (err) {
       handleRouteError(res, err, 'Failed to adjust wallet.');
@@ -2777,7 +3005,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       if (status === 'suspended') {
         await db.run('DELETE FROM sessions WHERE user_id = ?', [targetUid]);
       }
-      await insertAuditLog(db, user.uid, user.phone, 'USER_STATUS_UPDATED', 'users', targetUid, `Set ${status}`);
+      await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'USER_STATUS_UPDATED', 'users', targetUid, `Set ${status}`);
       res.json({ ok: true });
     } catch (err) {
       handleRouteError(res, err, 'Failed to update user status.');
@@ -2835,7 +3063,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           );
         }
       }
-      await insertAuditLog(db, user.uid, user.phone, 'WITHDRAWAL_PROCESSED', 'withdrawals', wId, `${status} ${wId}`);
+      await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'WITHDRAWAL_PROCESSED', 'withdrawals', wId, `${status} ${wId}`);
       res.json({ ok: true });
     } catch (err) {
       handleRouteError(res, err, 'Failed to process withdrawal.');

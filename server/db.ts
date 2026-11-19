@@ -35,6 +35,15 @@ let cachedD1Instance: AppDatabase | null = null;
 let cachedD1RawRef: unknown = null;
 let cachedNodeSqlite: AppDatabase | null = null;
 let schemaInitializedFor: WeakSet<AppDatabase> = new WeakSet();
+let legacyNotNullPhoneDbs: WeakSet<AppDatabase> = new WeakSet();
+
+export function extractPublicPhone(raw: unknown): string {
+  return typeof raw === 'string' && raw.startsWith('+') ? raw : '';
+}
+
+export function getEmptyPhoneStorageValue(db: AppDatabase, uid: string): string | null {
+  return legacyNotNullPhoneDbs.has(db) ? `email:${uid}` : null;
+}
 
 export function setWorkerRuntimeEnv(env: Record<string, unknown>): void {
   workerRuntimeEnv = env;
@@ -150,9 +159,11 @@ async function openNodeSqliteDatabase(): Promise<AppDatabase | null> {
 const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS users (
     uid TEXT PRIMARY KEY,
-    phone_e164 TEXT NOT NULL UNIQUE,
+    phone_e164 TEXT UNIQUE,
     display_name TEXT NOT NULL,
     email TEXT NOT NULL DEFAULT '',
+    email_normalized TEXT UNIQUE,
+    auth_method TEXT NOT NULL DEFAULT 'phone',
     photo_url TEXT NOT NULL DEFAULT '',
     password_hash TEXT NOT NULL,
     recovery_hash TEXT NOT NULL,
@@ -354,6 +365,23 @@ async function ensureSchema(db: AppDatabase): Promise<void> {
   for (const stmt of SCHEMA_STATEMENTS) {
     await db.run(stmt);
   }
+
+  // Non-destructive upgrade for existing databases created by 0001_phone_auth.sql
+  const columns = await db.all<{ name: string; notnull: number }>('PRAGMA table_info(users)');
+  const colNames = new Set(columns.map((c) => c.name));
+  const phoneCol = columns.find((c) => c.name === 'phone_e164');
+  if (phoneCol && Number(phoneCol.notnull) === 1) {
+    legacyNotNullPhoneDbs.add(db);
+  }
+
+  if (!colNames.has('auth_method')) {
+    await db.run(`ALTER TABLE users ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'phone'`);
+  }
+  if (!colNames.has('email_normalized')) {
+    await db.run(`ALTER TABLE users ADD COLUMN email_normalized TEXT`);
+  }
+  await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users(email_normalized)`);
+
   schemaInitializedFor.add(db);
 }
 

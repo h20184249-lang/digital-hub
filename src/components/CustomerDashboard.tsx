@@ -12,6 +12,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  Mail,
   MessageSquare,
   Package,
   Phone,
@@ -437,17 +438,25 @@ export function CustomerDashboard({
             />
           ) : (
             <div className="w-14 h-14 rounded-2xl dh-orange-gradient text-white flex items-center justify-center text-xl font-extrabold">
-              {(profile?.displayName || user.displayName || user.phone || 'U').slice(0, 1).toUpperCase()}
+              {(profile?.displayName || user.displayName || user.phone || user.email || 'U').slice(0, 1).toUpperCase()}
             </div>
           )}
           <div>
             <h1 className="text-lg sm:text-xl font-extrabold text-[#172033]">
               {profile?.displayName || user.displayName || 'DIGITAL HUB Customer'}
             </h1>
-            <p className="text-xs font-mono-num text-[#777777]">{profile?.phone || user.phone}</p>
+            <p className="text-xs font-mono-num text-[#777777]">
+              {profile?.phone || user.phone || profile?.email || user.email}
+            </p>
             <div className="flex flex-wrap items-center gap-2 mt-1.5">
               <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-[#16A34A] text-[11px] font-bold">
-                {lang === 'bn' ? 'মোবাইল অ্যাকাউন্ট সক্রিয়' : 'Active Mobile Account'}
+                {(profile?.authMethod || user.authMethod) === 'email'
+                  ? lang === 'bn'
+                    ? 'ইমেইল অ্যাকাউন্ট সক্রিয়'
+                    : 'Active Email Account'
+                  : lang === 'bn'
+                    ? 'মোবাইল অ্যাকাউন্ট সক্রিয়'
+                    : 'Active Mobile Account'}
               </span>
               <span className="px-2 py-0.5 rounded-md bg-[#FFF3E5] text-[#FF8500] text-[11px] font-mono-num font-bold">
                 Ref: {refCode}
@@ -1290,6 +1299,19 @@ export function CustomerDashboard({
                   className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-sm font-mono-num"
                 />
               </div>
+              {(profile?.email || user.email) && (
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-[#172033] mb-1">
+                    {lang === 'bn' ? 'ইমেইল ঠিকানা' : 'Email Address'}
+                  </label>
+                  <input
+                    type="email"
+                    readOnly
+                    value={profile?.email || user.email || ''}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#EEF2FC] border border-[#E6ECFA] text-sm text-[#475569] cursor-not-allowed"
+                  />
+                </div>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
@@ -1333,15 +1355,27 @@ export function CustomerDashboard({
               </div>
             </div>
 
-            {/* Phone + Password Authentication & Recovery Code Management */}
+            {/* Account Authentication & Recovery Code Management */}
             <div className="p-4 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <p className="text-xs font-extrabold text-[#172033] flex items-center gap-1.5">
-                  <Phone className="w-3.5 h-3.5 text-[#FF8500]" />
-                  <span>{lang === 'bn' ? 'ফোন ও পাসওয়ার্ড নিরাপত্তা' : 'Mobile & Password Security'}</span>
+                  {(profile?.authMethod || user.authMethod) === 'email' ? (
+                    <Mail className="w-3.5 h-3.5 text-[#FF8500]" />
+                  ) : (
+                    <Phone className="w-3.5 h-3.5 text-[#FF8500]" />
+                  )}
+                  <span>
+                    {(profile?.authMethod || user.authMethod) === 'email'
+                      ? lang === 'bn'
+                        ? 'ইমেইল ও পাসওয়ার্ড নিরাপত্তা'
+                        : 'Email & Password Security'
+                      : lang === 'bn'
+                        ? 'ফোন ও পাসওয়ার্ড নিরাপত্তা'
+                        : 'Mobile & Password Security'}
+                  </span>
                 </p>
                 <span className="px-2.5 py-1 rounded-lg border bg-emerald-50 border-emerald-200 text-[#16A34A] text-[11px] font-bold font-mono-num">
-                  ✓ {profile?.phone || user.phone}
+                  ✓ {profile?.phone || user.phone || profile?.email || user.email}
                 </span>
               </div>
 

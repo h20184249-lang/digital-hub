@@ -38,6 +38,24 @@ export function normalizeBangladeshPhoneClient(raw: string): string | null {
   return null;
 }
 
+const CLIENT_EMAIL_REGEX =
+  /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+export function normalizeEmailAddressClient(raw: string): string | null {
+  if (typeof raw !== 'string') return null;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized || normalized.length > 254) return null;
+  if (/\s/.test(normalized) || normalized.includes('..')) return null;
+  const atIdx = normalized.indexOf('@');
+  if (atIdx <= 0 || atIdx !== normalized.lastIndexOf('@')) return null;
+  const localPart = normalized.slice(0, atIdx);
+  const domainPart = normalized.slice(atIdx + 1);
+  if (localPart.length > 64 || domainPart.length < 3 || domainPart.length > 253) return null;
+  if (localPart.startsWith('.') || localPart.endsWith('.')) return null;
+  if (!CLIENT_EMAIL_REGEX.test(normalized)) return null;
+  return normalized;
+}
+
 async function postAuthJson<T>(path: string, body?: Record<string, unknown>): Promise<T> {
   let resp: Response;
   try {
@@ -75,12 +93,14 @@ async function postAuthJson<T>(path: string, body?: Record<string, unknown>): Pr
   return data;
 }
 
-export interface RegisterPhoneResult {
+export interface RegisterAuthResult {
   ok: true;
   user: AuthUser;
   profile: UserProfile;
   recoveryCode: string;
 }
+
+export type RegisterPhoneResult = RegisterAuthResult;
 
 export async function registerWithPhone(input: {
   fullName: string;
@@ -89,8 +109,9 @@ export async function registerWithPhone(input: {
   confirmPassword: string;
   referralCode?: string;
   language?: Language;
-}): Promise<RegisterPhoneResult> {
-  return postAuthJson<RegisterPhoneResult>('/api/auth/register', {
+}): Promise<RegisterAuthResult> {
+  return postAuthJson<RegisterAuthResult>('/api/auth/register', {
+    authMethod: 'phone',
     fullName: input.fullName.trim(),
     phone: input.phone.trim(),
     password: input.password,
@@ -100,18 +121,51 @@ export async function registerWithPhone(input: {
   });
 }
 
-export interface LoginPhoneResult {
+export async function registerWithEmail(input: {
+  fullName: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  referralCode?: string;
+  language?: Language;
+}): Promise<RegisterAuthResult> {
+  return postAuthJson<RegisterAuthResult>('/api/auth/register', {
+    authMethod: 'email',
+    fullName: input.fullName.trim(),
+    email: input.email.trim().toLowerCase(),
+    password: input.password,
+    confirmPassword: input.confirmPassword,
+    referralCode: (input.referralCode || '').trim(),
+    language: input.language || 'bn',
+  });
+}
+
+export interface LoginAuthResult {
   ok: true;
   user: AuthUser;
   profile: UserProfile;
 }
 
+export type LoginPhoneResult = LoginAuthResult;
+
 export async function loginWithPhone(input: {
   phone: string;
   password: string;
-}): Promise<LoginPhoneResult> {
-  return postAuthJson<LoginPhoneResult>('/api/auth/login', {
+}): Promise<LoginAuthResult> {
+  return postAuthJson<LoginAuthResult>('/api/auth/login', {
+    authMethod: 'phone',
     phone: input.phone.trim(),
+    password: input.password,
+  });
+}
+
+export async function loginWithEmail(input: {
+  email: string;
+  password: string;
+}): Promise<LoginAuthResult> {
+  return postAuthJson<LoginAuthResult>('/api/auth/login', {
+    authMethod: 'email',
+    email: input.email.trim().toLowerCase(),
     password: input.password,
   });
 }
@@ -198,13 +252,17 @@ export async function regenerateRecoveryCode(
 }
 
 export async function resetPasswordWithRecoveryCode(input: {
-  phone: string;
+  authMethod?: 'phone' | 'email';
+  phone?: string;
+  email?: string;
   recoveryCode: string;
   newPassword: string;
   confirmPassword: string;
 }): Promise<{ ok: true; newRecoveryCode: string }> {
   return postAuthJson<{ ok: true; newRecoveryCode: string }>('/api/auth/forgot-password/reset', {
-    phone: input.phone.trim(),
+    authMethod: input.authMethod || (input.email && !input.phone ? 'email' : 'phone'),
+    phone: (input.phone || '').trim(),
+    email: (input.email || '').trim().toLowerCase(),
     recoveryCode: input.recoveryCode.trim(),
     newPassword: input.newPassword,
     confirmPassword: input.confirmPassword,

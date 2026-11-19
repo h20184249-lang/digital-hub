@@ -11,17 +11,21 @@ import {
   KeyRound,
   Lock,
   LogIn,
+  Mail,
   Phone,
   ShieldCheck,
   User as UserIcon,
   UserPlus,
   X,
 } from 'lucide-react';
-import { AuthUser, Language, UserProfile } from '../types/marketplace';
+import { AuthMethod, AuthUser, Language, UserProfile } from '../types/marketplace';
 import {
   AuthApiError,
+  loginWithEmail,
   loginWithPhone,
   normalizeBangladeshPhoneClient,
+  normalizeEmailAddressClient,
+  registerWithEmail,
   registerWithPhone,
   resetPasswordWithRecoveryCode,
 } from '../lib/authClient';
@@ -95,8 +99,10 @@ export function AuthModal({
   supportWhatsappUrl = 'https://wa.me/8801352838945',
 }: AuthModalProps) {
   const [mode, setMode] = useState<ModalMode>(initialMode);
+  const [authMethod, setAuthMethod] = useState<AuthMethod>('phone');
   const [fullName, setFullName] = useState('');
   const [phoneInput, setPhoneInput] = useState('');
+  const [emailInput, setEmailInput] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [referralCode, setReferralCode] = useState(initialReferralCode);
@@ -134,6 +140,7 @@ export function AuthModal({
   }, [open, initialMode, initialReferralCode]);
 
   const normalizedPhone = useMemo(() => normalizeBangladeshPhoneClient(phoneInput), [phoneInput]);
+  const normalizedEmail = useMemo(() => normalizeEmailAddressClient(emailInput), [emailInput]);
   const strength = useMemo(() => getPasswordStrength(password, lang), [password, lang]);
 
   if (!open) return null;
@@ -149,6 +156,13 @@ export function AuthModal({
     setShowConfirmPassword(false);
   };
 
+  const switchMethod = (next: AuthMethod) => {
+    if (next === authMethod) return;
+    setAuthMethod(next);
+    setErrorMsg('');
+    setErrorCode('');
+  };
+
   const handleCopyRecoveryCode = () => {
     if (!issuedRecoveryCode) return;
     navigator.clipboard.writeText(issuedRecoveryCode).catch(() => {});
@@ -160,6 +174,47 @@ export function AuthModal({
     e.preventDefault();
     setErrorMsg('');
     setErrorCode('');
+
+    if (authMethod === 'email') {
+      const normalized = normalizeEmailAddressClient(emailInput);
+      if (!normalized) {
+        setErrorMsg(
+          lang === 'bn'
+            ? 'সঠিক ইমেইল ঠিকানা লিখুন (যেমন: name@gmail.com)।'
+            : 'Please enter a valid email address (e.g. name@gmail.com).'
+        );
+        setErrorCode('auth/invalid-email');
+        return;
+      }
+      if (!password) {
+        setErrorMsg(lang === 'bn' ? 'আপনার পাসওয়ার্ড লিখুন।' : 'Please enter your password.');
+        return;
+      }
+
+      setBusy(true);
+      try {
+        const res = await loginWithEmail({
+          email: normalized,
+          password,
+        });
+        onAuthSuccess(res.user, res.profile, false, false);
+        onClose();
+      } catch (err) {
+        if (err instanceof AuthApiError) {
+          setErrorCode(err.code);
+          setErrorMsg(err.message);
+        } else {
+          setErrorMsg(
+            lang === 'bn'
+              ? 'লগইন সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।'
+              : 'Unable to sign in. Please try again.'
+          );
+        }
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
 
     const normalized = normalizeBangladeshPhoneClient(phoneInput);
     if (!normalized) {
@@ -212,6 +267,76 @@ export function AuthModal({
           ? 'অনুগ্রহ করে আপনার পূর্ণ নাম লিখুন (কমপক্ষে ২ অক্ষর)।'
           : 'Please enter your full name (at least 2 characters).'
       );
+      return;
+    }
+
+    if (authMethod === 'email') {
+      const normalized = normalizeEmailAddressClient(emailInput);
+      if (!normalized) {
+        setErrorMsg(
+          lang === 'bn'
+            ? 'সঠিক ইমেইল ঠিকানা লিখুন (যেমন: name@gmail.com)।'
+            : 'Please enter a valid email address (e.g. name@gmail.com).'
+        );
+        setErrorCode('auth/invalid-email');
+        return;
+      }
+      if (password.length < 6) {
+        setErrorMsg(
+          lang === 'bn'
+            ? 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'
+            : 'Password must be at least 6 characters long.'
+        );
+        return;
+      }
+      if (strength.score < 2) {
+        setErrorMsg(
+          lang === 'bn'
+            ? 'আরও শক্তিশালী পাসওয়ার্ড দিন (কমপক্ষে ৮ অক্ষর অথবা অক্ষর ও সংখ্যার সমন্বয়ে ৬+ অক্ষর)।'
+            : 'Please use a stronger password (at least 8 characters, or 6+ characters with letters and numbers).'
+        );
+        return;
+      }
+      if (password !== confirmPassword) {
+        setErrorMsg(
+          lang === 'bn'
+            ? 'পাসওয়ার্ড এবং কনফার্ম পাসওয়ার্ড মেলেনি।'
+            : 'Password and Confirm Password do not match.'
+        );
+        return;
+      }
+
+      if (referralCode.trim()) {
+        onReferralCapture(referralCode.trim().toUpperCase());
+      }
+
+      setBusy(true);
+      try {
+        const res = await registerWithEmail({
+          fullName: cleanName,
+          email: normalized,
+          password,
+          confirmPassword,
+          referralCode: referralCode.trim().toUpperCase(),
+          language: lang,
+        });
+        onAuthSuccess(res.user, res.profile, true, true);
+        setIssuedRecoveryCode(res.recoveryCode);
+        setIssuedKind('register');
+      } catch (err) {
+        if (err instanceof AuthApiError) {
+          setErrorCode(err.code);
+          setErrorMsg(err.message);
+        } else {
+          setErrorMsg(
+            lang === 'bn'
+              ? 'অ্যাকাউন্ট তৈরি করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।'
+              : 'Could not create account. Please try again.'
+          );
+        }
+      } finally {
+        setBusy(false);
+      }
       return;
     }
 
@@ -283,14 +408,31 @@ export function AuthModal({
     setErrorMsg('');
     setErrorCode('');
 
-    const normalized = normalizeBangladeshPhoneClient(phoneInput);
-    if (!normalized) {
-      setErrorMsg(
-        lang === 'bn'
-          ? 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।'
-          : 'Please enter a valid Bangladesh mobile number.'
-      );
-      return;
+    let normalizedPhoneVal = '';
+    let normalizedEmailVal = '';
+
+    if (authMethod === 'email') {
+      const normalized = normalizeEmailAddressClient(emailInput);
+      if (!normalized) {
+        setErrorMsg(
+          lang === 'bn'
+            ? 'সঠিক ইমেইল ঠিকানা লিখুন।'
+            : 'Please enter a valid email address.'
+        );
+        return;
+      }
+      normalizedEmailVal = normalized;
+    } else {
+      const normalized = normalizeBangladeshPhoneClient(phoneInput);
+      if (!normalized) {
+        setErrorMsg(
+          lang === 'bn'
+            ? 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।'
+            : 'Please enter a valid Bangladesh mobile number.'
+        );
+        return;
+      }
+      normalizedPhoneVal = normalized;
     }
 
     if (recoveryCodeInput.trim().length < 6) {
@@ -323,7 +465,9 @@ export function AuthModal({
     setBusy(true);
     try {
       const res = await resetPasswordWithRecoveryCode({
-        phone: normalized,
+        authMethod,
+        phone: normalizedPhoneVal || undefined,
+        email: normalizedEmailVal || undefined,
         recoveryCode: recoveryCodeInput.trim().toUpperCase(),
         newPassword: password,
         confirmPassword,
@@ -511,17 +655,57 @@ export function AuthModal({
                 </h2>
                 <p className="text-xs text-[#64748B] leading-relaxed">
                   {mode === 'login'
-                    ? lang === 'bn'
-                      ? 'আপনার বাংলাদেশি মোবাইল নম্বর (+880) ও পাসওয়ার্ড দিয়ে নিরাপদে লগইন করুন।'
-                      : 'Sign in securely using your Bangladesh mobile number (+880) and password.'
-                    : mode === 'register'
+                    ? authMethod === 'email'
                       ? lang === 'bn'
-                        ? 'আপনার মোবাইল নম্বর (+880) দিয়ে মুহূর্তেই DIGITAL HUB অ্যাকাউন্ট খুলুন।'
-                        : 'Register quickly with your Bangladesh mobile number (+880) and password.'
+                        ? 'আপনার ইমেইল ঠিকানা ও পাসওয়ার্ড দিয়ে নিরাপদে লগইন করুন।'
+                        : 'Sign in securely using your email address and password.'
                       : lang === 'bn'
-                        ? 'আপনার মোবাইল নম্বর এবং ব্যাকআপ রিকভারি কোড ব্যবহার করে নতুন পাসওয়ার্ড সেট করুন।'
-                        : 'Use your registered mobile number and backup recovery code to set a new password.'}
+                        ? 'আপনার বাংলাদেশি মোবাইল নম্বর (+880) ও পাসওয়ার্ড দিয়ে নিরাপদে লগইন করুন।'
+                        : 'Sign in securely using your Bangladesh mobile number (+880) and password.'
+                    : mode === 'register'
+                      ? authMethod === 'email'
+                        ? lang === 'bn'
+                          ? 'আপনার ইমেইল ঠিকানা ও পাসওয়ার্ড দিয়ে মুহূর্তেই DIGITAL HUB অ্যাকাউন্ট খুলুন।'
+                          : 'Create your DIGITAL HUB account with your email address and password.'
+                        : lang === 'bn'
+                          ? 'আপনার মোবাইল নম্বর (+880) দিয়ে মুহূর্তেই DIGITAL HUB অ্যাকাউন্ট খুলুন।'
+                          : 'Register quickly with your Bangladesh mobile number (+880) and password.'
+                      : authMethod === 'email'
+                        ? lang === 'bn'
+                          ? 'আপনার ইমেইল ঠিকানা এবং ব্যাকআপ রিকভারি কোড ব্যবহার করে নতুন পাসওয়ার্ড সেট করুন।'
+                          : 'Use your registered email address and backup recovery code to set a new password.'
+                        : lang === 'bn'
+                          ? 'আপনার মোবাইল নম্বর এবং ব্যাকআপ রিকভারি কোড ব্যবহার করে নতুন পাসওয়ার্ড সেট করুন।'
+                          : 'Use your registered mobile number and backup recovery code to set a new password.'}
                 </p>
+              </div>
+
+              {/* Method Switcher (Phone / Email) */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => switchMethod('phone')}
+                  className={`py-2.5 px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 border transition-all ${
+                    authMethod === 'phone'
+                      ? 'bg-[#FFF7EE] border-[#FF8500] text-[#172033] shadow-xs'
+                      : 'bg-[#F3F6FF] border-[#E6ECFA] text-[#64748B] hover:text-[#172033]'
+                  }`}
+                >
+                  <Phone className={`w-3.5 h-3.5 shrink-0 ${authMethod === 'phone' ? 'text-[#FF8500]' : ''}`} />
+                  <span>{lang === 'bn' ? 'ফোন নম্বর দিয়ে' : 'With Phone'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchMethod('email')}
+                  className={`py-2.5 px-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 border transition-all ${
+                    authMethod === 'email'
+                      ? 'bg-[#FFF7EE] border-[#FF8500] text-[#172033] shadow-xs'
+                      : 'bg-[#F3F6FF] border-[#E6ECFA] text-[#64748B] hover:text-[#172033]'
+                  }`}
+                >
+                  <Mail className={`w-3.5 h-3.5 shrink-0 ${authMethod === 'email' ? 'text-[#FF8500]' : ''}`} />
+                  <span>{lang === 'bn' ? 'ইমেইল দিয়ে' : 'With Email'}</span>
+                </button>
               </div>
 
               {/* Error Banner */}
@@ -531,16 +715,25 @@ export function AuthModal({
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{errorMsg}</span>
                   </div>
-                  {errorCode === 'auth/phone-already-in-use' && mode === 'register' && (
-                    <button
-                      type="button"
-                      onClick={() => switchMode('login')}
-                      className="px-3.5 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold inline-flex items-center gap-1"
-                    >
-                      <span>{lang === 'bn' ? 'এই নম্বর দিয়ে লগইন করুন' : 'Login with this number'}</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                  {(errorCode === 'auth/phone-already-in-use' || errorCode === 'auth/email-already-in-use') &&
+                    mode === 'register' && (
+                      <button
+                        type="button"
+                        onClick={() => switchMode('login')}
+                        className="px-3.5 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold inline-flex items-center gap-1"
+                      >
+                        <span>
+                          {errorCode === 'auth/email-already-in-use'
+                            ? lang === 'bn'
+                              ? 'এই ইমেইল দিয়ে লগইন করুন'
+                              : 'Login with this email'
+                            : lang === 'bn'
+                              ? 'এই নম্বর দিয়ে লগইন করুন'
+                              : 'Login with this number'}
+                        </span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   {errorCode === 'auth/user-not-found' && mode === 'login' && (
                     <button
                       type="button"
@@ -557,31 +750,56 @@ export function AuthModal({
               {/* LOGIN FORM */}
               {mode === 'login' && (
                 <form onSubmit={handleLoginSubmit} className="space-y-4">
-                  <div className="space-y-1.5">
-                    <label className="block text-xs font-bold text-[#172033]">
-                      {lang === 'bn' ? 'বাংলাদেশি মোবাইল নম্বর' : 'Bangladesh Mobile Number'}
-                    </label>
-                    <div className="flex items-center rounded-xl bg-[#F3F6FF] border border-[#DCE4F7] focus-within:border-[#FF8500] focus-within:bg-white transition-colors overflow-hidden">
-                      <span className="px-3 py-2.5 bg-[#E9EFFC] text-[#172033] text-xs font-mono-num font-extrabold border-r border-[#DCE4F7] flex items-center gap-1 shrink-0">
-                        <Phone className="w-3.5 h-3.5 text-[#FF8500]" />
-                        +880
-                      </span>
-                      <input
-                        type="tel"
-                        required
-                        autoComplete="tel"
-                        value={phoneInput}
-                        onChange={(e) => setPhoneInput(e.target.value)}
-                        placeholder="017XXXXXXXX"
-                        className="w-full px-3 py-2.5 bg-transparent text-sm font-mono-num text-[#172033] focus:outline-none"
-                      />
+                  {authMethod === 'phone' ? (
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-bold text-[#172033]">
+                        {lang === 'bn' ? 'বাংলাদেশি মোবাইল নম্বর' : 'Bangladesh Mobile Number'}
+                      </label>
+                      <div className="flex items-center rounded-xl bg-[#F3F6FF] border border-[#DCE4F7] focus-within:border-[#FF8500] focus-within:bg-white transition-colors overflow-hidden">
+                        <span className="px-3 py-2.5 bg-[#E9EFFC] text-[#172033] text-xs font-mono-num font-extrabold border-r border-[#DCE4F7] flex items-center gap-1 shrink-0">
+                          <Phone className="w-3.5 h-3.5 text-[#FF8500]" />
+                          +880
+                        </span>
+                        <input
+                          type="tel"
+                          required
+                          autoComplete="tel"
+                          value={phoneInput}
+                          onChange={(e) => setPhoneInput(e.target.value)}
+                          placeholder="017XXXXXXXX"
+                          className="w-full px-3 py-2.5 bg-transparent text-sm font-mono-num text-[#172033] focus:outline-none"
+                        />
+                      </div>
+                      {normalizedPhone && (
+                        <p className="text-[11px] font-semibold text-[#16A34A] font-mono-num">
+                          ✓ {lang === 'bn' ? 'সঠিক নম্বর:' : 'Normalized:'} {normalizedPhone}
+                        </p>
+                      )}
                     </div>
-                    {normalizedPhone && (
-                      <p className="text-[11px] font-semibold text-[#16A34A] font-mono-num">
-                        ✓ {lang === 'bn' ? 'সঠিক নম্বর:' : 'Normalized:'} {normalizedPhone}
-                      </p>
-                    )}
-                  </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-bold text-[#172033]">
+                        {lang === 'bn' ? 'ইমেইল ঠিকানা' : 'Email Address'}
+                      </label>
+                      <div className="relative">
+                        <Mail className="w-4 h-4 text-[#FF8500] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="email"
+                          required
+                          autoComplete="email"
+                          value={emailInput}
+                          onChange={(e) => setEmailInput(e.target.value)}
+                          placeholder="name@gmail.com"
+                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#DCE4F7] focus:border-[#FF8500] focus:bg-white text-sm text-[#172033] focus:outline-none transition-colors"
+                        />
+                      </div>
+                      {normalizedEmail && (
+                        <p className="text-[11px] font-semibold text-[#16A34A] font-mono-num truncate">
+                          ✓ {lang === 'bn' ? 'ইমেইল:' : 'Email:'} {normalizedEmail}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
@@ -629,9 +847,13 @@ export function AuthModal({
                         ? lang === 'bn'
                           ? 'লগইন হচ্ছে...'
                           : 'Signing in...'
-                        : lang === 'bn'
-                          ? 'লগইন করুন'
-                          : 'Login'}
+                        : authMethod === 'email'
+                          ? lang === 'bn'
+                            ? 'ইমেইল দিয়ে লগইন করুন'
+                            : 'Login with Email'
+                          : lang === 'bn'
+                            ? 'ফোন নম্বর দিয়ে লগইন করুন'
+                            : 'Login with Phone'}
                     </span>
                   </button>
 
@@ -671,43 +893,82 @@ export function AuthModal({
                     </div>
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="block text-xs font-bold text-[#172033]">
-                      {lang === 'bn' ? 'বাংলাদেশি মোবাইল নম্বর (+880)' : 'Bangladesh Mobile Number (+880)'}
-                    </label>
-                    <div className="flex items-center rounded-xl bg-[#F3F6FF] border border-[#DCE4F7] focus-within:border-[#FF8500] focus-within:bg-white transition-colors overflow-hidden">
-                      <span className="px-3 py-2.5 bg-[#E9EFFC] text-[#172033] text-xs font-mono-num font-extrabold border-r border-[#DCE4F7] flex items-center gap-1 shrink-0">
-                        <Phone className="w-3.5 h-3.5 text-[#FF8500]" />
-                        +880
-                      </span>
-                      <input
-                        type="tel"
-                        required
-                        autoComplete="tel"
-                        value={phoneInput}
-                        onChange={(e) => setPhoneInput(e.target.value)}
-                        placeholder="017XXXXXXXX"
-                        className="w-full px-3 py-2.5 bg-transparent text-sm font-mono-num text-[#172033] focus:outline-none"
-                      />
+                  {authMethod === 'phone' ? (
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-[#172033]">
+                        {lang === 'bn' ? 'বাংলাদেশি মোবাইল নম্বর (+880)' : 'Bangladesh Mobile Number (+880)'}
+                      </label>
+                      <div className="flex items-center rounded-xl bg-[#F3F6FF] border border-[#DCE4F7] focus-within:border-[#FF8500] focus-within:bg-white transition-colors overflow-hidden">
+                        <span className="px-3 py-2.5 bg-[#E9EFFC] text-[#172033] text-xs font-mono-num font-extrabold border-r border-[#DCE4F7] flex items-center gap-1 shrink-0">
+                          <Phone className="w-3.5 h-3.5 text-[#FF8500]" />
+                          +880
+                        </span>
+                        <input
+                          type="tel"
+                          required
+                          autoComplete="tel"
+                          value={phoneInput}
+                          onChange={(e) => setPhoneInput(e.target.value)}
+                          placeholder="017XXXXXXXX"
+                          className="w-full px-3 py-2.5 bg-transparent text-sm font-mono-num text-[#172033] focus:outline-none"
+                        />
+                      </div>
+                      {phoneInput.trim() && (
+                        <p
+                          className={`text-[11px] font-semibold font-mono-num ${
+                            normalizedPhone ? 'text-[#16A34A]' : 'text-[#DC2626]'
+                          }`}
+                        >
+                          {normalizedPhone
+                            ? `✓ ${lang === 'bn' ? 'ভেরিফায়েড ফরম্যাট:' : 'Format OK:'} ${normalizedPhone}`
+                            : lang === 'bn'
+                              ? 'সঠিক ১১-ডিজিট নম্বর দিন (013–019 দিয়ে শুরু)'
+                              : 'Enter a valid 11-digit BD number (starts with 013–019)'}
+                        </p>
+                      )}
                     </div>
-                    {phoneInput.trim() && (
-                      <p
-                        className={`text-[11px] font-semibold font-mono-num ${
-                          normalizedPhone ? 'text-[#16A34A]' : 'text-[#DC2626]'
-                        }`}
-                      >
-                        {normalizedPhone
-                          ? `✓ ${lang === 'bn' ? 'ভেরিফায়েড ফরম্যাট:' : 'Format OK:'} ${normalizedPhone}`
-                          : lang === 'bn'
-                            ? 'সঠিক ১১-ডিজিট নম্বর দিন (013–019 দিয়ে শুরু)'
-                            : 'Enter a valid 11-digit BD number (starts with 013–019)'}
-                      </p>
-                    )}
-                  </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-[#172033]">
+                        {lang === 'bn' ? 'ইমেইল ঠিকানা (Gmail বা যেকোনো বৈধ ইমেইল)' : 'Email Address'}
+                      </label>
+                      <div className="relative">
+                        <Mail className="w-4 h-4 text-[#FF8500] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="email"
+                          required
+                          autoComplete="email"
+                          value={emailInput}
+                          onChange={(e) => setEmailInput(e.target.value)}
+                          placeholder="name@gmail.com"
+                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#DCE4F7] focus:border-[#FF8500] focus:bg-white text-sm text-[#172033] focus:outline-none transition-colors"
+                        />
+                      </div>
+                      {emailInput.trim() && (
+                        <p
+                          className={`text-[11px] font-semibold font-mono-num truncate ${
+                            normalizedEmail ? 'text-[#16A34A]' : 'text-[#DC2626]'
+                          }`}
+                        >
+                          {normalizedEmail
+                            ? `✓ ${lang === 'bn' ? 'সঠিক ইমেইল:' : 'Valid email:'} ${normalizedEmail}`
+                            : lang === 'bn'
+                              ? 'সঠিক ইমেইল ঠিকানা লিখুন (যেমন: name@gmail.com)'
+                              : 'Please enter a valid email address (e.g. name@gmail.com)'}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   <div className="space-y-1">
                     <label className="block text-xs font-bold text-[#172033]">
-                      {lang === 'bn' ? 'পাসওয়ার্ড (কমপক্ষে ৬ অক্ষর)' : 'Password (min 6 characters)'}
+                      {authMethod === 'email'
+                        ? lang === 'bn'
+                          ? 'পাসওয়ার্ড (কমপক্ষে ৮ অক্ষর বা অক্ষর+সংখ্যা ৬+)'
+                          : 'Password (min 8 chars, or 6+ with letters & numbers)'
+                        : lang === 'bn'
+                          ? 'পাসওয়ার্ড (কমপক্ষে ৬ অক্ষর)'
+                          : 'Password (min 6 characters)'}
                     </label>
                     <div className="relative">
                       <Lock className="w-4 h-4 text-[#777777] absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -839,24 +1100,43 @@ export function AuthModal({
               {/* FORGOT PASSWORD / RECOVERY RESET FORM */}
               {mode === 'reset' && (
                 <form onSubmit={handleResetSubmit} className="space-y-3.5">
-                  <div className="space-y-1">
-                    <label className="block text-xs font-bold text-[#172033]">
-                      {lang === 'bn' ? 'নিবন্ধিত মোবাইল নম্বর' : 'Registered Mobile Number'}
-                    </label>
-                    <div className="flex items-center rounded-xl bg-[#F3F6FF] border border-[#DCE4F7] focus-within:border-[#FF8500] focus-within:bg-white overflow-hidden">
-                      <span className="px-3 py-2.5 bg-[#E9EFFC] text-[#172033] text-xs font-mono-num font-extrabold border-r border-[#DCE4F7] shrink-0">
-                        +880
-                      </span>
-                      <input
-                        type="tel"
-                        required
-                        value={phoneInput}
-                        onChange={(e) => setPhoneInput(e.target.value)}
-                        placeholder="017XXXXXXXX"
-                        className="w-full px-3 py-2.5 bg-transparent text-sm font-mono-num text-[#172033] focus:outline-none"
-                      />
+                  {authMethod === 'phone' ? (
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-[#172033]">
+                        {lang === 'bn' ? 'নিবন্ধিত মোবাইল নম্বর' : 'Registered Mobile Number'}
+                      </label>
+                      <div className="flex items-center rounded-xl bg-[#F3F6FF] border border-[#DCE4F7] focus-within:border-[#FF8500] focus-within:bg-white overflow-hidden">
+                        <span className="px-3 py-2.5 bg-[#E9EFFC] text-[#172033] text-xs font-mono-num font-extrabold border-r border-[#DCE4F7] shrink-0">
+                          +880
+                        </span>
+                        <input
+                          type="tel"
+                          required
+                          value={phoneInput}
+                          onChange={(e) => setPhoneInput(e.target.value)}
+                          placeholder="017XXXXXXXX"
+                          className="w-full px-3 py-2.5 bg-transparent text-sm font-mono-num text-[#172033] focus:outline-none"
+                        />
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <label className="block text-xs font-bold text-[#172033]">
+                        {lang === 'bn' ? 'নিবন্ধিত ইমেইল ঠিকানা' : 'Registered Email Address'}
+                      </label>
+                      <div className="relative">
+                        <Mail className="w-4 h-4 text-[#FF8500] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="email"
+                          required
+                          value={emailInput}
+                          onChange={(e) => setEmailInput(e.target.value)}
+                          placeholder="name@gmail.com"
+                          className="w-full pl-10 pr-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#DCE4F7] focus:border-[#FF8500] focus:bg-white text-sm text-[#172033] focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   <div className="space-y-1">
                     <label className="block text-xs font-bold text-[#172033]">

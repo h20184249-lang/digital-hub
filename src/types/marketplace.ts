@@ -88,13 +88,14 @@ export type AdPlacement =
   | 'social_bar'
   | 'all';
 
-export type AuthMethod = 'phone';
+export type AuthMethod = 'phone' | 'email';
 
 export interface AuthUser {
   uid: string;
   phone: string;
   displayName: string;
   email?: string;
+  authMethod?: AuthMethod;
   photoURL?: string;
   role: 'super_admin' | 'admin' | 'user';
   status: 'active' | 'suspended';

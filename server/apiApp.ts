@@ -295,7 +295,7 @@ export function createApiApp(): express.Express {
     res.json({
       ok: true,
       service: 'DIGITAL HUB API',
-      authMode: 'phone_password_d1',
+      authMode: 'phone_email_password_d1',
       timestamp: new Date().toISOString(),
     });
   });
