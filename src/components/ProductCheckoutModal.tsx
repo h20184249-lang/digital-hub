@@ -1,5 +1,4 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
-import { User } from 'firebase/auth';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -16,6 +15,7 @@ import {
 import {
   AdNetworkConfig,
   Advertisement,
+  AuthUser,
   Banner,
   CheckoutPaymentMethod,
   Language,
@@ -62,7 +62,7 @@ interface ProductCheckoutModalProps {
   onClose: () => void;
   lang: Language;
   settings: SiteSettings;
-  user: User | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
   banners: Banner[];
@@ -194,10 +194,6 @@ export function ProductCheckoutModal({
       onOpenAuth();
       return;
     }
-    if (!user.emailVerified) {
-      setError(t(lang, 'verifyEmailDesc'));
-      return;
-    }
 
     const validationErr = validateServiceOrderValues(formType, serviceValues, lang);
     if (validationErr) {
@@ -225,7 +221,7 @@ export function ProductCheckoutModal({
         }
         const res = await submitOrderWithWalletBalance({
           customerId: user.uid,
-          customerEmail: user.email || '',
+          customerEmail: user.phone || user.email || '',
           customerName: profile?.displayName || user.displayName || 'Customer',
           wallet,
           items: [{ product, quantity, selectedPackage: activePackage }],
@@ -242,7 +238,7 @@ export function ProductCheckoutModal({
         });
         const res = await submitOrderWithManualPayment({
           customerId: user.uid,
-          customerEmail: user.email || '',
+          customerEmail: user.phone || user.email || '',
           customerName: profile?.displayName || user.displayName || 'Customer',
           items: [{ product, quantity, selectedPackage: activePackage }],
           totalPriceBdt: totalCost,

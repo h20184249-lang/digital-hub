@@ -14,12 +14,12 @@ import {
   Sparkles,
   Wallet,
 } from 'lucide-react';
-import { User } from 'firebase/auth';
 import {
   AdNetworkConfig,
   AdRewardTransaction,
   AdViewingSession,
   AppRoute,
+  AuthUser,
   Language,
   ManagedAdUnitConfig,
   SiteSettings,
@@ -40,7 +40,7 @@ import { ManagedPlacementSlot } from './AdUnitFrame';
 
 interface WatchAndEarnPageProps {
   lang: Language;
-  user: User | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
   settings: SiteSettings;
@@ -94,13 +94,13 @@ export function WatchAndEarnPage({
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'info' | 'err'; text: string } | null>(null);
 
   const refreshServerSummary = () => {
-    if (!user || !user.emailVerified) return;
+    if (!user) return;
     getWatchEarnSummaryServer().then(setServerSummary).catch(() => {});
   };
 
   useEffect(() => {
     refreshServerSummary();
-  }, [user?.uid, user?.emailVerified]);
+  }, [user?.uid]);
 
   const authorizedRewardProviders = useMemo(() => {
     const netProviders = adNetworks
@@ -265,7 +265,7 @@ export function WatchAndEarnPage({
   }, [activeSession?.sessionId, activeSession?.status]);
 
   const handlePlayAdAndEarn = async (e?: MouseEvent<HTMLAnchorElement | HTMLButtonElement>) => {
-    if (!user || !user.emailVerified) {
+    if (!user) {
       if (e) e.preventDefault();
       onOpenAuth();
       return;
@@ -352,7 +352,7 @@ export function WatchAndEarnPage({
 
   const handleRedeemCoins = async (e: FormEvent) => {
     e.preventDefault();
-    if (!user || !user.emailVerified) {
+    if (!user) {
       onOpenAuth();
       return;
     }
@@ -523,8 +523,8 @@ export function WatchAndEarnPage({
               </p>
               <p className="text-xs text-[#777777]">
                 {lang === 'bn'
-                  ? 'কয়েন সংগ্রহ ও ওয়ালেটে রূপান্তর করতে আপনার যাচাইকৃত অ্যাকাউন্ট দিয়ে লগইন করুন।'
-                  : 'Log in with your verified Gmail account to start Watch & Earn sessions and redeem coins.'}
+                  ? 'কয়েন সংগ্রহ ও ওয়ালেটে রূপান্তর করতে আপনার মোবাইল নম্বর অ্যাকাউন্ট দিয়ে লগইন করুন।'
+                  : 'Log in with your mobile number account to start Watch & Earn sessions and redeem coins.'}
               </p>
             </div>
           </div>

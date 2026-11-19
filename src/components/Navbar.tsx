@@ -15,8 +15,7 @@ import {
   User as UserIcon,
   Wallet,
 } from 'lucide-react';
-import { User } from 'firebase/auth';
-import { AppRoute, Language, UserProfile } from '../types/marketplace';
+import { AppRoute, AuthUser, Language, UserProfile } from '../types/marketplace';
 import { t } from '../lib/i18n';
 import { DigitalHubLogo } from './DigitalHubLogo';
 
@@ -25,7 +24,7 @@ interface NavbarProps {
   setRoute: (r: AppRoute) => void;
   lang: Language;
   setLang: (l: Language) => void;
-  user: User | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   walletBalanceBdt: number;
   cartCount: number;
@@ -251,7 +250,7 @@ export function Navbar({
                 type="button"
                 onClick={() => go('account')}
                 className="relative flex items-center gap-2 p-0.5 sm:pr-2.5 rounded-full bg-[#F3F6FF] border border-[#E6ECFA] hover:border-[#FF8500] transition-colors"
-                title={profile?.displayName || user.email || t(lang, 'navAccount')}
+                title={profile?.displayName || user.phone || t(lang, 'navAccount')}
               >
                 {profile?.photoUrl || user.photoURL ? (
                   <img
@@ -261,7 +260,7 @@ export function Navbar({
                   />
                 ) : (
                   <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#172033] text-white flex items-center justify-center text-xs font-bold">
-                    {(profile?.displayName || user.email || 'U').slice(0, 1).toUpperCase()}
+                    {(profile?.displayName || user.displayName || user.phone || 'U').slice(0, 1).toUpperCase()}
                   </div>
                 )}
                 <span className="hidden xl:inline text-xs font-bold text-[#172033] max-w-[90px] truncate">

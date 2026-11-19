@@ -1,5 +1,4 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, reauthenticateWithPopup } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseAppletConfig from '../../firebase-applet-config.json';
 
@@ -51,18 +50,8 @@ export const resolvedFirebaseConfig = {
 
 const app = getApps().length > 0 ? getApp() : initializeApp(resolvedFirebaseConfig);
 
+// Public read-only storefront catalog Firestore handle (Firebase Authentication has been completely removed)
 export const db = getFirestore(app, resolvedFirebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: 'select_account' });
-
-export async function reauthenticateOwnerWithGoogle(): Promise<void> {
-  if (!auth.currentUser) {
-    throw new Error('No authenticated user session.');
-  }
-  await reauthenticateWithPopup(auth.currentUser, googleProvider);
-  await auth.currentUser.getIdToken(true);
-}
 
 export enum OperationType {
   CREATE = 'create',
@@ -77,17 +66,6 @@ export interface FirestoreErrorInfo {
   error: string;
   operationType: OperationType;
   path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  };
 }
 
 export function handleFirestoreError(
@@ -97,18 +75,6 @@ export function handleFirestoreError(
 ): never {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
-          providerId: provider.providerId,
-          email: provider.email,
-        })) || [],
-    },
     operationType,
     path,
   };
@@ -119,9 +85,7 @@ export function handleFirestoreError(
 export async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
+  } catch {
+    // Non-fatal: storefront seamlessly uses D1/SQLite overrides & built-in catalog data
   }
 }

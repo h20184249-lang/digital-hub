@@ -1,5 +1,4 @@
 import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
-import { User } from 'firebase/auth';
 import {
   AlertTriangle,
   ArrowDownLeft,
@@ -10,6 +9,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
+  AuthUser,
   Language,
   PaymentMethod,
   SiteSettings,
@@ -36,7 +36,7 @@ import {
 interface WalletAndAddMoneyProps {
   initialTab: 'wallet' | 'add-money' | 'withdraw';
   lang: Language;
-  user: User | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
   walletTxs: WalletTransaction[];
@@ -64,7 +64,7 @@ export function WalletAndAddMoney({
   const [receiptDataUrl, setReceiptDataUrl] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('100');
   const [withdrawMethod, setWithdrawMethod] = useState<PaymentMethod>('bkash');
-  const [withdrawAccount, setWithdrawAccount] = useState(profile?.phone || '');
+  const [withdrawAccount, setWithdrawAccount] = useState(profile?.phone || user?.phone || '');
   const [copied, setCopied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -133,11 +133,6 @@ export function WalletAndAddMoney({
     setError('');
     setSuccessMsg('');
 
-    if (!user.emailVerified) {
-      setError(t(lang, 'verifyEmailDesc'));
-      return;
-    }
-
     const numericAmount = Math.round(Number(amount));
     if (!Number.isFinite(numericAmount) || numericAmount < 10) {
       setError(lang === 'bn' ? 'ন্যূনতম ১০ টাকা অ্যাড মানি করুন।' : 'Minimum deposit is ৳10.');
@@ -154,7 +149,7 @@ export function WalletAndAddMoney({
 
       const txDocId = await submitAddMoneyDeposit({
         userId: user.uid,
-        userEmail: user.email || '',
+        userEmail: user.phone || user.email || '',
         amountBdt: numericAmount,
         method,
         receiverNumber,
@@ -182,10 +177,6 @@ export function WalletAndAddMoney({
     setError('');
     setSuccessMsg('');
 
-    if (!user.emailVerified) {
-      setError(t(lang, 'verifyEmailDesc'));
-      return;
-    }
     if (profile?.status === 'suspended') {
       setError(lang === 'bn' ? 'আপনার অ্যাকাউন্ট সাময়িকভাবে ব্লক করা হয়েছে।' : 'Your account is suspended.');
       return;
@@ -205,7 +196,7 @@ export function WalletAndAddMoney({
     try {
       const wId = await submitWithdrawalRequest({
         userId: user.uid,
-        userEmail: user.email || '',
+        userEmail: user.phone || user.email || '',
         wallet,
         method: withdrawMethod,
         accountNumber: withdrawAccount,

@@ -1,5 +1,4 @@
 import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
-import { User } from 'firebase/auth';
 import {
   AlertTriangle,
   Check,
@@ -13,6 +12,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
+  AuthUser,
   CheckoutPaymentMethod,
   Language,
   PaymentMethod,
@@ -348,7 +348,7 @@ export function ReceiptScreenshotUploadBox({
 interface HomepagePaymentSectionProps {
   settings: SiteSettings;
   lang: Language;
-  user: User | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   onOpenAuth: () => void;
   onNavigateAddMoney: () => void;
@@ -417,10 +417,6 @@ export function HomepagePaymentSection({
       onOpenAuth();
       return;
     }
-    if (!user.emailVerified) {
-      setError(t(lang, 'verifyEmailDesc'));
-      return;
-    }
     if (profile?.status === 'suspended') {
       setError(lang === 'bn' ? 'আপনার অ্যাকাউন্ট সাময়িকভাবে স্থগিত করা হয়েছে।' : 'Your account is suspended.');
       return;
@@ -442,7 +438,7 @@ export function HomepagePaymentSection({
 
       const txDocId = await submitAddMoneyDeposit({
         userId: user.uid,
-        userEmail: user.email || '',
+        userEmail: user.phone || user.email || '',
         amountBdt: amt,
         method: selectedMethod,
         receiverNumber: activeDetails.number,

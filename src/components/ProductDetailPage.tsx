@@ -1,5 +1,4 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { User } from 'firebase/auth';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -20,6 +19,7 @@ import {
   AdNetworkConfig,
   Advertisement,
   AppRoute,
+  AuthUser,
   Banner,
   Category,
   CheckoutPaymentMethod,
@@ -70,7 +70,7 @@ interface ProductDetailPageProps {
   categories: Category[];
   lang: Language;
   settings: SiteSettings;
-  user: User | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
   banners: Banner[];
@@ -236,10 +236,6 @@ export function ProductDetailPage({
       onOpenAuth();
       return;
     }
-    if (!user.emailVerified) {
-      setError(t(lang, 'verifyEmailDesc'));
-      return;
-    }
 
     const validationErr = validateServiceOrderValues(formType, serviceValues, lang);
     if (validationErr) {
@@ -267,7 +263,7 @@ export function ProductDetailPage({
         }
         const res = await submitOrderWithWalletBalance({
           customerId: user.uid,
-          customerEmail: user.email || '',
+          customerEmail: user.phone || user.email || '',
           customerName: profile?.displayName || user.displayName || 'Customer',
           wallet,
           items: [{ product, quantity, selectedPackage: activePackage }],
@@ -284,7 +280,7 @@ export function ProductDetailPage({
         });
         const res = await submitOrderWithManualPayment({
           customerId: user.uid,
-          customerEmail: user.email || '',
+          customerEmail: user.phone || user.email || '',
           customerName: profile?.displayName || user.displayName || 'Customer',
           items: [{ product, quantity, selectedPackage: activePackage }],
           totalPriceBdt: totalCost,

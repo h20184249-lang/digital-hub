@@ -1,0 +1,212 @@
+import { apiUrl } from './apiClient';
+import { AuthUser, Language, UserProfile } from '../types/marketplace';
+
+export class AuthApiError extends Error {
+  code: string;
+  status: number;
+
+  constructor(code: string, message: string, status = 400) {
+    super(message);
+    this.name = 'AuthApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+const BENGALI_DIGITS: Record<string, string> = {
+  '০': '0',
+  '১': '1',
+  '২': '2',
+  '৩': '3',
+  '৪': '4',
+  '৫': '5',
+  '৬': '6',
+  '৭': '7',
+  '৮': '8',
+  '৯': '9',
+};
+
+export function normalizeBangladeshPhoneClient(raw: string): string | null {
+  if (typeof raw !== 'string') return null;
+  const ascii = raw.replace(/[০-৯]/g, (d) => BENGALI_DIGITS[d] || d);
+  const cleaned = ascii.replace(/[\s\-().]/g, '').trim();
+  if (!cleaned) return null;
+  if (/^\+8801[3-9]\d{8}$/.test(cleaned)) return cleaned;
+  if (/^8801[3-9]\d{8}$/.test(cleaned)) return `+${cleaned}`;
+  if (/^01[3-9]\d{8}$/.test(cleaned)) return `+88${cleaned}`;
+  if (/^1[3-9]\d{8}$/.test(cleaned)) return `+880${cleaned}`;
+  return null;
+}
+
+async function postAuthJson<T>(path: string, body?: Record<string, unknown>): Promise<T> {
+  let resp: Response;
+  try {
+    resp = await fetch(apiUrl(path), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: body !== undefined ? JSON.stringify(body) : '{}',
+    });
+  } catch {
+    throw new AuthApiError(
+      'auth/network-request-failed',
+      'ইন্টারনেট বা সার্ভার সংযোগে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।',
+      0
+    );
+  }
+
+  const data = (await resp.json().catch(() => ({}))) as T & {
+    ok?: boolean;
+    code?: string;
+    error?: string;
+  };
+
+  if (!resp.ok || data.ok === false) {
+    throw new AuthApiError(
+      data.code || 'auth/request-failed',
+      data.error || 'অনুরোধ সম্পন্ন করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।',
+      resp.status
+    );
+  }
+
+  return data;
+}
+
+export interface RegisterPhoneResult {
+  ok: true;
+  user: AuthUser;
+  profile: UserProfile;
+  recoveryCode: string;
+}
+
+export async function registerWithPhone(input: {
+  fullName: string;
+  phone: string;
+  password: string;
+  confirmPassword: string;
+  referralCode?: string;
+  language?: Language;
+}): Promise<RegisterPhoneResult> {
+  return postAuthJson<RegisterPhoneResult>('/api/auth/register', {
+    fullName: input.fullName.trim(),
+    phone: input.phone.trim(),
+    password: input.password,
+    confirmPassword: input.confirmPassword,
+    referralCode: (input.referralCode || '').trim(),
+    language: input.language || 'bn',
+  });
+}
+
+export interface LoginPhoneResult {
+  ok: true;
+  user: AuthUser;
+  profile: UserProfile;
+}
+
+export async function loginWithPhone(input: {
+  phone: string;
+  password: string;
+}): Promise<LoginPhoneResult> {
+  return postAuthJson<LoginPhoneResult>('/api/auth/login', {
+    phone: input.phone.trim(),
+    password: input.password,
+  });
+}
+
+export interface CurrentSessionResult {
+  authenticated: boolean;
+  user: AuthUser | null;
+  profile: UserProfile | null;
+  isAdmin: boolean;
+}
+
+export async function fetchCurrentSession(): Promise<CurrentSessionResult> {
+  try {
+    const resp = await fetch(apiUrl('/api/auth/me'), {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (!resp.ok) {
+      return { authenticated: false, user: null, profile: null, isAdmin: false };
+    }
+    const data = (await resp.json().catch(() => ({}))) as {
+      authenticated?: boolean;
+      user?: AuthUser | null;
+      profile?: UserProfile | null;
+      role?: string;
+      adminRole?: string;
+    };
+    if (!data.authenticated || !data.user) {
+      return { authenticated: false, user: null, profile: null, isAdmin: false };
+    }
+    const isAdmin =
+      data.user.role === 'admin' ||
+      data.user.role === 'super_admin' ||
+      data.role === 'admin' ||
+      data.adminRole === 'admin' ||
+      data.adminRole === 'super_admin';
+    return {
+      authenticated: true,
+      user: data.user,
+      profile: data.profile || null,
+      isAdmin,
+    };
+  } catch {
+    return { authenticated: false, user: null, profile: null, isAdmin: false };
+  }
+}
+
+export async function logoutSession(): Promise<void> {
+  try {
+    await fetch(apiUrl('/api/auth/logout'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+  } catch {
+    // Non-fatal
+  }
+}
+
+export async function logoutAllSessions(): Promise<{ ok: true; revokedAt?: number }> {
+  return postAuthJson<{ ok: true; revokedAt?: number }>('/api/auth/logout-all');
+}
+
+export async function changePasswordWithCurrent(input: {
+  currentPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}): Promise<{ ok: true }> {
+  return postAuthJson<{ ok: true }>('/api/auth/change-password', {
+    currentPassword: input.currentPassword,
+    newPassword: input.newPassword,
+    confirmPassword: input.confirmPassword,
+  });
+}
+
+export async function regenerateRecoveryCode(
+  currentPassword: string
+): Promise<{ ok: true; recoveryCode: string }> {
+  return postAuthJson<{ ok: true; recoveryCode: string }>('/api/auth/recovery-code/regenerate', {
+    currentPassword,
+  });
+}
+
+export async function resetPasswordWithRecoveryCode(input: {
+  phone: string;
+  recoveryCode: string;
+  newPassword: string;
+  confirmPassword: string;
+}): Promise<{ ok: true; newRecoveryCode: string }> {
+  return postAuthJson<{ ok: true; newRecoveryCode: string }>('/api/auth/forgot-password/reset', {
+    phone: input.phone.trim(),
+    recoveryCode: input.recoveryCode.trim(),
+    newPassword: input.newPassword,
+    confirmPassword: input.confirmPassword,
+  });
+}

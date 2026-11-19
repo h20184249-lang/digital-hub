@@ -1462,7 +1462,7 @@ service cloud.firestore {
       allow get: if isValidPhoneHash(phoneHash);
       allow list: if isAdmin();
       allow create: if isValidPhoneHash(phoneHash)
-        && isVerified()
+        && isSignedIn()
         && isActiveUser(request.auth.uid)
         && isValidPhoneIndex(incoming())
         && incoming().phoneHash == phoneHash

@@ -1,5 +1,4 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
-import { User } from 'firebase/auth';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -14,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  AuthUser,
   CartItem,
   CheckoutPaymentMethod,
   Coupon,
@@ -52,7 +52,7 @@ interface CartDrawerProps {
   coupons: Coupon[];
   settings: SiteSettings;
   lang: Language;
-  user: User | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
   onOpenAuth: () => void;
@@ -252,10 +252,6 @@ export function CartDrawer({
       onOpenAuth();
       return;
     }
-    if (!user.emailVerified) {
-      setError(t(lang, 'verifyEmailDesc'));
-      return;
-    }
 
     setSubmitting(true);
     try {
@@ -269,7 +265,7 @@ export function CartDrawer({
         }
         const res = await submitOrderWithWalletBalance({
           customerId: user.uid,
-          customerEmail: user.email || '',
+          customerEmail: user.phone || user.email || '',
           customerName: profile?.displayName || user.displayName || 'Customer',
           wallet,
           items,
@@ -288,7 +284,7 @@ export function CartDrawer({
         });
         const res = await submitOrderWithManualPayment({
           customerId: user.uid,
-          customerEmail: user.email || '',
+          customerEmail: user.phone || user.email || '',
           customerName: profile?.displayName || user.displayName || 'Customer',
           items,
           couponCode: appliedCoupon?.code,

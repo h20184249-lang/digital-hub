@@ -88,13 +88,25 @@ export type AdPlacement =
   | 'social_bar'
   | 'all';
 
-export type AuthMethod = 'google' | 'email' | 'phone';
+export type AuthMethod = 'phone';
+
+export interface AuthUser {
+  uid: string;
+  phone: string;
+  displayName: string;
+  email?: string;
+  photoURL?: string;
+  role: 'super_admin' | 'admin' | 'user';
+  status: 'active' | 'suspended';
+  referralCode: string;
+  createdAt?: number;
+}
 
 export interface UserProfile {
   uid: string;
   displayName: string;
   email: string;
-  role?: 'admin' | 'user';
+  role?: 'super_admin' | 'admin' | 'user';
   authMethod?: AuthMethod;
   phone?: string;
   photoUrl?: string;

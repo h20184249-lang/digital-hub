@@ -1,5 +1,4 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
-import { signOut, User } from 'firebase/auth';
 import {
   Activity,
   ArrowDown,
@@ -42,7 +41,6 @@ import {
   Wallet,
   XCircle,
 } from 'lucide-react';
-import { auth, reauthenticateOwnerWithGoogle } from '../lib/firebase';
 import {
   AdFormat,
   AdNetworkConfig,
@@ -55,6 +53,7 @@ import {
   Announcement,
   AdPlacement,
   AuditLog,
+  AuthUser,
   Banner,
   BannerSlot,
   Category,
@@ -83,7 +82,6 @@ import {
 import { t } from '../lib/i18n';
 import { apiUrl } from '../lib/apiClient';
 import { resolveStudioImage, STUDIO_IMAGES } from '../lib/studioAssets';
-import { BOOTSTRAPPED_ADMIN_EMAIL } from '../lib/seedData';
 import { AD_PLACEMENT_LABELS, ALL_AD_PLACEMENT_SLOTS } from '../lib/adProviderConfig';
 import { getManagedUnitStatusSnapshot, ManagedUnitRuntimeStatus, subscribeManagedUnitStatuses } from './AdUnitFrame';
 import {
@@ -149,8 +147,9 @@ import {
 
 interface AdminDashboardProps {
   lang: Language;
-  user: User | null;
+  user: AuthUser | null;
   isAdmin: boolean;
+  onLogout: () => Promise<void>;
   categories: Category[];
   products: Product[];
   advertisements: Advertisement[];
@@ -188,6 +187,7 @@ export function AdminDashboard({
   lang,
   user,
   isAdmin,
+  onLogout,
   categories,
   products,
   advertisements,
@@ -384,10 +384,7 @@ export function AdminDashboard({
 
   useEffect(() => {
     let active = true;
-    const isOwnerEmail =
-      Boolean(user?.emailVerified) &&
-      user?.email?.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
-    if (!isOwnerEmail || !isAdmin) {
+    if (!user || !isAdmin) {
       setServerVerifiedAdmin(false);
       return;
     }
@@ -443,9 +440,8 @@ export function AdminDashboard({
   const loadAnalytics = async () => {
     if (!user) return;
     try {
-      const token = await user.getIdToken();
       const resp = await fetch(apiUrl('/api/ads/analytics'), {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
       if (resp.ok) {
         setAdAnalytics((await resp.json()) as ServerAdAnalytics);
@@ -524,8 +520,8 @@ export function AdminDashboard({
       <div className="max-w-xl mx-auto py-16 px-4">
         <div className="dh-card rounded-3xl p-8 text-center space-y-3">
           <Shield className="w-10 h-10 text-[#FF8500] mx-auto animate-pulse" />
-          <h2 className="text-lg font-bold text-[#172033]">Verifying Owner Security Session...</h2>
-          <p className="text-xs text-[#777777]">Checking backend owner authorization for {BOOTSTRAPPED_ADMIN_EMAIL}</p>
+          <h2 className="text-lg font-bold text-[#172033]">Verifying Admin Security Session...</h2>
+          <p className="text-xs text-[#777777]">Checking backend RBAC session authorization for {user?.phone || 'your account'}</p>
         </div>
       </div>
     );
@@ -533,8 +529,6 @@ export function AdminDashboard({
 
   if (
     !user ||
-    !user.emailVerified ||
-    user.email?.trim().toLowerCase() !== BOOTSTRAPPED_ADMIN_EMAIL ||
     !isAdmin ||
     serverVerifiedAdmin !== true
   ) {
@@ -1053,7 +1047,7 @@ export function AdminDashboard({
         <aside className="lg:w-64 shrink-0 dh-card rounded-3xl p-3 space-y-1 self-start lg:sticky lg:top-20">
           <div className="px-3 py-2.5 border-b border-[#E6ECFA] mb-1">
             <p className="text-xs font-extrabold text-[#FF8500] uppercase tracking-wider">Admin Control</p>
-            <p className="text-[11px] text-[#777777] truncate">{user.email}</p>
+            <p className="text-[11px] text-[#777777] truncate">{user.phone || user.displayName}</p>
           </div>
 
           <div className="flex lg:flex-col gap-1 overflow-x-auto lg:overflow-visible pb-2 lg:pb-0">
@@ -1088,7 +1082,9 @@ export function AdminDashboard({
 
             <button
               type="button"
-              onClick={() => signOut(auth)}
+              onClick={() => {
+                onLogout().catch(() => {});
+              }}
               className="px-3 py-2 rounded-xl text-xs font-bold text-[#DC2626] hover:bg-red-50 flex items-center gap-2 shrink-0"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -1170,14 +1166,14 @@ export function AdminDashboard({
                 <div>
                   <h2 className="text-lg font-bold text-[#172033]">User & Role Management ({users.length})</h2>
                   <p className="text-xs text-[#777777]">
-                    Owner ({BOOTSTRAPPED_ADMIN_EMAIL}) is permanently ADMIN. All other accounts are USER. Block/Unblock uses server-verified owner session.
+                    Admin access is enforced server-side via database roles and <span className="font-mono-num">ADMIN_PHONE_NUMBERS</span>. Block/Unblock actions require a verified HTTP-only admin session.
                   </p>
                 </div>
                 <input
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search name or email..."
+                  placeholder="Search name or mobile number..."
                   className="px-3.5 py-2 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs"
                 />
               </div>
@@ -1187,10 +1183,11 @@ export function AdminDashboard({
                     (u) =>
                       !searchTerm ||
                       u.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                      u.email.toLowerCase().includes(searchTerm.toLowerCase())
+                      (u.phone || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                      (u.email || '').toLowerCase().includes(searchTerm.toLowerCase())
                   )
                   .map((u) => {
-                    const isOwnerRow = u.email.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
+                    const isOwnerRow = u.role === 'admin' || u.role === 'super_admin' || u.uid === user.uid;
                     const userWallet = wallets.find((w) => w.uid === u.uid);
                     return (
                       <div
@@ -5637,10 +5634,11 @@ export function AdminDashboard({
                     </div>
                     <div>
                       <h2 className="text-lg font-bold text-[#172033]">
-                        Strict Owner-Only Security Lock
+                        Strict Role-Based Admin Security Lock
                       </h2>
                       <p className="text-xs text-[#777777]">
-                        Authorized Owner Account: <strong className="font-mono-num text-[#172033]">{BOOTSTRAPPED_ADMIN_EMAIL}</strong>
+                        Active Admin Session: <strong className="font-mono-num text-[#172033]">{user.phone || user.displayName}</strong>{' '}
+                        <span className="uppercase font-bold text-[#FF8500]">({user.role})</span>
                       </p>
                     </div>
                   </div>
@@ -5650,10 +5648,13 @@ export function AdminDashboard({
                     onClick={async () => {
                       setReauthBusy(true);
                       try {
-                        await reauthenticateOwnerWithGoogle();
                         const ok = await verifyOwnerAdminServer();
                         setServerVerifiedAdmin(ok);
-                        showOk('Owner Google session refreshed for another 15-minute high-privilege window.');
+                        if (ok) {
+                          showOk('Admin HTTP-only cookie session verified cleanly against the backend.');
+                        } else {
+                          showErr(new Error('Admin session verification failed. Please log in again.'));
+                        }
                       } catch (e) {
                         showErr(e);
                       } finally {
@@ -5663,21 +5664,20 @@ export function AdminDashboard({
                     className="px-4 py-2 rounded-xl bg-[#172033] text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-60"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${reauthBusy ? 'animate-spin' : ''}`} />
-                    {reauthBusy ? 'Re-authenticating...' : 'Refresh Fresh Owner Session (15m)'}
+                    {reauthBusy ? 'Verifying...' : 'Verify Admin Session'}
                   </button>
                 </div>
                 <div className="p-3.5 rounded-2xl bg-white border border-[#E6ECFA] text-xs text-[#172033] space-y-1">
                   <p className="font-bold">Multi-Layer Enforcement Active:</p>
                   <p className="text-[#777777]">
-                    1. Cloud Firestore Security Rules permit administrative reads and writes exclusively for verified{' '}
-                    <span className="font-mono-num">{BOOTSTRAPPED_ADMIN_EMAIL}</span>.
+                    1. Passwords are protected using per-user salted <span className="font-mono-num">PBKDF2-SHA256</span> (100,000 iterations) with constant-time verification and persistent brute-force rate limiting.
                   </p>
                   <p className="text-[#777777]">
-                    2. Express Backend API routes (<span className="font-mono-num">/api/admin/*</span>,{' '}
-                    <span className="font-mono-num">/api/ads/analytics</span>) verify Firebase ID tokens and reject any other account with HTTP 403.
+                    2. Backend API routes (<span className="font-mono-num">/api/admin/*</span>,{' '}
+                    <span className="font-mono-num">/api/ads/analytics</span>) validate SHA-256 hashed HTTP-only <span className="font-mono-num">dh_session</span> cookies against the D1/SQLite session table and reject non-admin accounts with HTTP 403.
                   </p>
                   <p className="text-[#777777]">
-                    3. Sensitive actions (blocking users, processing withdrawals, settling ad rewards, broadcasting announcements) require fresh Google sign-in auth_time (&le; 15 minutes).
+                    3. Admin privileges are assigned server-side via <span className="font-mono-num">ADMIN_PHONE_NUMBERS</span> or database role checks, with CSRF origin verification on every state-changing request.
                   </p>
                 </div>
               </div>

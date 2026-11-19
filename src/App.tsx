@@ -1,5 +1,4 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getRedirectResult, onAuthStateChanged, signOut, User } from 'firebase/auth';
 import {
   ArrowRight,
   Award,
@@ -23,7 +22,8 @@ import {
   Users,
   Zap,
 } from 'lucide-react';
-import { auth, testConnection } from './lib/firebase';
+import { testConnection } from './lib/firebase';
+import { fetchCurrentSession, logoutSession } from './lib/authClient';
 import {
   AdNetworkConfig,
   AdRewardTransaction,
@@ -32,7 +32,7 @@ import {
   Announcement,
   AppNotification,
   AppRoute,
-  AuthMethod,
+  AuthUser,
   Banner,
   CartItem,
   Category,
@@ -54,11 +54,7 @@ import {
   WithdrawalRequest,
 } from './types/marketplace';
 import {
-  clearPendingAuthMeta,
-  ensureUserProfile,
-  readPendingAuthMeta,
-  registerPhoneIndexServer,
-  seedMarketplaceToFirestore,
+  fetchCustomerDashboardServer,
   subscribeAdNetworks,
   subscribeAdvertisements,
   subscribeAnnouncements,
@@ -66,25 +62,12 @@ import {
   subscribeBanners,
   subscribeCategories,
   subscribeCoupons,
-  subscribeCustomerAdRewardTransactions,
-  subscribeCustomerNotifications,
-  subscribeCustomerOrders,
-  subscribeCustomerPayments,
-  subscribeCustomerReferrals,
-  subscribeCustomerRewardClaims,
-  subscribeCustomerTickets,
-  subscribeCustomerViewingSessions,
-  subscribeCustomerWallet,
-  subscribeCustomerWalletTx,
-  subscribeCustomerWithdrawals,
+  subscribeDashboardInvalidation,
   subscribeManagedAdUnits,
   subscribeProducts,
   subscribeSiteSettings,
-  syncBackendAuthSession,
-  verifyOwnerAdminServer,
 } from './lib/firestoreService';
 import {
-  BOOTSTRAPPED_ADMIN_EMAIL,
   DEFAULT_AD_NETWORKS,
   DEFAULT_ADVERTISEMENTS,
   DEFAULT_BANNERS,
@@ -130,7 +113,7 @@ export default function App() {
   const [previousRoute, setPreviousRoute] = useState<AppRoute>('services');
   const [modalInitialTab, setModalInitialTab] = useState<'details' | 'checkout'>('details');
   const [lang, setLang] = useState<Language>('bn');
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [wallet, setWallet] = useState<WalletAccount | null>(null);
   const [walletTxs, setWalletTxs] = useState<WalletTransaction[]>([]);
@@ -156,9 +139,6 @@ export default function App() {
   const [viewingSessions, setViewingSessions] = useState<AdViewingSession[]>([]);
   const [adRewardTransactions, setAdRewardTransactions] = useState<AdRewardTransaction[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [authRefreshNonce, setAuthRefreshNonce] = useState(0);
-  const explicitAuthSignInRef = useRef(false);
-  const pendingPasswordSetupRef = useRef(false);
   const langRef = useRef<Language>(lang);
 
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -230,165 +210,7 @@ export default function App() {
     const u7 = subscribeSiteSettings(setSettings);
     const u8 = subscribeAdNetworks(setAdNetworks);
     const u9 = subscribeManagedAdUnits(setAdUnitOverrides);
-    return () => {
-      u1();
-      u2();
-      u3();
-      u4();
-      u5();
-      u6();
-      u7();
-      u8();
-      u9();
-    };
-  }, []);
-
-  useEffect(() => {
-    langRef.current = lang;
-  }, [lang]);
-
-  useEffect(() => {
-    capturedReferralRef.current = capturedReferral;
-  }, [capturedReferral]);
-
-  const initializeVerifiedUserSession = useCallback(
-    async (
-      current: User,
-      overrideMeta?: { authMethod?: AuthMethod; phone?: string; displayName?: string }
-    ) => {
-      const emailVerified = current.emailVerified;
-      const isOwnerEmail =
-        emailVerified && current.email?.trim().toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL;
-      const [session, serverVerified] = await Promise.all([
-        syncBackendAuthSession(),
-        isOwnerEmail ? verifyOwnerAdminServer() : Promise.resolve(false),
-      ]);
-      const adminStatus = isOwnerEmail && (session?.role === 'admin' || serverVerified);
-      setIsAdmin(adminStatus);
-      if (emailVerified) {
-        setAuthModalOpen(false);
-      }
-
-      if (adminStatus) {
-        seedMarketplaceToFirestore(false).catch(() => {});
-      }
-
-      if (emailVerified) {
-        const pendingMeta = readPendingAuthMeta(current.uid);
-        const effectiveAuthMethod = overrideMeta?.authMethod || pendingMeta?.authMethod;
-        const effectivePhone = overrideMeta?.phone || pendingMeta?.phone || '';
-        const effectiveDisplayName =
-          overrideMeta?.displayName ||
-          pendingMeta?.displayName ||
-          current.displayName ||
-          current.email?.split('@')[0] ||
-          'Customer';
-        const effectiveReferral = pendingMeta?.referralCode || capturedReferralRef.current;
-
-        ensureUserProfile(
-          current.uid,
-          (current.email || '').trim().toLowerCase(),
-          effectiveDisplayName,
-          langRef.current,
-          effectiveReferral,
-          current.photoURL || '',
-          effectiveAuthMethod,
-          effectivePhone
-        )
-          .then(async (prof) => {
-            if (effectivePhone) {
-              await registerPhoneIndexServer(effectivePhone).catch((idxErr) => {
-                console.warn('Non-fatal phone login index sync error:', idxErr);
-              });
-            }
-            if (pendingMeta) {
-              clearPendingAuthMeta();
-            }
-            if (!prof) return;
-            if (prof.sessionRevokedAt) {
-              const tokenRes = await current.getIdTokenResult().catch(() => null);
-              const authTimeMs = tokenRes?.authTime ? Date.parse(tokenRes.authTime) : 0;
-              if (authTimeMs > 0 && authTimeMs < prof.sessionRevokedAt) {
-                await signOut(auth).catch(() => {});
-                showToast(
-                  langRef.current === 'bn'
-                    ? 'নিরাপত্তার জন্য এই সেশনটি লগআউট করা হয়েছে।'
-                    : 'Session signed out due to logout-all request.'
-                );
-                return;
-              }
-            }
-            setProfile(prof);
-          })
-          .catch((profileErr) => {
-            console.warn('Non-fatal profile sync error after authentication:', profileErr);
-          });
-
-        if (explicitAuthSignInRef.current) {
-          explicitAuthSignInRef.current = false;
-          setRoute(adminStatus ? 'admin' : 'account');
-        } else if (!adminStatus) {
-          setRoute((prev) => (prev === 'admin' ? 'account' : prev));
-        }
-      }
-    },
-    []
-  );
-
-  useEffect(() => {
-    // Handle Google redirect fallback cleanly when browser blocks popups
-    getRedirectResult(auth)
-      .then((res) => {
-        if (res?.user) {
-          explicitAuthSignInRef.current = true;
-        }
-      })
-      .catch(() => {});
-
-    const unsub = onAuthStateChanged(auth, async (current) => {
-      setUser(current);
-      if (!current) {
-        setProfile(null);
-        setWallet(null);
-        setWalletTxs([]);
-        setIsAdmin(false);
-        setOrders([]);
-        setPayments([]);
-        setReferrals([]);
-        setNotifications([]);
-        setTickets([]);
-        setWithdrawals([]);
-        setRewardClaims([]);
-        setViewingSessions([]);
-        setAdRewardTransactions([]);
-        setAnnouncements([]);
-        explicitAuthSignInRef.current = false;
-        return;
-      }
-
-      if (pendingPasswordSetupRef.current) {
-        return;
-      }
-
-      await initializeVerifiedUserSession(current);
-    });
-    return () => unsub();
-  }, [initializeVerifiedUserSession]);
-
-  useEffect(() => {
-    if (!user || !user.emailVerified) return;
-    const u1 = subscribeCustomerWallet(user.uid, setWallet);
-    const u2 = subscribeCustomerWalletTx(user.uid, setWalletTxs);
-    const u3 = subscribeCustomerOrders(user.uid, setOrders);
-    const u4 = subscribeCustomerPayments(user.uid, setPayments);
-    const u5 = subscribeCustomerReferrals(user.uid, setReferrals);
-    const u6 = subscribeCustomerNotifications(user.uid, setNotifications);
-    const u7 = subscribeCustomerTickets(user.uid, setTickets);
-    const u8 = subscribeCustomerWithdrawals(user.uid, setWithdrawals);
-    const u9 = subscribeCustomerRewardClaims(user.uid, setRewardClaims);
     const u10 = subscribeAnnouncements(setAnnouncements);
-    const u11 = subscribeCustomerViewingSessions(user.uid, setViewingSessions);
-    const u12 = subscribeCustomerAdRewardTransactions(user.uid, setAdRewardTransactions);
     return () => {
       u1();
       u2();
@@ -400,10 +222,108 @@ export default function App() {
       u8();
       u9();
       u10();
-      u11();
-      u12();
     };
-  }, [user, authRefreshNonce]);
+  }, []);
+
+  useEffect(() => {
+    langRef.current = lang;
+  }, [lang]);
+
+  useEffect(() => {
+    capturedReferralRef.current = capturedReferral;
+  }, [capturedReferral]);
+
+  const clearAuthState = useCallback(() => {
+    setUser(null);
+    setProfile(null);
+    setWallet(null);
+    setWalletTxs([]);
+    setIsAdmin(false);
+    setOrders([]);
+    setPayments([]);
+    setReferrals([]);
+    setNotifications([]);
+    setTickets([]);
+    setWithdrawals([]);
+    setRewardClaims([]);
+    setViewingSessions([]);
+    setAdRewardTransactions([]);
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await logoutSession();
+    clearAuthState();
+    setRoute('home');
+    showToast(
+      langRef.current === 'bn'
+        ? 'সফলভাবে লগআউট সম্পন্ন হয়েছে।'
+        : 'You have been signed out.'
+    );
+  }, [clearAuthState]);
+
+  const refreshCustomerDashboard = useCallback(async () => {
+    const data = await fetchCustomerDashboardServer();
+    if (!data) return;
+    setUser(data.user);
+    setProfile(data.profile);
+    setIsAdmin(data.user.role === 'admin' || data.user.role === 'super_admin');
+    setWallet(data.wallet);
+    setWalletTxs(data.walletTxs || []);
+    setOrders(data.orders || []);
+    setPayments(data.payments || []);
+    setReferrals(data.referrals || []);
+    setNotifications(data.notifications || []);
+    setTickets(data.tickets || []);
+    setWithdrawals(data.withdrawals || []);
+    setRewardClaims(data.rewardClaims || []);
+    setViewingSessions(data.viewingSessions || []);
+    setAdRewardTransactions(data.adRewardTransactions || []);
+    if (Array.isArray(data.announcements)) {
+      setAnnouncements(data.announcements);
+    }
+  }, []);
+
+  // Restore HTTP-only cookie session on initial page load / refresh
+  useEffect(() => {
+    let active = true;
+    fetchCurrentSession()
+      .then((session) => {
+        if (!active) return;
+        if (session.authenticated && session.user) {
+          setUser(session.user);
+          setProfile(session.profile);
+          setIsAdmin(session.isAdmin);
+          if (!session.isAdmin) {
+            setRoute((prev) => (prev === 'admin' ? 'account' : prev));
+          }
+        } else {
+          clearAuthState();
+        }
+      })
+      .catch(() => {
+        if (active) clearAuthState();
+      });
+    return () => {
+      active = false;
+    };
+  }, [clearAuthState]);
+
+  // Keep signed-in customer dashboard synced with server DB
+  useEffect(() => {
+    if (!user?.uid) return;
+    refreshCustomerDashboard().catch(() => {});
+    const unsub = subscribeDashboardInvalidation(() => {
+      refreshCustomerDashboard().catch(() => {});
+    });
+    const onFocus = () => {
+      refreshCustomerDashboard().catch(() => {});
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      unsub();
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [user?.uid, refreshCustomerDashboard]);
 
   useEffect(() => {
     const timer = setInterval(() => setHeroSlide((s) => (s + 1) % 3), 5500);
@@ -1384,6 +1304,7 @@ export default function App() {
             isAdmin={isAdmin}
             onNavigate={setRoute}
             onOpenAuth={() => setAuthModalOpen(true)}
+            onLogout={handleLogout}
           />
         )}
 
@@ -1418,6 +1339,7 @@ export default function App() {
             managedAdUnits={managedAdUnits}
             banners={banners}
             settings={settings}
+            onLogout={handleLogout}
           />
         )}
       </main>
@@ -1572,47 +1494,28 @@ export default function App() {
             // Non-fatal
           }
         }}
-        onLoginSuccess={() => {
-          explicitAuthSignInRef.current = true;
-        }}
-        onPasswordSetupStateChange={(active) => {
-          pendingPasswordSetupRef.current = active;
-        }}
-        onRegistrationComplete={async (signedInUser, isExistingAccount, meta) => {
-          pendingPasswordSetupRef.current = false;
-          explicitAuthSignInRef.current = true;
+        onAuthSuccess={(signedInUser, signedInProfile, isNewAccount, keepModalOpen) => {
+          const adminFlag =
+            signedInUser.role === 'admin' || signedInUser.role === 'super_admin';
           setUser(signedInUser);
-          setAuthRefreshNonce((n) => n + 1);
-          await initializeVerifiedUserSession(signedInUser, meta);
-          setAuthModalOpen(false);
+          setProfile(signedInProfile);
+          setIsAdmin(adminFlag);
+          if (!keepModalOpen) {
+            setAuthModalOpen(false);
+          }
+          setRoute(adminFlag ? 'admin' : 'account');
           showToast(
-            isExistingAccount
+            isNewAccount
               ? langRef.current === 'bn'
-                ? 'স্বাগতম! আপনার অ্যাকাউন্টে সফলভাবে লগইন হয়েছে।'
-                : 'Welcome back! Signed in successfully.'
-              : langRef.current === 'bn'
                 ? 'অভিনন্দন! আপনার Digital Hub অ্যাকাউন্ট তৈরি ও লগইন সম্পন্ন হয়েছে।'
                 : 'Welcome! Your Digital Hub account is ready and signed in.'
+              : langRef.current === 'bn'
+                ? 'স্বাগতম! আপনার অ্যাকাউন্টে সফলভাবে লগইন হয়েছে।'
+                : 'Welcome back! Signed in successfully.'
           );
         }}
-        needsVerification={Boolean(user && !user.emailVerified)}
-        pendingEmail={user && !user.emailVerified ? user.email || '' : ''}
-        onRefreshVerification={async () => {
-          const current = auth.currentUser;
-          if (!current) return false;
-          await current.reload();
-          if (current.emailVerified) {
-            // Force-refresh ID token so Firestore Security Rules immediately see email_verified == true
-            await current.getIdToken(true);
-            explicitAuthSignInRef.current = true;
-            setUser(auth.currentUser);
-            setAuthRefreshNonce((n) => n + 1);
-            await initializeVerifiedUserSession(current);
-            setAuthModalOpen(false);
-            return true;
-          }
-          return false;
-        }}
+        supportTelegramUrl={settings.telegramLink}
+        supportWhatsappUrl={settings.whatsappLink}
       />
 
       <CartDrawer

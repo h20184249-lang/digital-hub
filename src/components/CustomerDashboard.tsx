@@ -1,13 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
-  EmailAuthProvider,
-  linkWithCredential,
-  linkWithPopup,
-  reauthenticateWithPopup,
-  signOut,
-  User,
-} from 'firebase/auth';
-import {
   Bell,
   CheckCircle2,
   Clock,
@@ -19,12 +11,12 @@ import {
   Gift,
   KeyRound,
   LayoutDashboard,
-  Link2,
   LogOut,
   MessageSquare,
   Package,
   Phone,
   PlusCircle,
+  RefreshCw,
   Share2,
   Shield,
   Star,
@@ -35,13 +27,17 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import { auth, googleProvider } from '../lib/firebase';
+import {
+  changePasswordWithCurrent,
+  regenerateRecoveryCode,
+} from '../lib/authClient';
 import {
   AdNetworkConfig,
   Advertisement,
   Announcement,
   AppNotification,
   AppRoute,
+  AuthUser,
   Banner,
   Coupon,
   Language,
@@ -65,7 +61,6 @@ import {
   formatDateShort,
   markNotificationRead,
   normalizeBangladeshPhoneClient,
-  registerPhoneIndexServer,
   submitAccountDeletionRequestServer,
   submitCustomerReview,
   submitRewardedAdClaimServer,
@@ -81,7 +76,7 @@ interface CustomerDashboardProps {
   initialTab?: 'overview' | 'orders' | 'payments' | 'referrals' | 'rewards' | 'coupons' | 'notifications' | 'support' | 'profile';
   lang: Language;
   setLang: (l: Language) => void;
-  user: User | null;
+  user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
   walletTxs?: WalletTransaction[];
@@ -102,6 +97,7 @@ interface CustomerDashboardProps {
   isAdmin: boolean;
   onNavigate: (r: AppRoute) => void;
   onOpenAuth: () => void;
+  onLogout: () => Promise<void>;
 }
 
 export function CustomerDashboard({
@@ -129,6 +125,7 @@ export function CustomerDashboard({
   isAdmin,
   onNavigate,
   onOpenAuth,
+  onLogout,
 }: CustomerDashboardProps) {
   const [tab, setTab] = useState(initialTab);
   const [copiedRef, setCopiedRef] = useState(false);
@@ -149,7 +146,7 @@ export function CustomerDashboard({
 
   // Profile form state
   const [displayName, setDisplayName] = useState(profile?.displayName || user?.displayName || '');
-  const [phone, setPhone] = useState(profile?.phone || '');
+  const [phone, setPhone] = useState(profile?.phone || user?.phone || '');
   const [photoUrl, setPhotoUrl] = useState(profile?.photoUrl || '');
   const [profileSaving, setProfileSaving] = useState(false);
   const [feedback, setFeedback] = useState('');
@@ -158,17 +155,21 @@ export function CustomerDashboard({
   const [deletionOpen, setDeletionOpen] = useState(false);
   const [deletionSubmitting, setDeletionSubmitting] = useState(false);
   const [deletionSubmittedId, setDeletionSubmittedId] = useState('');
-  const [linkPwdOpen, setLinkPwdOpen] = useState(false);
-  const [linkPwdValue, setLinkPwdValue] = useState('');
-  const [linkPwdConfirm, setLinkPwdConfirm] = useState('');
-  const [linkingBusy, setLinkingBusy] = useState(false);
-  const [linkedProviderTick, setLinkedProviderTick] = useState(0);
+  const [pwdFormOpen, setPwdFormOpen] = useState(false);
+  const [currentPwd, setCurrentPwd] = useState('');
+  const [newPwd, setNewPwd] = useState('');
+  const [confirmNewPwd, setConfirmNewPwd] = useState('');
+  const [pwdBusy, setPwdBusy] = useState(false);
+  const [regenOpen, setRegenOpen] = useState(false);
+  const [regenCurrentPwd, setRegenCurrentPwd] = useState('');
+  const [regenBusy, setRegenBusy] = useState(false);
+  const [freshRecoveryCode, setFreshRecoveryCode] = useState('');
 
   useEffect(() => {
     if (profile?.displayName && !displayName) setDisplayName(profile.displayName);
-    if (profile?.phone && !phone) setPhone(profile.phone);
+    if ((profile?.phone || user?.phone) && !phone) setPhone(profile?.phone || user?.phone || '');
     if (profile?.photoUrl && !photoUrl) setPhotoUrl(profile.photoUrl);
-  }, [profile?.displayName, profile?.phone, profile?.photoUrl]);
+  }, [profile?.displayName, profile?.phone, profile?.photoUrl, user?.phone]);
 
   const orderStats = useMemo(() => {
     const pending = orders.filter(
@@ -267,7 +268,7 @@ export function CustomerDashboard({
     try {
       await createSupportTicket({
         userId: user.uid,
-        userEmail: user.email || '',
+        userEmail: user.phone || user.email || '',
         subject,
         message,
         orderNumber,
@@ -303,138 +304,65 @@ export function CustomerDashboard({
       });
       if (normalizedBdPhone) {
         setPhone(normalizedBdPhone);
-        try {
-          await registerPhoneIndexServer(normalizedBdPhone);
-          setFeedback(
-            lang === 'bn'
-              ? `প্রোফাইল আপডেট হয়েছে এবং ফোন নম্বর (${normalizedBdPhone}) লগইনের জন্য যুক্ত হয়েছে।`
-              : `Profile updated and phone (${normalizedBdPhone}) linked for phone login.`
-          );
-        } catch (idxErr) {
-          const code = (idxErr as { code?: string })?.code || '';
-          if (code === 'auth/phone-already-in-use') {
-            setFeedback(
-              lang === 'bn'
-                ? 'প্রোফাইল সেভ হয়েছে, তবে এই ফোন নম্বরটি অন্য অ্যাকাউন্টে লগইনের জন্য ব্যবহৃত হচ্ছে।'
-                : 'Profile saved, but this phone number is already linked to another login account.'
-            );
-          } else {
-            setFeedback(lang === 'bn' ? 'প্রোফাইল আপডেট হয়েছে।' : 'Profile updated successfully.');
-          }
-        }
-      } else {
-        setFeedback(lang === 'bn' ? 'প্রোফাইল আপডেট হয়েছে।' : 'Profile updated successfully.');
       }
+      setFeedback(lang === 'bn' ? 'প্রোফাইল সফলভাবে আপডেট হয়েছে।' : 'Profile updated successfully.');
+    } catch (err) {
+      setFeedback(err instanceof Error ? err.message : 'Could not update profile.');
     } finally {
       setProfileSaving(false);
     }
   };
 
-  void linkedProviderTick;
-  const activeProviders = auth.currentUser?.providerData || user?.providerData || [];
-  const hasGoogleLinked = activeProviders.some((p) => p.providerId === 'google.com');
-  const hasPasswordLinked = activeProviders.some((p) => p.providerId === 'password');
-
-  const handleLinkGoogleAccount = async () => {
-    if (!auth.currentUser || linkingBusy) return;
-    setLinkingBusy(true);
+  const handleChangePassword = async (e: FormEvent) => {
+    e.preventDefault();
+    if (pwdBusy) return;
+    if (newPwd.length < 6) {
+      setFeedback(lang === 'bn' ? 'নতুন পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।' : 'New password must be at least 6 characters.');
+      return;
+    }
+    if (newPwd !== confirmNewPwd) {
+      setFeedback(lang === 'bn' ? 'নতুন পাসওয়ার্ড দুটি মেলেনি।' : 'New passwords do not match.');
+      return;
+    }
+    setPwdBusy(true);
     setFeedback('');
     try {
-      googleProvider.setCustomParameters({ prompt: 'select_account' });
-      await linkWithPopup(auth.currentUser, googleProvider);
-      await auth.currentUser.reload().catch(() => {});
-      setLinkedProviderTick((n) => n + 1);
-      setFeedback(
-        lang === 'bn'
-          ? 'Google অ্যাকাউন্ট সফলভাবে যুক্ত হয়েছে! এখন Google দিয়েও এই একই অ্যাকাউন্টে লগইন করতে পারবেন।'
-          : 'Google account linked! You can now also sign in to this same account using Google.'
-      );
+      await changePasswordWithCurrent({
+        currentPassword: currentPwd,
+        newPassword: newPwd,
+        confirmPassword: confirmNewPwd,
+      });
+      setCurrentPwd('');
+      setNewPwd('');
+      setConfirmNewPwd('');
+      setPwdFormOpen(false);
+      setFeedback(lang === 'bn' ? 'পাসওয়ার্ড সফলভাবে পরিবর্তন করা হয়েছে।' : 'Password changed successfully.');
     } catch (err) {
-      const code = (err as { code?: string })?.code || '';
-      if (code === 'auth/credential-already-in-use' || code === 'auth/email-already-in-use') {
-        setFeedback(
-          lang === 'bn'
-            ? 'এই Google অ্যাকাউন্টটি ইতিমধ্যেই অন্য একটি Digital Hub অ্যাকাউন্টের সাথে যুক্ত।'
-            : 'That Google account is already linked to a different Digital Hub account.'
-        );
-      } else if (code === 'auth/unauthorized-domain') {
-        setFeedback(
-          lang === 'bn'
-            ? 'এই ডোমেইনটি Firebase Authorized Domains-এ যুক্ত নয়।'
-            : 'This domain is not authorized in Firebase Authentication settings.'
-        );
-      } else {
-        setFeedback(
-          lang === 'bn'
-            ? 'Google অ্যাকাউন্ট লিংক করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।'
-            : 'Could not link Google account. Please try again.'
-        );
-      }
+      setFeedback(err instanceof Error ? err.message : 'Could not change password.');
     } finally {
-      setLinkingBusy(false);
+      setPwdBusy(false);
     }
   };
 
-  const handleLinkPasswordCredential = async (e: FormEvent) => {
+  const handleRegenerateRecoveryCode = async (e: FormEvent) => {
     e.preventDefault();
-    if (!auth.currentUser || !auth.currentUser.email || linkingBusy) return;
-    if (linkPwdValue.length < 6) {
-      setFeedback(
-        lang === 'bn'
-          ? 'পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'
-          : 'Password must be at least 6 characters.'
-      );
-      return;
-    }
-    if (linkPwdValue !== linkPwdConfirm) {
-      setFeedback(
-        lang === 'bn' ? 'দুটি পাসওয়ার্ড মেলেনি।' : 'Passwords do not match.'
-      );
-      return;
-    }
-    setLinkingBusy(true);
+    if (regenBusy) return;
+    setRegenBusy(true);
     setFeedback('');
     try {
-      const cred = EmailAuthProvider.credential(auth.currentUser.email.trim().toLowerCase(), linkPwdValue);
-      try {
-        await linkWithCredential(auth.currentUser, cred);
-      } catch (linkErr) {
-        const code = (linkErr as { code?: string })?.code || '';
-        if (code === 'auth/requires-recent-login') {
-          googleProvider.setCustomParameters({ prompt: 'select_account', login_hint: auth.currentUser.email });
-          await reauthenticateWithPopup(auth.currentUser, googleProvider);
-          await linkWithCredential(auth.currentUser, cred);
-        } else {
-          throw linkErr;
-        }
-      }
-      await auth.currentUser.reload().catch(() => {});
-      setLinkPwdValue('');
-      setLinkPwdConfirm('');
-      setLinkPwdOpen(false);
-      setLinkedProviderTick((n) => n + 1);
+      const res = await regenerateRecoveryCode(regenCurrentPwd);
+      setFreshRecoveryCode(res.recoveryCode);
+      setRegenCurrentPwd('');
+      setRegenOpen(false);
       setFeedback(
         lang === 'bn'
-          ? 'Digital Hub পাসওয়ার্ড সফলভাবে যুক্ত হয়েছে! এখন ইমেইল/ফোন ও পাসওয়ার্ড দিয়েও লগইন করতে পারবেন।'
-          : 'Digital Hub password linked! You can now also sign in with Email/Phone and Password.'
+          ? 'নতুন ব্যাকআপ রিকভারি কোড তৈরি হয়েছে। নিচ থেকে কপি করে নিরাপদে রাখুন।'
+          : 'New backup recovery code generated. Copy and store it safely below.'
       );
     } catch (err) {
-      const code = (err as { code?: string })?.code || '';
-      if (code === 'auth/operation-not-allowed') {
-        setFeedback(
-          lang === 'bn'
-            ? 'Firebase Console-এ Email/Password প্রোভাইডার চালু করা হয়নি।'
-            : 'Email/Password sign-in provider is not yet enabled in Firebase Console.'
-        );
-      } else {
-        setFeedback(
-          lang === 'bn'
-            ? 'পাসওয়ার্ড যুক্ত করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।'
-            : 'Could not link password. Please try again.'
-        );
-      }
+      setFeedback(err instanceof Error ? err.message : 'Could not regenerate recovery code.');
     } finally {
-      setLinkingBusy(false);
+      setRegenBusy(false);
     }
   };
 
@@ -509,23 +437,17 @@ export function CustomerDashboard({
             />
           ) : (
             <div className="w-14 h-14 rounded-2xl dh-orange-gradient text-white flex items-center justify-center text-xl font-extrabold">
-              {(profile?.displayName || user.email || 'U').slice(0, 1).toUpperCase()}
+              {(profile?.displayName || user.displayName || user.phone || 'U').slice(0, 1).toUpperCase()}
             </div>
           )}
           <div>
             <h1 className="text-lg sm:text-xl font-extrabold text-[#172033]">
               {profile?.displayName || user.displayName || 'DIGITAL HUB Customer'}
             </h1>
-            <p className="text-xs text-[#777777]">{user.email}</p>
+            <p className="text-xs font-mono-num text-[#777777]">{profile?.phone || user.phone}</p>
             <div className="flex flex-wrap items-center gap-2 mt-1.5">
               <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-[#16A34A] text-[11px] font-bold">
-                {user.emailVerified
-                  ? lang === 'bn'
-                    ? 'ইমেইল যাচাইকৃত'
-                    : 'Verified Account'
-                  : lang === 'bn'
-                    ? 'ইমেইল যাচাই বাকি'
-                    : 'Unverified Email'}
+                {lang === 'bn' ? 'মোবাইল অ্যাকাউন্ট সক্রিয়' : 'Active Mobile Account'}
               </span>
               <span className="px-2 py-0.5 rounded-md bg-[#FFF3E5] text-[#FF8500] text-[11px] font-mono-num font-bold">
                 Ref: {refCode}
@@ -563,7 +485,9 @@ export function CustomerDashboard({
           )}
           <button
             type="button"
-            onClick={() => signOut(auth)}
+            onClick={() => {
+              onLogout().catch(() => {});
+            }}
             className="px-3.5 py-2 rounded-xl bg-red-50 text-[#DC2626] text-xs font-bold flex items-center gap-1.5 hover:bg-red-100"
           >
             <LogOut className="w-4 h-4" />
@@ -1409,100 +1333,86 @@ export function CustomerDashboard({
               </div>
             </div>
 
-            {/* Linked Sign-In Methods & Firebase Account Linking */}
+            {/* Phone + Password Authentication & Recovery Code Management */}
             <div className="p-4 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <p className="text-xs font-extrabold text-[#172033] flex items-center gap-1.5">
-                  <Link2 className="w-3.5 h-3.5 text-[#FF8500]" />
-                  <span>{lang === 'bn' ? 'সংযুক্ত লগইন পদ্ধতি' : 'Linked Sign-In Methods'}</span>
+                  <Phone className="w-3.5 h-3.5 text-[#FF8500]" />
+                  <span>{lang === 'bn' ? 'ফোন ও পাসওয়ার্ড নিরাপত্তা' : 'Mobile & Password Security'}</span>
                 </p>
-                {profile?.authMethod && (
-                  <span className="text-[11px] font-bold text-[#777777]">
-                    {lang === 'bn' ? 'মূল মাধ্যম:' : 'Primary:'}{' '}
-                    <span className="text-[#172033] uppercase">{profile.authMethod}</span>
-                  </span>
-                )}
-              </div>
-
-              <div className="flex flex-wrap gap-2 text-[11px] font-bold">
-                <span
-                  className={`px-2.5 py-1 rounded-lg border ${
-                    hasGoogleLinked
-                      ? 'bg-emerald-50 border-emerald-200 text-[#16A34A]'
-                      : 'bg-white border-[#E6ECFA] text-[#777777]'
-                  }`}
-                >
-                  {hasGoogleLinked ? '✓ Google' : '○ Google'}
-                </span>
-                <span
-                  className={`px-2.5 py-1 rounded-lg border ${
-                    hasPasswordLinked
-                      ? 'bg-emerald-50 border-emerald-200 text-[#16A34A]'
-                      : 'bg-white border-[#E6ECFA] text-[#777777]'
-                  }`}
-                >
-                  {hasPasswordLinked
-                    ? lang === 'bn'
-                      ? '✓ ইমেইল ও পাসওয়ার্ড'
-                      : '✓ Email & Password'
-                    : lang === 'bn'
-                      ? '○ পাসওয়ার্ড যুক্ত নয়'
-                      : '○ No Password Linked'}
-                </span>
-                <span
-                  className={`px-2.5 py-1 rounded-lg border inline-flex items-center gap-1 font-mono-num ${
-                    profile?.phone && normalizeBangladeshPhoneClient(profile.phone)
-                      ? 'bg-emerald-50 border-emerald-200 text-[#16A34A]'
-                      : 'bg-white border-[#E6ECFA] text-[#777777]'
-                  }`}
-                >
-                  <Phone className="w-3 h-3" />
-                  <span>
-                    {profile?.phone && normalizeBangladeshPhoneClient(profile.phone)
-                      ? normalizeBangladeshPhoneClient(profile.phone)
-                      : lang === 'bn'
-                        ? 'ফোন যুক্ত নয়'
-                        : 'No Phone Linked'}
-                  </span>
+                <span className="px-2.5 py-1 rounded-lg border bg-emerald-50 border-emerald-200 text-[#16A34A] text-[11px] font-bold font-mono-num">
+                  ✓ {profile?.phone || user.phone}
                 </span>
               </div>
 
               <div className="flex flex-wrap gap-2">
-                {!hasGoogleLinked && (
-                  <button
-                    type="button"
-                    disabled={linkingBusy}
-                    onClick={handleLinkGoogleAccount}
-                    className="px-3.5 py-2 rounded-xl bg-white border border-[#E6ECFA] hover:border-[#FF8500] text-[#172033] text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-60"
-                  >
-                    <Link2 className="w-3.5 h-3.5 text-[#FF8500]" />
-                    <span>{lang === 'bn' ? 'Google অ্যাকাউন্ট লিংক করুন' : 'Link Google Account'}</span>
-                  </button>
-                )}
-                {!hasPasswordLinked && (
-                  <button
-                    type="button"
-                    disabled={linkingBusy}
-                    onClick={() => setLinkPwdOpen((v) => !v)}
-                    className="px-3.5 py-2 rounded-xl bg-white border border-[#E6ECFA] hover:border-[#FF8500] text-[#172033] text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-60"
-                  >
-                    <KeyRound className="w-3.5 h-3.5 text-[#FF8500]" />
-                    <span>{lang === 'bn' ? 'পাসওয়ার্ড যুক্ত করুন' : 'Add Digital Hub Password'}</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPwdFormOpen((v) => !v);
+                    setRegenOpen(false);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-white border border-[#E6ECFA] hover:border-[#FF8500] text-[#172033] text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <KeyRound className="w-3.5 h-3.5 text-[#FF8500]" />
+                  <span>{lang === 'bn' ? 'পাসওয়ার্ড পরিবর্তন করুন' : 'Change Password'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRegenOpen((v) => !v);
+                    setPwdFormOpen(false);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-white border border-[#E6ECFA] hover:border-[#FF8500] text-[#172033] text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-[#FF8500]" />
+                  <span>{lang === 'bn' ? 'নতুন রিকভারি কোড তৈরি করুন' : 'Generate New Recovery Code'}</span>
+                </button>
               </div>
 
-              {linkPwdOpen && !hasPasswordLinked && (
+              {freshRecoveryCode && (
+                <div className="p-3 rounded-xl bg-white border-2 border-dashed border-[#FF8500]/50 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[11px] font-bold text-[#777777]">
+                      {lang === 'bn' ? 'নতুন ব্যাকআপ রিকভারি কোড (একবারই দেখানো হবে):' : 'New Backup Recovery Code (shown once):'}
+                    </p>
+                    <p className="text-base font-mono-num font-extrabold text-[#172033] tracking-wider">
+                      {freshRecoveryCode}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(freshRecoveryCode).catch(() => {});
+                      setFeedback(lang === 'bn' ? 'রিকভারি কোড কপি হয়েছে।' : 'Recovery code copied.');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-[#FFF7EE] border border-[#FF8500]/40 text-xs font-bold text-[#172033] inline-flex items-center gap-1"
+                  >
+                    <Copy className="w-3.5 h-3.5 text-[#FF8500]" />
+                    <span>{lang === 'bn' ? 'কপি' : 'Copy'}</span>
+                  </button>
+                </div>
+              )}
+
+              {pwdFormOpen && (
                 <form
-                  onSubmit={handleLinkPasswordCredential}
+                  onSubmit={handleChangePassword}
                   className="pt-2 border-t border-[#DCE4F7] grid grid-cols-1 sm:grid-cols-2 gap-2.5"
                 >
                   <input
                     type="password"
                     required
+                    value={currentPwd}
+                    onChange={(e) => setCurrentPwd(e.target.value)}
+                    placeholder={lang === 'bn' ? 'বর্তমান পাসওয়ার্ড' : 'Current password'}
+                    className="sm:col-span-2 px-3 py-2 rounded-xl bg-white border border-[#E6ECFA] text-xs"
+                  />
+                  <input
+                    type="password"
+                    required
                     minLength={6}
-                    value={linkPwdValue}
-                    onChange={(e) => setLinkPwdValue(e.target.value)}
+                    value={newPwd}
+                    onChange={(e) => setNewPwd(e.target.value)}
                     placeholder={lang === 'bn' ? 'নতুন পাসওয়ার্ড (কমপক্ষে ৬ অক্ষর)' : 'New password (min 6 chars)'}
                     className="px-3 py-2 rounded-xl bg-white border border-[#E6ECFA] text-xs"
                   />
@@ -1510,31 +1420,65 @@ export function CustomerDashboard({
                     type="password"
                     required
                     minLength={6}
-                    value={linkPwdConfirm}
-                    onChange={(e) => setLinkPwdConfirm(e.target.value)}
-                    placeholder={lang === 'bn' ? 'পাসওয়ার্ড নিশ্চিত করুন' : 'Confirm password'}
+                    value={confirmNewPwd}
+                    onChange={(e) => setConfirmNewPwd(e.target.value)}
+                    placeholder={lang === 'bn' ? 'নতুন পাসওয়ার্ড নিশ্চিত করুন' : 'Confirm new password'}
                     className="px-3 py-2 rounded-xl bg-white border border-[#E6ECFA] text-xs"
                   />
                   <div className="sm:col-span-2 flex items-center gap-2">
                     <button
                       type="submit"
-                      disabled={linkingBusy}
+                      disabled={pwdBusy}
                       className="px-4 py-2 rounded-xl dh-orange-gradient text-white text-xs font-bold disabled:opacity-60"
                     >
-                      {linkingBusy ? '...' : lang === 'bn' ? 'পাসওয়ার্ড লিংক করুন' : 'Link Password'}
+                      {pwdBusy ? '...' : lang === 'bn' ? 'পাসওয়ার্ড আপডেট করুন' : 'Update Password'}
                     </button>
                     <button
                       type="button"
                       onClick={() => {
-                        setLinkPwdOpen(false);
-                        setLinkPwdValue('');
-                        setLinkPwdConfirm('');
+                        setPwdFormOpen(false);
+                        setCurrentPwd('');
+                        setNewPwd('');
+                        setConfirmNewPwd('');
                       }}
                       className="px-3 py-2 rounded-xl bg-white border border-[#E6ECFA] text-xs font-bold text-[#777777]"
                     >
                       {lang === 'bn' ? 'বাতিল' : 'Cancel'}
                     </button>
                   </div>
+                </form>
+              )}
+
+              {regenOpen && (
+                <form
+                  onSubmit={handleRegenerateRecoveryCode}
+                  className="pt-2 border-t border-[#DCE4F7] flex flex-wrap items-center gap-2"
+                >
+                  <input
+                    type="password"
+                    required
+                    value={regenCurrentPwd}
+                    onChange={(e) => setRegenCurrentPwd(e.target.value)}
+                    placeholder={lang === 'bn' ? 'যাচাইয়ের জন্য বর্তমান পাসওয়ার্ড দিন' : 'Enter current password to confirm'}
+                    className="flex-1 min-w-[200px] px-3 py-2 rounded-xl bg-white border border-[#E6ECFA] text-xs"
+                  />
+                  <button
+                    type="submit"
+                    disabled={regenBusy}
+                    className="px-4 py-2 rounded-xl dh-orange-gradient text-white text-xs font-bold disabled:opacity-60"
+                  >
+                    {regenBusy ? '...' : lang === 'bn' ? 'তৈরি করুন' : 'Generate'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegenOpen(false);
+                      setRegenCurrentPwd('');
+                    }}
+                    className="px-3 py-2 rounded-xl bg-white border border-[#E6ECFA] text-xs font-bold text-[#777777]"
+                  >
+                    {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                  </button>
                 </form>
               )}
             </div>
@@ -1548,7 +1492,7 @@ export function CustomerDashboard({
                   setFeedback('');
                   try {
                     await triggerLogoutAllDevicesServer();
-                    await signOut(auth);
+                    await onLogout();
                   } catch (err) {
                     setFeedback(err instanceof Error ? err.message : 'Failed to revoke sessions');
                   } finally {
