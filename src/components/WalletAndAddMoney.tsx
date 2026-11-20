@@ -5,12 +5,16 @@ import {
   ArrowUpRight,
   Building2,
   CheckCircle2,
+  Coins,
   CreditCard,
+  Film,
   Gift,
   PlusCircle,
   Wallet,
 } from 'lucide-react';
 import {
+  AdRewardTransaction,
+  AppRoute,
   AuthUser,
   Language,
   PaymentMethod,
@@ -44,9 +48,11 @@ interface WalletAndAddMoneyProps {
   profile: UserProfile | null;
   wallet: WalletAccount | null;
   walletTxs: WalletTransaction[];
+  adRewardTransactions?: AdRewardTransaction[];
   withdrawals?: WithdrawalRequest[];
   paymentMethods?: PaymentMethodConfig[];
   settings: SiteSettings;
+  onNavigate?: (r: AppRoute) => void;
   onOpenAuth: () => void;
 }
 
@@ -147,9 +153,11 @@ export function WalletAndAddMoney({
   profile,
   wallet,
   walletTxs,
+  adRewardTransactions = [],
   withdrawals = [],
   paymentMethods = [],
   settings,
+  onNavigate,
   onOpenAuth,
 }: WalletAndAddMoneyProps) {
   const [tab, setTab] = useState<'wallet' | 'add-money' | 'withdraw'>(initialTab);
@@ -484,6 +492,36 @@ export function WalletAndAddMoney({
             ৳{(wallet?.totalSpentBdt || 0).toFixed(2)}
           </p>
         </div>
+      </div>
+
+      {/* Watch & Earn Coins Balance Strip */}
+      <div className="dh-card rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-[#172033] to-[#243452] text-white border-none">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="w-10 h-10 rounded-xl bg-[#FF8500]/20 border border-[#FF8500]/40 text-[#FACC15] flex items-center justify-center shrink-0">
+            <Coins className="w-5 h-5" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[11px] text-white/75 font-semibold">
+              {lang === 'bn' ? 'ওয়াচ ও আর্ন কয়েন ব্যালেন্স' : 'Watch & Earn Coins Balance'}
+            </p>
+            <p className="text-lg font-extrabold font-mono-num text-[#FACC15]">
+              {wallet?.coinsAvailable ?? 0} {lang === 'bn' ? 'কয়েন' : 'Coins'}{' '}
+              <span className="text-xs font-normal text-white/80">
+                (≈ ৳{((wallet?.coinsAvailable ?? 0) / Math.max(1, settings.watchEarnCoinsPerBdt ?? 10)).toFixed(2)})
+              </span>
+            </p>
+          </div>
+        </div>
+        {onNavigate && (
+          <button
+            type="button"
+            onClick={() => onNavigate('watch-earn')}
+            className="px-4 py-2 rounded-xl dh-orange-gradient text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5 shrink-0 self-start sm:self-auto cursor-pointer hover:opacity-95"
+          >
+            <Film className="w-3.5 h-3.5" />
+            <span>{lang === 'bn' ? 'বিজ্ঞাপন দেখে কয়েন আয় / রিডিম' : 'Watch Ads & Redeem Coins'}</span>
+          </button>
+        )}
       </div>
 
       {tab === 'add-money' ? (
@@ -938,6 +976,47 @@ export function WalletAndAddMoney({
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {adRewardTransactions.length > 0 && (
+            <div className="mt-6 pt-5 border-t border-[#E6ECFA] dark:border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+                  <Coins className="w-4 h-4 text-[#FF8500]" />
+                  {lang === 'bn' ? 'ওয়াচ ও আর্ন কয়েন ইতিহাস' : 'Watch & Earn Coin History'} ({adRewardTransactions.length})
+                </h3>
+                {onNavigate && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('watch-earn')}
+                    className="text-xs font-bold text-[#FF8500] hover:underline"
+                  >
+                    {lang === 'bn' ? 'সব দেখুন →' : 'Open Watch & Earn →'}
+                  </button>
+                )}
+              </div>
+              {adRewardTransactions.slice(0, 12).map((tx) => (
+                <div
+                  key={tx.id}
+                  className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 flex items-center justify-between gap-2 text-xs"
+                >
+                  <div className="min-w-0">
+                    <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
+                      {tx.note || tx.type} ({tx.provider})
+                    </p>
+                    <p className="text-[11px] text-[#777777] dark:text-slate-400">
+                      {formatDateShort(tx.createdAt, lang)} · {tx.status}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0 font-mono-num">
+                    <p className={`font-extrabold ${tx.coins >= 0 ? 'text-[#16A34A]' : 'text-[#FF8500]'}`}>
+                      {tx.coins >= 0 ? `+${tx.coins}` : tx.coins} coins
+                    </p>
+                    <p className="text-[11px] text-[#777777] dark:text-slate-400">৳{tx.bdtEquivalent}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

@@ -159,13 +159,15 @@ export const BRAND_META: Record<string, BrandMeta> = {
   freefire_indo: { bg: '#27100D', bgEnd: '#991B1B', accent: '#F87171', label: 'Free Fire ID', sublabel: 'Indonesia UID', abbr: 'ID' },
   pubg: { bg: '#1E1A0D', bgEnd: '#854D0E', accent: '#F2A900', label: 'PUBG Mobile', sublabel: 'Global UC', abbr: 'UC' },
   efootball: { bg: '#08124D', bgEnd: '#1E3A8A', accent: '#FFE600', label: 'eFootball™', sublabel: 'Konami Coins', abbr: 'eF' },
+  efootball_android: { bg: '#08124D', bgEnd: '#14532D', accent: '#4ADE80', label: 'eFootball Android', sublabel: 'Android Coins', abbr: 'eFA' },
+  efootball_iphone: { bg: '#0A1638', bgEnd: '#1D4ED8', accent: '#60A5FA', label: 'eFootball iPhone', sublabel: 'iPhone / iOS Coins', abbr: 'eFi' },
   roblox: { bg: '#12151E', bgEnd: '#334155', accent: '#FFFFFF', label: 'Roblox', sublabel: 'Official Robux', abbr: 'RBX' },
-  eafc: { bg: '#0A2616', bgEnd: '#166534', accent: '#4ADE80', label: 'EA SPORTS FC', sublabel: 'Coins & Packs', abbr: 'FC' },
+  eafc: { bg: '#0A2616', bgEnd: '#166534', accent: '#4ADE80', label: 'EA SPORTS FC', sublabel: 'FC Points & Packs', abbr: 'FC' },
   dls: { bg: '#0C2342', bgEnd: '#0369A1', accent: '#FACC15', label: 'DLS 2026', sublabel: 'Gems & Season', abbr: 'DLS' },
   coc: { bg: '#2B1707', bgEnd: '#92400E', accent: '#FBBF24', label: 'Clash of Clans', sublabel: 'Gold Pass & Gems', abbr: 'CoC' },
   clashroyale: { bg: '#0D214F', bgEnd: '#1D4ED8', accent: '#FACC15', label: 'Clash Royale', sublabel: 'Pass & Gems', abbr: 'CR' },
   unipin: { bg: '#211309', bgEnd: '#C2410C', accent: '#FF8500', label: 'UniPin', sublabel: 'Official Voucher', abbr: 'UP' },
-  airdrop: { bg: '#0F2238', bgEnd: '#0E7490', accent: '#FDE047', label: 'In-Game Airdrop', sublabel: 'Special Crate', abbr: 'DROP' },
+  airdrop: { bg: '#0F2238', bgEnd: '#0E7490', accent: '#FDE047', label: 'Free Fire Airdrop', sublabel: 'Airdrop & Offers', abbr: 'DROP' },
   mlbb: { bg: '#0E1930', bgEnd: '#1E40AF', accent: '#38BDF8', label: 'Mobile Legends', sublabel: 'MLBB Diamonds', abbr: 'ML' },
   valorant: { bg: '#210D14', bgEnd: '#9F1239', accent: '#FF4655', label: 'Valorant', sublabel: 'Riot VP', abbr: 'VP' },
   genshin: { bg: '#141B38', bgEnd: '#4338CA', accent: '#C4B5FD', label: 'Genshin Impact', sublabel: 'Welkin & Crystals', abbr: 'GI' },
@@ -248,6 +250,8 @@ const FULL_TILE_BRAND_SVGS = new Set([
   'freefire_lvl',
   'freefire_likes',
   'freefire_indo',
+  'efootball_android',
+  'efootball_iphone',
 ]);
 
 export function ServiceBrandLogo({

@@ -184,12 +184,19 @@ export interface ProductPackage {
   nameEn: string;
   priceBdt: number;
   originalPriceBdt?: number;
+  supplierPriceBdt?: number;
+  availability?: 'in_stock' | 'limited' | 'out_of_stock';
+  durationBn?: string;
+  durationEn?: string;
+  deliveryDurationBn?: string;
+  deliveryDurationEn?: string;
   tag?: string;
 }
 
 export interface Product {
   id: string;
   categoryId: string;
+  catalogSectionId?: string;
   subcategoryBn?: string;
   subcategoryEn?: string;
   brandKey?: string;
@@ -199,6 +206,7 @@ export interface Product {
   descriptionEn: string;
   priceBdt: number;
   originalPriceBdt?: number;
+  supplierPriceBdt?: number;
   discountPercent?: number;
   packages?: ProductPackage[];
   availability: 'in_stock' | 'limited' | 'out_of_stock';
@@ -454,7 +462,15 @@ export interface AdViewingSession {
   unitId: string;
   provider: string;
   sessionToken: string;
-  status: 'initiated' | 'awaiting_callback' | 'verified' | 'credited' | 'verification_failed' | 'expired';
+  status:
+    | 'initiated'
+    | 'watching'
+    | 'awaiting_callback'
+    | 'verified'
+    | 'credited'
+    | 'load_failed'
+    | 'verification_failed'
+    | 'expired';
   coinsAwarded: number;
   failureReason?: string;
   providerEventId?: string;
@@ -616,6 +632,7 @@ export interface SiteSettings {
   whatsappLink?: string;
   telegramLink?: string;
   telegramChannelLink?: string;
+  messengerLink?: string;
   facebookLink?: string;
   aboutBn?: string;
   aboutEn?: string;

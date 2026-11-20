@@ -28,12 +28,27 @@
     scroll-behavior: smooth;
     background-color: var(--dh-bg);
     color: var(--dh-text);
+    overflow-x: clip;
+    max-width: 100%;
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
     background-color: var(--dh-bg);
     color: var(--dh-text);
     transition: background-color 180ms ease, color 180ms ease;
+    overflow-x: clip;
+    max-width: 100%;
+    margin: 0;
+  }
+
+  #root {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  img, video, iframe {
+    max-width: 100%;
   }
 
   h1, h2, h3, .font-display {

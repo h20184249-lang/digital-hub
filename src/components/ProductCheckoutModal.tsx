@@ -41,10 +41,16 @@ import {
   validateTransactionIdServer,
 } from '../lib/firestoreService';
 import {
+  formatBdt,
+  getEffectiveProductAvailability,
+  getFirstAvailablePackage,
   getNormalizedPackages,
+  getPackageAvailability,
   getProductOrderFormType,
   getProductStockCount,
   getRulesAndRefundPoints,
+  hasGenuineDiscount,
+  isPackagePurchasable,
 } from '../lib/catalogHelpers';
 import {
   buildServiceDeliveryNote,
@@ -112,12 +118,13 @@ export function ProductCheckoutModal({
   useEffect(() => {
     const pkgs = product ? getNormalizedPackages(product) : [];
     const matchedPkg = initialPackageId ? pkgs.find((p) => p.id === initialPackageId) : undefined;
+    const defaultPkg = product ? getFirstAvailablePackage(product) || pkgs[0] || null : null;
     setTab(initialTab);
     setQuantity(1);
     setError('');
     setDoneOrderNumber('');
     setReferenceAttachmentUrl('');
-    setSelectedPackage(matchedPkg || pkgs[0] || null);
+    setSelectedPackage(matchedPkg || defaultPkg);
     setServiceValues(createInitialServiceOrderValues(user?.email || '', product || undefined));
   }, [product?.id, initialTab, initialPackageId]);
 
@@ -155,11 +162,19 @@ export function ProductCheckoutModal({
   if (!product) return null;
 
   const packages = getNormalizedPackages(product);
+  const effectiveAvail = getEffectiveProductAvailability(product);
+  const stockCount = getProductStockCount(product);
+  const isProductOutOfStock = effectiveAvail === 'out_of_stock' || stockCount <= 0;
   const activePackage = selectedPackage || packages[0];
+  const activePkgPurchasable = !isProductOutOfStock && isPackagePurchasable(activePackage, product);
   const unitPrice = activePackage ? activePackage.priceBdt : product.priceBdt;
   const originalUnitPrice = activePackage?.originalPriceBdt ?? product.originalPriceBdt;
+  const showGenuineDiscount = hasGenuineDiscount(unitPrice, originalUnitPrice);
+  const discountPct =
+    showGenuineDiscount && originalUnitPrice
+      ? Math.min(95, Math.max(1, Math.round(((originalUnitPrice - unitPrice) / originalUnitPrice) * 100)))
+      : 0;
   const totalCost = Math.max(1, unitPrice * quantity);
-  const stockCount = getProductStockCount(product);
   const formType = getProductOrderFormType(product);
   const { rules, refundPolicy } = getRulesAndRefundPoints(product, lang);
   const walletBalance = wallet?.availableBalanceBdt || 0;
@@ -193,12 +208,20 @@ export function ProductCheckoutModal({
     e.preventDefault();
     if (!product) return;
     setError('');
+    if (!activePkgPurchasable) {
+      setError(
+        lang === 'bn'
+          ? 'নির্বাচিত প্যাকেজটি বর্তমানে Out of Stock। অনুগ্রহ করে অন্য একটি উপলব্ধ প্যাকেজ নির্বাচন করুন।'
+          : 'The selected package is currently Out of Stock. Please choose an available package.'
+      );
+      return;
+    }
     if (!user) {
       onOpenAuth();
       return;
     }
 
-    const validationErr = validateServiceOrderValues(formType, serviceValues, lang);
+    const validationErr = validateServiceOrderValues(formType, serviceValues, lang, product);
     if (validationErr) {
       setError(validationErr);
       return;
@@ -334,14 +357,26 @@ export function ProductCheckoutModal({
                         {lang === 'bn' ? product.subcategoryBn || product.subcategoryEn : product.subcategoryEn}
                       </span>
                     )}
-                    {product.discountPercent ? (
+                    {!isProductOutOfStock && discountPct > 0 ? (
                       <span className="px-2 py-0.5 rounded-md bg-[#DC2626] text-white text-[11px] font-bold">
-                        -{product.discountPercent}%
+                        -{discountPct}%
                       </span>
                     ) : null}
-                    <span className="inline-flex items-center gap-1 text-emerald-700 text-[11px] font-bold">
+                    <span
+                      className={`inline-flex items-center gap-1 text-[11px] font-bold ${
+                        isProductOutOfStock
+                          ? 'text-[#DC2626]'
+                          : effectiveAvail === 'limited'
+                            ? 'text-[#FF8500]'
+                            : 'text-emerald-700'
+                      }`}
+                    >
                       <PackageCheck className="w-3.5 h-3.5" />
-                      {stockCount} {lang === 'bn' ? 'স্টক' : 'Stock'}
+                      {isProductOutOfStock
+                        ? t(lang, 'outOfStock')
+                        : effectiveAvail === 'limited'
+                          ? t(lang, 'limited')
+                          : t(lang, 'inStock')}
                     </span>
                     <span className="inline-flex items-center gap-1 text-xs text-[#777777]">
                       <Clock className="w-3.5 h-3.5 text-[#FF8500]" />
@@ -364,11 +399,11 @@ export function ProductCheckoutModal({
 
                   <div className="flex flex-wrap items-baseline gap-2.5">
                     <span className="text-2xl font-extrabold font-mono-num text-[#FF8500]">
-                      ৳{unitPrice}
+                      {formatBdt(unitPrice)}
                     </span>
-                    {originalUnitPrice && originalUnitPrice > 0 && originalUnitPrice !== unitPrice && (
-                      <span className="px-2 py-0.5 rounded-md bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-mono-num text-[#777777]">
-                        {t(lang, 'originalPriceLabel')}: ৳{originalUnitPrice}
+                    {showGenuineDiscount && originalUnitPrice && (
+                      <span className="px-2 py-0.5 rounded-md bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-mono-num text-[#777777] line-through">
+                        {formatBdt(originalUnitPrice)}
                       </span>
                     )}
                     {activePackage && (
@@ -400,36 +435,58 @@ export function ProductCheckoutModal({
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                   {packages.map((pkg) => {
                     const isSel = activePackage?.id === pkg.id;
+                    const pkgAvail = getPackageAvailability(pkg, product);
+                    const pkgOut = isProductOutOfStock || pkgAvail === 'out_of_stock';
+                    const pkgGenuineDiscount = hasGenuineDiscount(pkg.priceBdt, pkg.originalPriceBdt);
+                    const pkgDuration = lang === 'bn' ? pkg.durationBn || pkg.durationEn : pkg.durationEn || pkg.durationBn;
                     return (
                       <button
                         key={pkg.id}
                         type="button"
-                        onClick={() => setSelectedPackage(pkg)}
+                        disabled={pkgOut}
+                        onClick={() => {
+                          if (!pkgOut) setSelectedPackage(pkg);
+                        }}
                         className={`p-3 rounded-2xl border text-left transition-all relative ${
-                          isSel
-                            ? 'border-[#FF8500] bg-[#FFF7EE] ring-2 ring-[#FF8500]/20'
-                            : 'border-[#E6ECFA] bg-[#F3F6FF] hover:border-[#FF8500]/60'
+                          pkgOut
+                            ? 'border-red-200 bg-red-50/50 opacity-65 cursor-not-allowed'
+                            : isSel
+                              ? 'border-[#FF8500] bg-[#FFF7EE] ring-2 ring-[#FF8500]/20'
+                              : 'border-[#E6ECFA] bg-[#F3F6FF] hover:border-[#FF8500]/60'
                         }`}
                       >
-                        {pkg.tag && (
-                          <span className="inline-block px-1.5 py-0.5 rounded bg-[#FF8500] text-white text-[9px] font-extrabold uppercase mb-1">
-                            {pkg.tag}
-                          </span>
-                        )}
+                        <div className="mb-1 min-h-[16px]">
+                          {pkgOut ? (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-[#DC2626] text-white text-[9px] font-extrabold uppercase">
+                              {t(lang, 'outOfStock')}
+                            </span>
+                          ) : pkg.tag ? (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-[#FF8500] text-white text-[9px] font-extrabold uppercase">
+                              {pkg.tag}
+                            </span>
+                          ) : pkgAvail === 'limited' ? (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[9px] font-extrabold uppercase">
+                              {t(lang, 'limited')}
+                            </span>
+                          ) : null}
+                        </div>
                         <p className="text-xs font-bold text-[#172033] leading-snug">
                           {lang === 'bn' ? pkg.nameBn : pkg.nameEn}
                         </p>
+                        {pkgDuration && (
+                          <p className="text-[10px] text-[#777777] mt-0.5 truncate">{pkgDuration}</p>
+                        )}
                         <div className="flex items-baseline gap-1.5 mt-1">
-                          <span className="text-sm font-extrabold font-mono-num text-[#FF8500]">
-                            ৳{pkg.priceBdt}
+                          <span
+                            className={`text-sm font-extrabold font-mono-num ${
+                              pkgOut ? 'text-[#777777]' : 'text-[#FF8500]'
+                            }`}
+                          >
+                            {formatBdt(pkg.priceBdt)}
                           </span>
-                          {pkg.originalPriceBdt && pkg.originalPriceBdt > 0 && pkg.originalPriceBdt !== pkg.priceBdt && (
-                            <span className="text-[10px] font-mono-num text-[#777777]">
-                              {pkg.originalPriceBdt > pkg.priceBdt ? (
-                                <span className="line-through">৳{pkg.originalPriceBdt}</span>
-                              ) : (
-                                <span>(Base ৳{pkg.originalPriceBdt})</span>
-                              )}
+                          {pkgGenuineDiscount && pkg.originalPriceBdt && (
+                            <span className="text-[10px] font-mono-num text-[#777777] line-through">
+                              {formatBdt(pkg.originalPriceBdt)}
                             </span>
                           )}
                         </div>
@@ -508,25 +565,25 @@ export function ProductCheckoutModal({
 
                 <button
                   type="button"
-                  disabled={product.availability === 'out_of_stock'}
+                  disabled={!activePkgPurchasable}
                   onClick={() => {
                     onAddToCart(product, quantity, activePackage);
                     onClose();
                   }}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-[#172033] text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 hover:bg-[#23314d] disabled:opacity-50"
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-[#172033] text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 hover:bg-[#23314d] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ShoppingCart className="w-4 h-4" />
-                  {t(lang, 'addToCart')}
+                  {!activePkgPurchasable ? t(lang, 'outOfStock') : t(lang, 'addToCart')}
                 </button>
 
                 <button
                   type="button"
-                  disabled={product.availability === 'out_of_stock'}
+                  disabled={!activePkgPurchasable}
                   onClick={() => setTab('checkout')}
-                  className="flex-1 py-2.5 px-4 rounded-xl dh-orange-gradient text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-sm hover:opacity-95 disabled:opacity-50"
+                  className="flex-1 py-2.5 px-4 rounded-xl dh-orange-gradient text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-sm hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ShieldCheck className="w-4 h-4" />
-                  {t(lang, 'buyNow')} · ৳{totalCost}
+                  {!activePkgPurchasable ? t(lang, 'outOfStock') : `${t(lang, 'buyNow')} · ${formatBdt(totalCost)}`}
                 </button>
               </div>
 
@@ -586,13 +643,12 @@ export function ProductCheckoutModal({
                     </p>
                     <p className="text-[11px] text-[#777777]">
                       {lang === 'bn' ? product.deliveryDurationBn : product.deliveryDurationEn}
-                      {originalUnitPrice && originalUnitPrice > 0
-                        ? ` · ${t(lang, 'originalPriceLabel')}: ৳${originalUnitPrice} → ${t(lang, 'websitePriceLabel')}: ৳${unitPrice}`
-                        : ''}
                     </p>
                   </div>
                 </div>
-                <p className="text-xl font-extrabold font-mono-num text-[#FF8500] shrink-0">৳{totalCost}</p>
+                <p className="text-xl font-extrabold font-mono-num text-[#FF8500] shrink-0">
+                  {formatBdt(totalCost)}
+                </p>
               </div>
 
               {!user && (
@@ -729,10 +785,14 @@ export function ProductCheckoutModal({
 
               <button
                 type="submit"
-                disabled={submitting || (method === 'wallet' && !walletSufficient)}
+                disabled={submitting || !activePkgPurchasable || (method === 'wallet' && !walletSufficient)}
                 className="w-full py-3 rounded-xl dh-orange-gradient text-white font-bold text-sm shadow-md hover:opacity-95 disabled:opacity-60"
               >
-                {submitting ? '...' : `${t(lang, 'submitPayment')} · ৳${totalCost}`}
+                {submitting
+                  ? '...'
+                  : !activePkgPurchasable
+                    ? t(lang, 'outOfStock')
+                    : `${t(lang, 'submitPayment')} · ${formatBdt(totalCost)}`}
               </button>
             </form>
           )}

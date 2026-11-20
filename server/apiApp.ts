@@ -152,9 +152,9 @@ export function createApiApp(): express.Express {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     const cspDirectives = [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://pagead2.googlesyndication.com https://afders.org https://bicea.org",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "font-src 'self' data: https://fonts.gstatic.com",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:",
+      "style-src 'self' 'unsafe-inline' https:",
+      "font-src 'self' data: https:",
       "img-src 'self' data: blob: https:",
       "media-src 'self' data: blob: https:",
       "connect-src 'self' https:",
@@ -447,8 +447,8 @@ export function createApiApp(): express.Express {
     }
   });
 
-  // S2S Ad Network Postback verification endpoint
-  const handlePostback = (req: express.Request, res: express.Response) => {
+  // S2S Ad Network Postback verification endpoint (atomically credits verified sessions in D1/SQLite)
+  const handlePostback = async (req: express.Request, res: express.Response) => {
     const providerRaw = String(req.params.provider || '')
       .trim()
       .toLowerCase()
@@ -499,7 +499,109 @@ export function createApiApp(): express.Express {
       return;
     }
 
-    res.json({ ok: true, recorded: true, provider: providerRaw, sessionToken });
+    try {
+      const db = await getAppDatabase();
+      const sessionRow = await db.first<{
+        id: string;
+        user_id: string;
+        status: string;
+        payload_json: string;
+      }>('SELECT id, user_id, status, payload_json FROM ad_viewing_sessions WHERE session_token = ? LIMIT 1', [
+        sessionToken,
+      ]);
+
+      if (!sessionRow) {
+        res.status(404).json({ ok: false, error: 'Session token not found' });
+        return;
+      }
+
+      if (String(sessionRow.status || '').toLowerCase() === 'credited') {
+        res.json({ ok: true, recorded: true, alreadyCredited: true, provider: providerRaw, sessionToken });
+        return;
+      }
+
+      const settingsRow = await db.first<{ payload_json: string }>(
+        `SELECT payload_json FROM catalog_overrides WHERE collection = 'settings' AND doc_id = 'global' AND deleted = 0 LIMIT 1`
+      );
+      let settingsObj: Record<string, unknown> = {};
+      if (settingsRow?.payload_json) {
+        try {
+          settingsObj = JSON.parse(settingsRow.payload_json) as Record<string, unknown>;
+        } catch {
+          settingsObj = {};
+        }
+      }
+      const coinsPerAd = Math.max(1, Math.floor(Number(settingsObj.watchEarnCoinsPerAd ?? 10) || 10));
+      const coinsPerBdt = Math.max(1, Number(settingsObj.watchEarnCoinsPerBdt ?? 10) || 10);
+
+      let payloadObj: Record<string, unknown> = {};
+      try {
+        payloadObj = JSON.parse(sessionRow.payload_json || '{}') as Record<string, unknown>;
+      } catch {
+        payloadObj = {};
+      }
+      const now = Date.now();
+      const rewardCoins = Math.max(1, Math.floor(Number(payloadObj.rewardCoins || coinsPerAd) || coinsPerAd));
+      const updatedPayload = {
+        ...payloadObj,
+        status: 'credited',
+        coinsAwarded: rewardCoins,
+        providerEventId,
+        verifiedAt: now,
+        creditedAt: new Date(now).toISOString(),
+        updatedAt: now,
+      };
+
+      const upd = await db.run(
+        `UPDATE ad_viewing_sessions
+         SET status = 'credited', payload_json = ?, updated_at = ?
+         WHERE id = ? AND LOWER(status) IN ('watching', 'pending', 'awaiting_callback', 'initiated')`,
+        [JSON.stringify(updatedPayload), now, sessionRow.id]
+      );
+
+      if (upd.changes > 0) {
+        await db.run(
+          `INSERT INTO watch_earn_balances (user_id, coins_available, coins_lifetime_earned, coins_redeemed, updated_at)
+           VALUES (?, ?, ?, 0, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             coins_available = coins_available + excluded.coins_available,
+             coins_lifetime_earned = coins_lifetime_earned + excluded.coins_lifetime_earned,
+             updated_at = excluded.updated_at`,
+          [sessionRow.user_id, rewardCoins, rewardCoins, now]
+        );
+        const rtxId = `rtx_${now.toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
+        const bdtEquivalent = Number((rewardCoins / coinsPerBdt).toFixed(2));
+        const rtxPayload = {
+          id: rtxId,
+          sessionId: sessionRow.id,
+          userId: sessionRow.user_id,
+          userEmail: String(payloadObj.userEmail || ''),
+          provider: String(payloadObj.provider || providerRaw.toUpperCase()),
+          type: 'watch_earn_credit',
+          coins: rewardCoins,
+          bdtEquivalent,
+          status: 'Credited',
+          note: `S2S verified ad reward (+${rewardCoins} coins)`,
+          createdAt: now,
+        };
+        await db.run(
+          `INSERT INTO ad_reward_transactions (id, user_id, type, status, coins, payload_json, created_at)
+           VALUES (?, ?, 'watch_earn_credit', 'Credited', ?, ?, ?)`,
+          [rtxId, sessionRow.user_id, rewardCoins, JSON.stringify(rtxPayload), now]
+        );
+      }
+
+      res.json({
+        ok: true,
+        recorded: true,
+        credited: upd.changes > 0,
+        coinsAwarded: upd.changes > 0 ? rewardCoins : 0,
+        provider: providerRaw,
+        sessionToken,
+      });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Failed to settle S2S postback' });
+    }
   };
   app.get('/api/ads/postback/:provider', handlePostback);
   app.post('/api/ads/postback/:provider', handlePostback);

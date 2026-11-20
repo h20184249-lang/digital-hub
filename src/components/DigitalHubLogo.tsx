@@ -12,18 +12,18 @@ export function DigitalHubLogo({ subtitle, compact = false, siteName, logoUrl }:
   const restWords = parts.slice(1).join(' ');
 
   return (
-    <div className="flex items-center gap-2.5 select-none">
+    <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 select-none">
       {logoUrl ? (
         <img
           src={logoUrl}
           alt={cleanName}
           referrerPolicy="no-referrer"
-          className={`${compact ? 'w-8 h-8' : 'w-10 h-10'} rounded-xl object-cover shrink-0 border border-[#E6ECFA] dark:border-slate-700`}
+          className={`${compact ? 'w-7 h-7 sm:w-8 sm:h-8' : 'w-10 h-10'} rounded-xl object-cover shrink-0 border border-[#E6ECFA] dark:border-slate-700`}
         />
       ) : (
         <svg
-          width={compact ? 34 : 40}
-          height={compact ? 34 : 40}
+          width={compact ? 32 : 40}
+          height={compact ? 32 : 40}
           viewBox="0 0 48 48"
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
@@ -48,12 +48,14 @@ export function DigitalHubLogo({ subtitle, compact = false, siteName, logoUrl }:
         </svg>
       )}
       <div className="min-w-0 leading-tight">
-        <div className="flex items-center gap-0.5 font-display font-extrabold tracking-tight text-base sm:text-lg whitespace-nowrap">
+        <div className="flex items-center gap-0.5 font-display font-extrabold tracking-tight text-sm sm:text-lg whitespace-nowrap">
           <span className="text-[#172033] dark:text-slate-100">{firstWord}</span>
           {restWords && <span className="text-[#FF8500] ml-1">{restWords}</span>}
         </div>
         {subtitle && (
-          <p className="text-[10px] sm:text-[11px] font-medium text-[#777777] dark:text-slate-400 truncate max-w-[165px] sm:max-w-none">
+          <p
+            className={`${compact ? 'hidden sm:block' : 'block'} text-[10px] sm:text-[11px] font-medium text-[#777777] dark:text-slate-400 truncate max-w-[165px] sm:max-w-none`}
+          >
             {subtitle}
           </p>
         )}

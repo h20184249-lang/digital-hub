@@ -37,6 +37,11 @@ import {
 import { ServiceBrandLogo } from '../BrandLogos';
 import { ProductCard } from '../StorefrontPages';
 import { ConfirmDialog } from './ConfirmDialog';
+import {
+  formatBdt,
+  getEffectiveProductAvailability,
+  getPackageAvailability,
+} from '../../lib/catalogHelpers';
 
 interface AdminPackagesPanelProps {
   lang: Language;
@@ -47,7 +52,7 @@ interface AdminPackagesPanelProps {
   onError: (msg: string) => void;
 }
 
-type StatusFilter = 'all' | 'active' | 'inactive' | 'featured';
+type StatusFilter = 'all' | 'active' | 'inactive' | 'out_of_stock' | 'featured';
 type SortOption = 'sortOrder' | 'price_asc' | 'price_desc' | 'updated_desc' | 'name_asc';
 type DurationUnit = 'days' | 'months' | 'years' | 'lifetime';
 
@@ -275,6 +280,7 @@ export function AdminPackagesPanel({
   const [quickPriceTarget, setQuickPriceTarget] = useState<Product | null>(null);
   const [quickPriceVal, setQuickPriceVal] = useState('');
   const [quickOrigPriceVal, setQuickOrigPriceVal] = useState('');
+  const [quickAvailability, setQuickAvailability] = useState<'in_stock' | 'limited' | 'out_of_stock'>('in_stock');
   const [quickSubPackages, setQuickSubPackages] = useState<ProductPackage[]>([]);
   const [quickPriceConfirmOpen, setQuickPriceConfirmOpen] = useState(false);
   const [quickPriceBusy, setQuickPriceBusy] = useState(false);
@@ -326,9 +332,14 @@ export function AdminPackagesPanel({
     const active = products.filter((p) => p.active).length;
     const inactive = products.length - active;
     const featured = products.filter((p) => p.featured).length;
+    const outOfStock = products.filter(
+      (p) =>
+        getEffectiveProductAvailability(p) === 'out_of_stock' ||
+        (p.packages || []).some((pk) => pk.availability === 'out_of_stock')
+    ).length;
     const discounted = products.filter((p) => (p.discountPercent || 0) > 0).length;
     const withCustomLogo = products.filter((p) => Boolean(p.customLogoUrl)).length;
-    return { total: products.length, active, inactive, featured, discounted, withCustomLogo };
+    return { total: products.length, active, inactive, outOfStock, featured, discounted, withCustomLogo };
   }, [products]);
 
   const filteredProducts = useMemo(() => {
@@ -337,10 +348,24 @@ export function AdminPackagesPanel({
       if (categoryFilter !== 'ALL' && p.categoryId !== categoryFilter) return false;
       if (statusFilter === 'active' && !p.active) return false;
       if (statusFilter === 'inactive' && p.active) return false;
+      if (
+        statusFilter === 'out_of_stock' &&
+        getEffectiveProductAvailability(p) !== 'out_of_stock' &&
+        !(p.packages || []).some((pk) => pk.availability === 'out_of_stock')
+      ) {
+        return false;
+      }
       if (statusFilter === 'featured' && !p.featured) return false;
       if (!q) return true;
       const cat = categoryMap.get(p.categoryId);
+      const subPkgMatch = (p.packages || []).some(
+        (pk) =>
+          pk.nameEn.toLowerCase().includes(q) ||
+          pk.nameBn.toLowerCase().includes(q) ||
+          String(pk.priceBdt).includes(q)
+      );
       return (
+        subPkgMatch ||
         p.id.toLowerCase().includes(q) ||
         (p.titleEn || '').toLowerCase().includes(q) ||
         (p.titleBn || '').toLowerCase().includes(q) ||
@@ -465,9 +490,35 @@ export function AdminPackagesPanel({
       const durEn = editorDraft.durationLabelEn.trim() || fallbackLabels.en;
       const durBn = editorDraft.durationLabelBn.trim() || fallbackLabels.bn;
       const cleanFeatures = editorDraft.features.map((f) => f.trim()).filter(Boolean);
-      const cleanDiscount = calcDiscountPercent(priceNum, origNum);
-      const stockNum = Math.max(0, Math.round(Number(editorDraft.stockCount) || 0));
+      const validOrigPrice = origNum > priceNum ? origNum : undefined;
+      const cleanDiscount = validOrigPrice ? calcDiscountPercent(priceNum, validOrigPrice) : 0;
+      const stockNum =
+        editorDraft.availability === 'out_of_stock'
+          ? 0
+          : Math.max(0, Math.round(Number(editorDraft.stockCount) || 0));
       const sortNum = Math.max(0, Math.round(Number(editorDraft.sortOrder) || 0));
+      const cleanPackages: ProductPackage[] = editorDraft.packages
+        .filter((pk) => pk.nameEn.trim() && pk.priceBdt > 0)
+        .map((pk, idx) => ({
+          id: pk.id?.trim() || `${finalId}_tier_${idx + 1}`,
+          nameEn: pk.nameEn.trim(),
+          nameBn: (pk.nameBn || pk.nameEn).trim(),
+          priceBdt: Math.max(1, Math.round(Number(pk.priceBdt) || 1)),
+          ...(typeof pk.originalPriceBdt === 'number' && pk.originalPriceBdt > pk.priceBdt
+            ? { originalPriceBdt: Math.round(pk.originalPriceBdt) }
+            : {}),
+          ...(typeof pk.supplierPriceBdt === 'number' && pk.supplierPriceBdt > 0
+            ? { supplierPriceBdt: Math.round(pk.supplierPriceBdt) }
+            : {}),
+          availability: pk.availability || 'in_stock',
+          ...(pk.durationEn?.trim()
+            ? {
+                durationEn: pk.durationEn.trim(),
+                durationBn: (pk.durationBn || pk.durationEn).trim(),
+              }
+            : {}),
+          ...(pk.tag?.trim() ? { tag: pk.tag.trim() } : {}),
+        }));
 
       const productPayload: Product = {
         ...(editorDraft.originalProduct || {}),
@@ -482,8 +533,8 @@ export function AdminPackagesPanel({
         descriptionEn: editorDraft.descriptionEn.trim() || editorDraft.descriptionBn.trim() || titleEn,
         descriptionBn: editorDraft.descriptionBn.trim() || editorDraft.descriptionEn.trim() || titleBn,
         priceBdt: priceNum,
-        originalPriceBdt: origNum,
-        regularPriceBdt: origNum || priceNum,
+        originalPriceBdt: validOrigPrice,
+        regularPriceBdt: validOrigPrice || priceNum,
         discountPercent: cleanDiscount,
         currency: 'BDT',
         durationValue: editorDraft.durationUnit === 'lifetime' ? undefined : durValNum,
@@ -499,7 +550,7 @@ export function AdminPackagesPanel({
         features: cleanFeatures,
         benefitsEn: cleanFeatures.join(' • '),
         benefitsBn: cleanFeatures.join(' • '),
-        packages: editorDraft.packages.filter((pk) => pk.nameEn.trim() && pk.priceBdt > 0),
+        packages: cleanPackages,
         availability: editorDraft.availability,
         stockCount: stockNum,
         sectionTag: editorDraft.sectionTag,
@@ -609,11 +660,14 @@ export function AdminPackagesPanel({
     }
   };
 
-  // Quick Price Modal Handlers
+  // Quick Price & Stock Modal Handlers
   const openQuickPrice = (prod: Product) => {
     setQuickPriceTarget(prod);
     setQuickPriceVal(String(prod.priceBdt || 1));
-    setQuickOrigPriceVal(prod.originalPriceBdt && prod.originalPriceBdt > 0 ? String(prod.originalPriceBdt) : '');
+    setQuickOrigPriceVal(
+      prod.originalPriceBdt && prod.originalPriceBdt > prod.priceBdt ? String(prod.originalPriceBdt) : ''
+    );
+    setQuickAvailability(prod.availability || 'in_stock');
     setQuickSubPackages((prod.packages || []).map((pk) => ({ ...pk })));
     setQuickPriceConfirmOpen(false);
   };
@@ -632,14 +686,20 @@ export function AdminPackagesPanel({
     if (!quickPriceTarget) return;
     const p = Math.max(1, Math.round(Number(quickPriceVal)));
     const orig = quickOrigPriceVal.trim() ? Math.max(0, Math.round(Number(quickOrigPriceVal))) : 0;
+    const validOrig = orig > p ? orig : undefined;
     setQuickPriceBusy(true);
     try {
       const updatedProduct: Product = {
         ...quickPriceTarget,
         priceBdt: p,
-        originalPriceBdt: orig,
-        regularPriceBdt: orig || p,
-        discountPercent: calcDiscountPercent(p, orig),
+        originalPriceBdt: validOrig,
+        regularPriceBdt: validOrig || p,
+        discountPercent: validOrig ? calcDiscountPercent(p, validOrig) : 0,
+        availability: quickAvailability,
+        stockCount:
+          quickAvailability === 'out_of_stock'
+            ? 0
+            : Math.max(1, Number(quickPriceTarget.stockCount || 85)),
         ...(quickSubPackages.length > 0 ? { packages: quickSubPackages } : {}),
       };
       await adminSaveProduct(updatedProduct, false, {
@@ -649,8 +709,8 @@ export function AdminPackagesPanel({
       });
       onSuccess(
         lang === 'bn'
-          ? `"${quickPriceTarget.titleBn}"-এর মূল্য ৳${quickPriceTarget.priceBdt} থেকে ৳${p} আপডেট হয়েছে।`
-          : `Price updated for "${quickPriceTarget.titleEn}": ৳${quickPriceTarget.priceBdt} → ৳${p}`
+          ? `"${quickPriceTarget.titleBn}"-এর মূল্য ও স্টক আপডেট হয়েছে (${formatBdt(p)})।`
+          : `Updated price & stock for "${quickPriceTarget.titleEn}": ${formatBdt(p)}`
       );
       setQuickPriceConfirmOpen(false);
       setQuickPriceTarget(null);
@@ -853,10 +913,11 @@ export function AdminPackagesPanel({
         </div>
 
         {/* Clean Tabular Summary Metrics */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-4 pt-4 border-t border-slate-800">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mt-4 pt-4 border-t border-slate-800">
           {[
             { label: lang === 'bn' ? 'মোট প্যাকেজ' : 'Total Packages', val: stats.total, color: 'text-white' },
             { label: lang === 'bn' ? 'সক্রিয়' : 'Active', val: stats.active, color: 'text-emerald-400' },
+            { label: lang === 'bn' ? 'স্টক নেই' : 'Out of Stock', val: stats.outOfStock, color: 'text-red-400' },
             { label: lang === 'bn' ? 'নিষ্ক্রিয়' : 'Inactive', val: stats.inactive, color: 'text-rose-400' },
             { label: lang === 'bn' ? 'ফিচার্ড' : 'Featured', val: stats.featured, color: 'text-amber-400' },
             { label: lang === 'bn' ? 'ডিসকাউন্টেড' : 'Discounted', val: stats.discounted, color: 'text-sky-400' },
@@ -944,6 +1005,7 @@ export function AdminPackagesPanel({
               [
                 { id: 'all', label: lang === 'bn' ? 'সব' : 'All', count: stats.total },
                 { id: 'active', label: lang === 'bn' ? 'সক্রিয়' : 'Active', count: stats.active },
+                { id: 'out_of_stock', label: lang === 'bn' ? 'স্টক নেই' : 'Out of Stock', count: stats.outOfStock },
                 { id: 'inactive', label: lang === 'bn' ? 'নিষ্ক্রিয়' : 'Inactive', count: stats.inactive },
                 { id: 'featured', label: lang === 'bn' ? 'ফিচার্ড' : 'Featured', count: stats.featured },
               ] as const
@@ -995,6 +1057,10 @@ export function AdminPackagesPanel({
             const durationStr = resolveDurationDisplay(prod, lang);
             const isBusy = busyId === prod.id;
             const menuOpen = openMenuId === prod.id;
+            const effAvail = getEffectiveProductAvailability(prod);
+            const outOfStockSubCount = (prod.packages || []).filter(
+              (pk) => getPackageAvailability(pk, prod) === 'out_of_stock'
+            ).length;
 
             return (
               <div
@@ -1040,6 +1106,15 @@ export function AdminPackagesPanel({
                             />
                             {prod.active ? 'Active' : 'Inactive'}
                           </span>
+                          {effAvail === 'out_of_stock' ? (
+                            <span className="px-1.5 py-0.5 rounded-md bg-red-950/90 border border-red-700 text-red-300 text-[10px] font-extrabold">
+                              Out of Stock
+                            </span>
+                          ) : effAvail === 'limited' ? (
+                            <span className="px-1.5 py-0.5 rounded-md bg-amber-950/80 border border-amber-800/70 text-amber-300 text-[10px] font-bold">
+                              Limited
+                            </span>
+                          ) : null}
                           {prod.featured && (
                             <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-950/80 border border-amber-800/60 text-amber-400 text-[10px] font-bold">
                               <Star className="w-2.5 h-2.5 fill-amber-400" />
@@ -1198,11 +1273,11 @@ export function AdminPackagesPanel({
                       </p>
                       <div className="flex items-baseline gap-2 mt-0.5">
                         <span className="text-xl font-extrabold font-mono-num text-[#FF8500]">
-                          ৳{prod.priceBdt}
+                          {formatBdt(prod.priceBdt)}
                         </span>
                         {prod.originalPriceBdt && prod.originalPriceBdt > prod.priceBdt ? (
                           <span className="text-xs font-mono-num text-slate-500 line-through">
-                            ৳{prod.originalPriceBdt}
+                            {formatBdt(prod.originalPriceBdt)}
                           </span>
                         ) : null}
                         {discount > 0 && (
@@ -1222,11 +1297,16 @@ export function AdminPackagesPanel({
 
                   {/* Meta Strip */}
                   <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
-                    <span className="truncate max-w-[60%]">
+                    <span className="truncate max-w-[70%]">
                       {cat ? (lang === 'bn' ? cat.nameBn : cat.nameEn) : prod.categoryId}
-                      {prod.packages && prod.packages.length > 1 ? (
+                      {prod.packages && prod.packages.length > 0 ? (
                         <span className="text-sky-400 font-mono-num ml-1.5">
                           · {prod.packages.length} plans
+                        </span>
+                      ) : null}
+                      {outOfStockSubCount > 0 ? (
+                        <span className="text-red-400 font-mono-num ml-1.5">
+                          · {outOfStockSubCount} OOS
                         </span>
                       ) : null}
                     </span>
@@ -1782,18 +1862,53 @@ export function AdminPackagesPanel({
                 </div>
               </div>
 
-              {/* Section 3: Sub-Plans (if multi-tier package) */}
-              {editorDraft.packages.length > 0 && (
-                <div className="rounded-2xl bg-slate-950 border border-slate-800 p-4 space-y-2.5">
-                  <div className="flex items-center justify-between">
+              {/* Section 3: Independent Sub-Tier Plans / Packages (Price, Admin Cost, Duration & Stock) */}
+              <div className="rounded-2xl bg-slate-950 border border-slate-800 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
                     <span className="text-xs font-extrabold text-white flex items-center gap-1.5">
                       <Layers className="w-3.5 h-3.5 text-sky-400" />
                       Sub-Tier Plans ({editorDraft.packages.length})
                     </span>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Manage selling price (৳), optional hidden admin cost, duration, and independent stock status per package.
+                    </p>
                   </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextIdx = editorDraft.packages.length + 1;
+                      const newPkg: ProductPackage = {
+                        id: `${editorDraft.id || 'pkg'}_tier_${Date.now().toString(36)}_${nextIdx}`,
+                        nameEn: '',
+                        nameBn: '',
+                        priceBdt: Math.max(1, Number(editorDraft.priceBdt) || 100),
+                        availability: 'in_stock',
+                        tag: '',
+                      };
+                      setEditorDraft({
+                        ...editorDraft,
+                        packages: [...editorDraft.packages, newPkg],
+                      });
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>{lang === 'bn' ? 'সাব-প্যাকেজ যোগ' : 'Add Sub-Package'}</span>
+                  </button>
+                </div>
+
+                {editorDraft.packages.length === 0 ? (
+                  <p className="text-[11px] text-slate-500 text-center py-3 border border-dashed border-slate-800 rounded-xl">
+                    Single-tier product. Click &ldquo;Add Sub-Package&rdquo; to add multiple selectable tiers with independent pricing and stock.
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                     {editorDraft.packages.map((pk, idx) => (
-                      <div key={pk.id || idx} className="grid grid-cols-12 gap-2 items-center">
+                      <div
+                        key={pk.id || idx}
+                        className="grid grid-cols-12 gap-1.5 items-center p-2 rounded-xl bg-slate-900/70 border border-slate-800"
+                      >
                         <input
                           value={pk.nameEn}
                           onChange={(e) => {
@@ -1801,8 +1916,8 @@ export function AdminPackagesPanel({
                             next[idx] = { ...next[idx], nameEn: e.target.value, nameBn: e.target.value };
                             setEditorDraft({ ...editorDraft, packages: next });
                           }}
-                          placeholder="Plan name"
-                          className="col-span-6 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white"
+                          placeholder="Plan name (e.g. 115 Diamonds)"
+                          className="col-span-12 sm:col-span-4 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white"
                         />
                         <input
                           type="number"
@@ -1813,9 +1928,50 @@ export function AdminPackagesPanel({
                             next[idx] = { ...next[idx], priceBdt: Math.max(1, Number(e.target.value) || 1) };
                             setEditorDraft({ ...editorDraft, packages: next });
                           }}
-                          placeholder="Price ৳"
-                          className="col-span-3 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono-num text-[#FF8500] font-bold"
+                          title="Customer Selling Price (BDT ৳)"
+                          placeholder="Sell ৳"
+                          className="col-span-4 sm:col-span-2 px-2 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono-num text-[#FF8500] font-bold"
                         />
+                        <input
+                          type="number"
+                          min={0}
+                          value={pk.supplierPriceBdt ?? ''}
+                          onChange={(e) => {
+                            const next = [...editorDraft.packages];
+                            const val = Number(e.target.value);
+                            next[idx] = {
+                              ...next[idx],
+                              supplierPriceBdt: val > 0 ? Math.round(val) : undefined,
+                            };
+                            setEditorDraft({ ...editorDraft, packages: next });
+                          }}
+                          title="Admin-Only Supplier Cost (Hidden from customers)"
+                          placeholder="Cost (Admin)"
+                          className="col-span-4 sm:col-span-2 px-2 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono-num text-slate-400"
+                        />
+                        <select
+                          value={pk.availability || 'in_stock'}
+                          onChange={(e) => {
+                            const next = [...editorDraft.packages];
+                            next[idx] = {
+                              ...next[idx],
+                              availability: e.target.value as 'in_stock' | 'limited' | 'out_of_stock',
+                            };
+                            setEditorDraft({ ...editorDraft, packages: next });
+                          }}
+                          title="Per-package stock status"
+                          className={`col-span-4 sm:col-span-2 px-1.5 py-1.5 rounded-lg bg-slate-950 border text-[11px] font-bold ${
+                            pk.availability === 'out_of_stock'
+                              ? 'border-red-700 text-red-400'
+                              : pk.availability === 'limited'
+                                ? 'border-amber-700 text-amber-300'
+                                : 'border-slate-700 text-emerald-400'
+                          }`}
+                        >
+                          <option value="in_stock">In Stock</option>
+                          <option value="limited">Limited</option>
+                          <option value="out_of_stock">Out of Stock</option>
+                        </select>
                         <input
                           value={pk.tag || ''}
                           onChange={(e) => {
@@ -1824,7 +1980,7 @@ export function AdminPackagesPanel({
                             setEditorDraft({ ...editorDraft, packages: next });
                           }}
                           placeholder="Tag"
-                          className="col-span-2 px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-300"
+                          className="col-span-9 sm:col-span-1 px-2 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-[11px] text-slate-300"
                         />
                         <button
                           type="button"
@@ -1834,15 +1990,16 @@ export function AdminPackagesPanel({
                               packages: editorDraft.packages.filter((_, i) => i !== idx),
                             })
                           }
-                          className="col-span-1 p-1.5 text-rose-400 hover:text-rose-300 flex justify-center"
+                          title="Remove sub-package"
+                          className="col-span-3 sm:col-span-1 p-1.5 text-rose-400 hover:text-rose-300 flex justify-center"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
               {/* Section 4: Display Order, Availability, Visibility & Timestamps */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -1860,12 +2017,19 @@ export function AdminPackagesPanel({
                   <label className="block text-[11px] font-bold text-slate-300 mb-1">Availability</label>
                   <select
                     value={editorDraft.availability}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const nextAvail = e.target.value as 'in_stock' | 'limited' | 'out_of_stock';
                       setEditorDraft({
                         ...editorDraft,
-                        availability: e.target.value as 'in_stock' | 'limited' | 'out_of_stock',
-                      })
-                    }
+                        availability: nextAvail,
+                        stockCount:
+                          nextAvail === 'out_of_stock'
+                            ? '0'
+                            : Number(editorDraft.stockCount || 0) <= 0
+                              ? '85'
+                              : editorDraft.stockCount,
+                      });
+                    }}
                     className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
                   >
                     <option value="in_stock">In Stock</option>
@@ -2060,14 +2224,14 @@ export function AdminPackagesPanel({
         </div>
       )}
 
-      {/* ==================== MODAL C: QUICK CHANGE PACKAGE PRICE ==================== */}
+      {/* ==================== MODAL C: QUICK CHANGE PACKAGE PRICE & STOCK ==================== */}
       {quickPriceTarget && (
         <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden text-slate-100">
+          <div className="w-full max-w-lg rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden text-slate-100">
             <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
               <div className="min-w-0">
                 <h3 className="text-sm font-extrabold text-white truncate">
-                  {lang === 'bn' ? 'প্যাকেজ মূল্য পরিবর্তন' : 'Change Package Price'}
+                  {lang === 'bn' ? 'মূল্য ও স্টক পরিবর্তন' : 'Update Package Price & Stock'}
                 </h3>
                 <p className="text-[11px] text-slate-400 truncate">{quickPriceTarget.titleEn}</p>
               </div>
@@ -2081,10 +2245,10 @@ export function AdminPackagesPanel({
               </button>
             </div>
             <form onSubmit={requestQuickPriceConfirm} className="p-5 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                    Current Price (BDT ৳) *
+                    Selling Price (৳) *
                   </label>
                   <input
                     required
@@ -2098,7 +2262,7 @@ export function AdminPackagesPanel({
                 </div>
                 <div>
                   <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                    Previous Price (Optional ৳)
+                    Compare-At (Optional)
                   </label>
                   <input
                     type="number"
@@ -2109,6 +2273,28 @@ export function AdminPackagesPanel({
                     placeholder="0"
                     className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-base font-mono-num text-slate-200 focus:outline-none focus:border-[#FF8500]"
                   />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                    Product Stock
+                  </label>
+                  <select
+                    value={quickAvailability}
+                    onChange={(e) =>
+                      setQuickAvailability(e.target.value as 'in_stock' | 'limited' | 'out_of_stock')
+                    }
+                    className={`w-full px-2.5 py-2.5 rounded-xl bg-slate-950 border text-xs font-bold ${
+                      quickAvailability === 'out_of_stock'
+                        ? 'border-red-700 text-red-400'
+                        : quickAvailability === 'limited'
+                          ? 'border-amber-700 text-amber-300'
+                          : 'border-slate-700 text-emerald-400'
+                    }`}
+                  >
+                    <option value="in_stock">In Stock</option>
+                    <option value="limited">Limited</option>
+                    <option value="out_of_stock">Out of Stock</option>
+                  </select>
                 </div>
               </div>
 
@@ -2124,8 +2310,10 @@ export function AdminPackagesPanel({
               </div>
 
               {quickSubPackages.length > 0 && (
-                <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
-                  <p className="text-[11px] font-bold text-slate-300">Sub-Plan Prices (BDT ৳)</p>
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  <p className="text-[11px] font-bold text-slate-300">
+                    Sub-Package Selling Prices (৳) & Stock Status
+                  </p>
                   {quickSubPackages.map((pk, idx) => (
                     <div key={pk.id} className="flex items-center justify-between gap-2 text-xs">
                       <span className="truncate text-slate-300 flex-1">{pk.nameEn}</span>
@@ -2140,6 +2328,28 @@ export function AdminPackagesPanel({
                         }}
                         className="w-24 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-700 font-mono-num font-bold text-[#FF8500]"
                       />
+                      <select
+                        value={pk.availability || 'in_stock'}
+                        onChange={(e) => {
+                          const next = [...quickSubPackages];
+                          next[idx] = {
+                            ...next[idx],
+                            availability: e.target.value as 'in_stock' | 'limited' | 'out_of_stock',
+                          };
+                          setQuickSubPackages(next);
+                        }}
+                        className={`w-28 px-2 py-1 rounded-lg bg-slate-950 border text-[11px] font-bold ${
+                          pk.availability === 'out_of_stock'
+                            ? 'border-red-700 text-red-400'
+                            : pk.availability === 'limited'
+                              ? 'border-amber-700 text-amber-300'
+                              : 'border-slate-700 text-emerald-400'
+                        }`}
+                      >
+                        <option value="in_stock">In Stock</option>
+                        <option value="limited">Limited</option>
+                        <option value="out_of_stock">Out of Stock</option>
+                      </select>
                     </div>
                   ))}
                 </div>
@@ -2161,7 +2371,7 @@ export function AdminPackagesPanel({
                   type="submit"
                   className="px-4 py-2 rounded-xl bg-[#FF8500] hover:bg-[#e57600] text-white text-xs font-extrabold cursor-pointer"
                 >
-                  Review & Confirm Price
+                  Review & Confirm
                 </button>
               </div>
             </form>

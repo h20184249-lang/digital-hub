@@ -30,7 +30,7 @@ import {
   ReceiptScreenshotUploadBox,
   SelectedPaymentInstructionCard,
 } from './PremiumPaymentSection';
-import { getProductOrderFormType } from '../lib/catalogHelpers';
+import { formatBdt, getProductOrderFormType, isPackagePurchasable } from '../lib/catalogHelpers';
 import {
   compressImageToDataUrl,
   submitOrderWithManualPayment,
@@ -116,10 +116,17 @@ export function CartDrawer({
     [items]
   );
 
+  const hasOutOfStockItem = useMemo(
+    () => items.some((it) => !isPackagePurchasable(it.selectedPackage, it.product)),
+    [items]
+  );
+
   const itemRequirementLines = useMemo(
     () =>
       items.map((it) => {
         const ft = getProductOrderFormType(it.product);
+        const bk = (it.product.brandKey || '').toLowerCase();
+        const pid = (it.product.id || '').toLowerCase();
         const title = lang === 'bn' ? it.product.titleBn : it.product.titleEn;
         const pkg = it.selectedPackage
           ? ` (${lang === 'bn' ? it.selectedPackage.nameBn : it.selectedPackage.nameEn})`
@@ -127,28 +134,40 @@ export function CartDrawer({
         let reqText = '';
         let templateLine = '';
         if (ft === 'freefire') {
-          const isIndo =
-            it.product.id === 'prod_ff_indo' || (it.product.brandKey || '').toLowerCase() === 'freefire_indo';
+          const isIndo = pid === 'prod_ff_indo' || bk === 'freefire_indo';
           reqText = lang === 'bn' ? 'Player UID + গেম সার্ভার' : 'Player UID + Game Server';
           templateLine = `${title}${pkg} x${it.quantity} — UID: [ENTER_UID], Server: ${isIndo ? 'Indonesia' : 'BD'}`;
         } else if (ft === 'pubg_uid') {
-          reqText = lang === 'bn' ? 'Player ID / Tag + রিজিওন' : 'Player ID / Tag + Region';
-          templateLine = `${title}${pkg} x${it.quantity} — Player ID: [ENTER_ID], Region: Global`;
+          if (pid === 'prod_efootball_iphone' || bk === 'efootball_iphone') {
+            reqText = lang === 'bn' ? 'eFootball iPhone ID + iOS' : 'eFootball iPhone ID + iOS';
+            templateLine = `${title}${pkg} x${it.quantity} — Konami ID: [ENTER_ID], Platform: iPhone / iOS`;
+          } else if (pid === 'prod_efootball_coins' || bk === 'efootball_android' || bk === 'efootball') {
+            reqText = lang === 'bn' ? 'eFootball Android ID + Android' : 'eFootball Android ID + Android';
+            templateLine = `${title}${pkg} x${it.quantity} — Konami ID: [ENTER_ID], Platform: Android`;
+          } else {
+            reqText = lang === 'bn' ? 'Player ID / Tag + রিজিওন' : 'Player ID / Tag + Region';
+            templateLine = `${title}${pkg} x${it.quantity} — Player ID: [ENTER_ID], Region: Global`;
+          }
         } else if (ft === 'telegram') {
-          reqText = lang === 'bn' ? 'Telegram @username' : 'Telegram @username';
-          templateLine = `${title}${pkg} x${it.quantity} — Telegram: @[USERNAME]`;
+          if (pid === 'prod_smm_telegram_members') {
+            reqText = lang === 'bn' ? 'Telegram চ্যানেল/গ্রুপ লিংক' : 'Telegram Channel / Group Link';
+            templateLine = `${title}${pkg} x${it.quantity} — Channel Link: https://t.me/[CHANNEL]`;
+          } else {
+            reqText = lang === 'bn' ? 'Telegram @username' : 'Telegram @username';
+            templateLine = `${title}${pkg} x${it.quantity} — Telegram: @[USERNAME]`;
+          }
         } else if (ft === 'giftcard') {
           reqText = lang === 'bn' ? 'রিজিওন + ডেলিভারি ইমেইল' : 'Region + Delivery Email';
           templateLine = `${title}${pkg} x${it.quantity} — Region: USA, Email: ${user?.email || '[EMAIL]'}`;
         } else if (ft === 'social') {
-          reqText = lang === 'bn' ? 'প্রোফাইল / পোস্ট লিংক (URL)' : 'Public Profile / Post URL';
-          templateLine = `${title}${pkg} x${it.quantity} — Link: https://...`;
+          reqText = lang === 'bn' ? '@ইউজারনেম বা পোস্ট/প্রোফাইল লিংক' : '@Username or Public Link';
+          templateLine = `${title}${pkg} x${it.quantity} — Account/Link: [@username or https://...]`;
         } else if (ft === 'design') {
           reqText = lang === 'bn' ? 'প্রজেক্ট নির্দেশনা + ডেলিভারি ইমেইল' : 'Project Brief + Delivery Email';
           templateLine = `${title}${pkg} x${it.quantity} — Brief: [DETAILS], Email: ${user?.email || '[EMAIL]'}`;
         } else {
-          reqText = lang === 'bn' ? 'ডেলিভারি ইমেইল + WhatsApp/Telegram' : 'Delivery Email + WhatsApp/TG';
-          templateLine = `${title}${pkg} x${it.quantity} — Email: ${user?.email || '[EMAIL]'}, Contact: [WA/TG]`;
+          reqText = lang === 'bn' ? 'WhatsApp নম্বর + ডেলিভারি ইমেইল' : 'WhatsApp Number + Email';
+          templateLine = `${title}${pkg} x${it.quantity} — WhatsApp: [01XXXXXXXXX], Email: ${user?.email || '[EMAIL]'}`;
         }
         return { key: getCartItemKey(it), title: `${title}${pkg}`, reqText, templateLine };
       }),
@@ -248,6 +267,14 @@ export function CartDrawer({
     setError('');
 
     if (items.length === 0) return;
+    if (hasOutOfStockItem) {
+      setError(
+        lang === 'bn'
+          ? 'আপনার কার্টে একটি Out of Stock প্যাকেজ আছে। অর্ডার করতে অনুগ্রহ করে সেটি মুছে ফেলুন।'
+          : 'Your cart contains an Out of Stock item. Please remove it before checking out.'
+      );
+      return;
+    }
     if (!user) {
       onOpenAuth();
       return;
@@ -378,10 +405,15 @@ export function CartDrawer({
                 {items.map((item) => {
                   const key = getCartItemKey(item);
                   const unitPrice = item.selectedPackage?.priceBdt ?? item.product.priceBdt;
+                  const itemUnavailable = !isPackagePurchasable(item.selectedPackage, item.product);
                   return (
                     <div
                       key={key}
-                      className="p-3 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex items-center gap-3"
+                      className={`p-3 rounded-2xl border flex items-center gap-3 ${
+                        itemUnavailable
+                          ? 'bg-red-50/70 border-red-200'
+                          : 'bg-[#F3F6FF] border-[#E6ECFA]'
+                      }`}
                     >
                       <div className="w-16 h-12 rounded-xl overflow-hidden shrink-0 border border-[#E6ECFA] bg-[#172033]">
                         <ProductVisualArtwork product={item.product} lang={lang} variant="card" />
@@ -390,13 +422,20 @@ export function CartDrawer({
                         <p className="text-sm font-bold text-[#172033] truncate">
                           {lang === 'bn' ? item.product.titleBn : item.product.titleEn}
                         </p>
-                        {item.selectedPackage && (
-                          <span className="inline-block px-1.5 py-0.5 rounded bg-[#FFF3E5] text-[#FF8500] text-[10px] font-bold mb-0.5">
-                            {lang === 'bn' ? item.selectedPackage.nameBn : item.selectedPackage.nameEn}
-                          </span>
-                        )}
+                        <div className="flex flex-wrap items-center gap-1 mb-0.5">
+                          {item.selectedPackage && (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-[#FFF3E5] text-[#FF8500] text-[10px] font-bold">
+                              {lang === 'bn' ? item.selectedPackage.nameBn : item.selectedPackage.nameEn}
+                            </span>
+                          )}
+                          {itemUnavailable && (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-[#DC2626] text-white text-[10px] font-extrabold uppercase">
+                              {t(lang, 'outOfStock')}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs font-mono-num font-bold text-[#FF8500]">
-                          ৳{unitPrice} × {item.quantity} = ৳{unitPrice * item.quantity}
+                          {formatBdt(unitPrice)} × {item.quantity} = {formatBdt(unitPrice * item.quantity)}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">
@@ -412,8 +451,9 @@ export function CartDrawer({
                         </span>
                         <button
                           type="button"
+                          disabled={itemUnavailable}
                           onClick={() => onUpdateQty(key, item.quantity + 1)}
-                          className="w-7 h-7 rounded-lg bg-white border border-[#E6ECFA] flex items-center justify-center text-[#172033]"
+                          className="w-7 h-7 rounded-lg bg-white border border-[#E6ECFA] flex items-center justify-center text-[#172033] disabled:opacity-40"
                         >
                           <Plus className="w-3.5 h-3.5" />
                         </button>
@@ -455,7 +495,7 @@ export function CartDrawer({
                 {couponError && <p className="text-xs text-[#DC2626] font-semibold">{couponError}</p>}
                 {appliedCoupon && (
                   <p className="text-xs text-[#16A34A] font-semibold">
-                    {appliedCoupon.code}: -৳{discountBdt} {lang === 'bn' ? 'ছাড় প্রয়োগ হয়েছে' : 'discount applied'}
+                    {appliedCoupon.code}: -{formatBdt(discountBdt)} {lang === 'bn' ? 'ছাড় প্রয়োগ হয়েছে' : 'discount applied'}
                   </p>
                 )}
               </div>
@@ -464,17 +504,17 @@ export function CartDrawer({
               <div className="p-4 rounded-2xl bg-[#FFF7EE] border border-[#FF8500]/25 space-y-1.5 text-sm">
                 <div className="flex justify-between text-[#777777]">
                   <span>{lang === 'bn' ? 'মোট মূল্য' : 'Subtotal'}</span>
-                  <span className="font-mono-num font-semibold">৳{subtotal}</span>
+                  <span className="font-mono-num font-semibold">{formatBdt(subtotal)}</span>
                 </div>
                 {discountBdt > 0 && (
                   <div className="flex justify-between text-[#16A34A]">
                     <span>{lang === 'bn' ? 'কুপন ছাড়' : 'Discount'}</span>
-                    <span className="font-mono-num font-semibold">-৳{discountBdt}</span>
+                    <span className="font-mono-num font-semibold">-{formatBdt(discountBdt)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-[#172033] font-extrabold text-base pt-1.5 border-t border-[#FF8500]/20">
                   <span>{lang === 'bn' ? 'সর্বমোট পরিশোধযোগ্য' : 'Total Payable'}</span>
-                  <span className="font-mono-num text-[#FF8500]">৳{finalTotal}</span>
+                  <span className="font-mono-num text-[#FF8500]">{formatBdt(finalTotal)}</span>
                 </div>
               </div>
 
@@ -687,10 +727,14 @@ export function CartDrawer({
 
                 <button
                   type="submit"
-                  disabled={submitting}
+                  disabled={submitting || hasOutOfStockItem}
                   className="w-full py-3 rounded-xl dh-orange-gradient text-white font-bold text-sm shadow-md hover:opacity-95 disabled:opacity-60"
                 >
-                  {submitting ? '...' : `${t(lang, 'submitPayment')} · ৳${finalTotal}`}
+                  {submitting
+                    ? '...'
+                    : hasOutOfStockItem
+                      ? t(lang, 'outOfStock')
+                      : `${t(lang, 'submitPayment')} · ${formatBdt(finalTotal)}`}
                 </button>
               </form>
             </>

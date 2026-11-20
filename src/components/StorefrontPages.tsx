@@ -25,6 +25,15 @@ import {
   SiteSettings,
 } from '../types/marketplace';
 import { t } from '../lib/i18n';
+import {
+  CATALOG_23_CATEGORIES,
+  CATALOG_23_MAP,
+  formatBdt,
+  getDisplayStartingPrice,
+  getEffectiveProductAvailability,
+  getProductCatalogSectionId,
+  hasGenuineDiscount,
+} from '../lib/catalogHelpers';
 import { ProductVisualArtwork } from './BrandLogos';
 import { BannerSlotView } from './BannerSlotView';
 import { NativeAdRow } from './AutomaticAdEngine';
@@ -49,31 +58,37 @@ export function ProductCard({
   const subcategory = lang === 'bn' ? product.subcategoryBn : product.subcategoryEn;
 
   const pkgCount = product.packages?.length || 0;
-  const lowestPkgPrice =
-    pkgCount > 0
-      ? Math.min(...(product.packages || []).map((pk) => pk.priceBdt))
-      : product.priceBdt;
-  const displayPrice = pkgCount > 1 ? Math.min(product.priceBdt, lowestPkgPrice) : product.priceBdt;
+  const effectiveAvail = getEffectiveProductAvailability(product);
+  const stockCount =
+    typeof product.stockCount === 'number'
+      ? Math.max(0, Math.floor(product.stockCount))
+      : effectiveAvail === 'out_of_stock'
+        ? 0
+        : effectiveAvail === 'limited'
+          ? 14
+          : 85;
+  const isOutOfStock = effectiveAvail === 'out_of_stock' || stockCount <= 0;
+  const displayPrice = getDisplayStartingPrice(product);
+  const showCompareAt = hasGenuineDiscount(displayPrice, product.originalPriceBdt);
   const autoDiscount =
-    product.originalPriceBdt && product.originalPriceBdt > displayPrice
-      ? Math.min(95, Math.max(1, Math.round(((product.originalPriceBdt - displayPrice) / product.originalPriceBdt) * 100)))
-      : product.discountPercent || 0;
+    showCompareAt && product.originalPriceBdt
+      ? Math.min(
+          95,
+          Math.max(1, Math.round(((product.originalPriceBdt - displayPrice) / product.originalPriceBdt) * 100))
+        )
+      : 0;
   const durationLabel =
     lang === 'bn'
       ? product.durationLabelBn || product.validityBn || ''
       : product.durationLabelEn || product.validityEn || '';
   const badgeText = product.badge?.trim() || (product.featured ? (lang === 'bn' ? 'জনপ্রিয়' : 'Popular') : '');
-  const stockCount =
-    typeof product.stockCount === 'number'
-      ? product.stockCount
-      : product.availability === 'out_of_stock'
-        ? 0
-        : product.availability === 'limited'
-          ? 14
-          : 85;
 
   return (
-    <div className="dh-card dh-card-hover rounded-2xl overflow-hidden flex flex-col bg-white group">
+    <div
+      className={`dh-card dh-card-hover rounded-2xl overflow-hidden flex flex-col bg-white group ${
+        isOutOfStock ? 'opacity-85' : ''
+      }`}
+    >
       <button
         type="button"
         onClick={() => onSelect(product)}
@@ -81,7 +96,7 @@ export function ProductCard({
       >
         <ProductVisualArtwork product={product} lang={lang} variant="card" />
 
-        {badgeText && (
+        {badgeText && !isOutOfStock && (
           <span
             className={`absolute ${
               product.customLogoUrl ? 'bottom-2 left-2' : 'top-2 left-2'
@@ -91,11 +106,15 @@ export function ProductCard({
           </span>
         )}
 
-        {autoDiscount > 0 ? (
+        {isOutOfStock ? (
+          <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-[#DC2626] text-white text-[10px] font-extrabold uppercase tracking-wide shadow-xs">
+            {t(lang, 'outOfStock')}
+          </span>
+        ) : autoDiscount > 0 ? (
           <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-[#DC2626] text-white text-[11px] font-extrabold font-mono-num shadow-xs">
             -{autoDiscount}%
           </span>
-        ) : product.availability === 'limited' ? (
+        ) : effectiveAvail === 'limited' ? (
           <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-[#172033]/90 text-[#FF9B19] text-[10px] font-bold">
             {t(lang, 'limited')}
           </span>
@@ -128,18 +147,20 @@ export function ProductCard({
             {' · '}
             <span
               className={`font-mono-num font-semibold ${
-                stockCount === 0
+                isOutOfStock
                   ? 'text-[#DC2626]'
-                  : product.availability === 'limited'
+                  : effectiveAvail === 'limited'
                     ? 'text-[#FF8500]'
                     : 'text-[#059669]'
               }`}
             >
-              {stockCount === 0
+              {isOutOfStock
                 ? t(lang, 'outOfStock')
-                : lang === 'bn'
-                  ? `স্টক: ${stockCount}`
-                  : `Stock: ${stockCount}`}
+                : effectiveAvail === 'limited'
+                  ? t(lang, 'limited')
+                  : lang === 'bn'
+                    ? 'স্টকে আছে'
+                    : 'In Stock'}
             </span>
           </p>
         </div>
@@ -151,25 +172,25 @@ export function ProductCard({
                 {t(lang, 'startingFrom')}
               </span>
             )}
-            {product.originalPriceBdt && product.originalPriceBdt > displayPrice && (
+            {showCompareAt && product.originalPriceBdt && (
               <span className="text-xs font-mono-num text-[#777777] line-through">
-                ৳{product.originalPriceBdt}
+                {formatBdt(product.originalPriceBdt)}
               </span>
             )}
             <span className="text-base sm:text-lg font-extrabold font-mono-num text-[#FF8500]">
-              ৳{displayPrice}
+              {formatBdt(displayPrice)}
             </span>
           </div>
 
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              disabled={product.availability === 'out_of_stock' || stockCount <= 0}
+              disabled={isOutOfStock}
               onClick={() => (onQuickOrder ? onQuickOrder(product) : onSelect(product))}
-              className="flex-1 py-2 px-2.5 rounded-xl dh-orange-gradient text-white text-xs font-bold flex items-center justify-center gap-1 shadow-xs hover:opacity-95 disabled:opacity-50"
+              className="flex-1 py-2 px-2.5 rounded-xl dh-orange-gradient text-white text-xs font-bold flex items-center justify-center gap-1 shadow-xs hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="truncate">
-                {product.availability === 'out_of_stock' || stockCount <= 0
+                {isOutOfStock
                   ? t(lang, 'outOfStock')
                   : pkgCount > 1
                     ? t(lang, 'orderNow')
@@ -178,11 +199,11 @@ export function ProductCard({
             </button>
             <button
               type="button"
-              disabled={product.availability === 'out_of_stock' || stockCount <= 0}
+              disabled={isOutOfStock}
               onClick={() => onAddToCart(product)}
-              title={t(lang, 'addToCart')}
-              aria-label={t(lang, 'addToCart')}
-              className="p-2 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-[#172033] hover:border-[#FF8500] hover:text-[#FF8500] disabled:opacity-50 shrink-0"
+              title={isOutOfStock ? t(lang, 'outOfStock') : t(lang, 'addToCart')}
+              aria-label={isOutOfStock ? t(lang, 'outOfStock') : t(lang, 'addToCart')}
+              className="p-2 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-[#172033] hover:border-[#FF8500] hover:text-[#FF8500] disabled:opacity-45 disabled:cursor-not-allowed shrink-0"
             >
               <ShoppingCart className="w-3.5 h-3.5" />
             </button>
@@ -203,6 +224,8 @@ export function CategoryCatalogPage({
   settings,
   lang,
   initialSearch = '',
+  initialCatalogSection = '',
+  onSelectCatalogSection,
   onSelectProduct,
   onQuickOrder,
   onAddToCart,
@@ -217,6 +240,8 @@ export function CategoryCatalogPage({
   settings: SiteSettings;
   lang: Language;
   initialSearch?: string;
+  initialCatalogSection?: string;
+  onSelectCatalogSection?: (sectionId: string) => void;
   onSelectProduct: (p: Product) => void;
   onQuickOrder?: (p: Product) => void;
   onAddToCart: (p: Product) => void;
@@ -224,19 +249,28 @@ export function CategoryCatalogPage({
 }) {
   const [search, setSearch] = useState(initialSearch);
   const [selectedCat, setSelectedCat] = useState<string>('all');
+  const [selectedSection, setSelectedSection] = useState<string>(initialCatalogSection || 'all');
   const [selectedSubcat, setSelectedSubcat] = useState<string>('all');
-  const [availFilter, setAvailFilter] = useState<'all' | 'in_stock' | 'limited'>('all');
+  const [availFilter, setAvailFilter] = useState<'all' | 'in_stock' | 'limited' | 'out_of_stock'>('all');
   const [sortBy, setSortBy] = useState<'popular' | 'price_low' | 'price_high' | 'name_az'>('popular');
+  const [expand23, setExpand23] = useState(false);
 
   useEffect(() => {
     setSelectedSubcat('all');
-  }, [route, selectedCat]);
+  }, [route, selectedCat, selectedSection]);
 
   useEffect(() => {
     if (initialSearch) {
       setSearch(initialSearch);
     }
   }, [initialSearch]);
+
+  useEffect(() => {
+    setSelectedSection(initialCatalogSection || 'all');
+    if (initialCatalogSection) {
+      setSelectedCat('all');
+    }
+  }, [initialCatalogSection]);
 
   const routeCatMap: Partial<Record<AppRoute, string>> = {
     'gaming-store': 'cat_gaming',
@@ -253,10 +287,24 @@ export function CategoryCatalogPage({
   };
 
   const activeCatFilter = routeCatMap[route] || (selectedCat === 'all' ? '' : selectedCat);
+  const active23Section = selectedSection !== 'all' ? CATALOG_23_MAP.get(selectedSection) : undefined;
+
+  const sectionCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of products) {
+      if (!p.active) continue;
+      const secId = getProductCatalogSectionId(p);
+      if (secId) counts.set(secId, (counts.get(secId) || 0) + 1);
+    }
+    return counts;
+  }, [products]);
 
   const categoryScopedProducts = useMemo(() => {
     return products.filter((p) => {
       if (!p.active) return false;
+      if (selectedSection !== 'all') {
+        return getProductCatalogSectionId(p) === selectedSection;
+      }
       if (route === 'telegram-stars') {
         return p.titleEn.toLowerCase().includes('star') || p.categoryId === 'cat_telegram';
       }
@@ -278,7 +326,7 @@ export function CategoryCatalogPage({
       if (activeCatFilter && p.categoryId !== activeCatFilter) return false;
       return true;
     });
-  }, [products, route, activeCatFilter]);
+  }, [products, route, activeCatFilter, selectedSection]);
 
   const subcategories = useMemo(() => {
     const map = new Map<string, string>();
@@ -293,27 +341,35 @@ export function CategoryCatalogPage({
   const filtered = useMemo(() => {
     const base = categoryScopedProducts.filter((p) => {
       if (selectedSubcat !== 'all' && p.subcategoryEn !== selectedSubcat) return false;
-      if (availFilter !== 'all' && p.availability !== availFilter) return false;
+      const effAvail = getEffectiveProductAvailability(p);
+      if (availFilter !== 'all' && effAvail !== availFilter) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
+        const secDef = CATALOG_23_MAP.get(getProductCatalogSectionId(p) || '');
+        const pkgMatch = (p.packages || []).some(
+          (pk) => pk.nameEn.toLowerCase().includes(q) || pk.nameBn.toLowerCase().includes(q)
+        );
         return (
+          pkgMatch ||
           p.titleBn.toLowerCase().includes(q) ||
           p.titleEn.toLowerCase().includes(q) ||
           p.descriptionBn.toLowerCase().includes(q) ||
           p.descriptionEn.toLowerCase().includes(q) ||
           (p.subcategoryBn || '').toLowerCase().includes(q) ||
           (p.subcategoryEn || '').toLowerCase().includes(q) ||
-          (p.brandKey || '').toLowerCase().includes(q)
+          (p.brandKey || '').toLowerCase().includes(q) ||
+          (secDef?.nameEn || '').toLowerCase().includes(q) ||
+          (secDef?.nameBn || '').toLowerCase().includes(q)
         );
       }
       return true;
     });
 
     if (sortBy === 'price_low') {
-      return [...base].sort((a, b) => a.priceBdt - b.priceBdt);
+      return [...base].sort((a, b) => getDisplayStartingPrice(a) - getDisplayStartingPrice(b));
     }
     if (sortBy === 'price_high') {
-      return [...base].sort((a, b) => b.priceBdt - a.priceBdt);
+      return [...base].sort((a, b) => getDisplayStartingPrice(b) - getDisplayStartingPrice(a));
     }
     if (sortBy === 'name_az') {
       return [...base].sort((a, b) => a.titleEn.localeCompare(b.titleEn));
@@ -326,6 +382,12 @@ export function CategoryCatalogPage({
   }, [categoryScopedProducts, selectedSubcat, availFilter, search, sortBy]);
 
   const matchedCategory = categories.find((c) => c.id === activeCatFilter);
+
+  const handleSelect23 = (sectionId: string) => {
+    setSelectedSection(sectionId);
+    setSelectedCat('all');
+    onSelectCatalogSection?.(sectionId === 'all' ? '' : sectionId);
+  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-5">
@@ -340,22 +402,30 @@ export function CategoryCatalogPage({
       <div className="dh-card rounded-3xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-[#172033]">
-            {route === 'telegram-stars'
-              ? t(lang, 'navStars')
-              : matchedCategory
-                ? lang === 'bn'
-                  ? matchedCategory.nameBn
-                  : matchedCategory.nameEn
-                : t(lang, 'navServices')}
+            {active23Section
+              ? lang === 'bn'
+                ? active23Section.nameBn
+                : active23Section.nameEn
+              : route === 'telegram-stars'
+                ? t(lang, 'navStars')
+                : matchedCategory
+                  ? lang === 'bn'
+                    ? matchedCategory.nameBn
+                    : matchedCategory.nameEn
+                  : t(lang, 'navServices')}
           </h1>
           <p className="text-xs sm:text-sm text-[#777777] mt-0.5">
-            {matchedCategory
+            {active23Section
               ? lang === 'bn'
-                ? matchedCategory.descriptionBn
-                : matchedCategory.descriptionEn
-              : lang === 'bn'
-                ? 'সকল অনুমোদিত গেমিং টপ-আপ, গিফট কার্ড, স্ট্রিমিং, টেলিগ্রাম, এআই ও ডিজিটাল সার্ভিস।'
-                : 'Browse all authorized gaming top-ups, gift cards, streaming passes, Telegram, AI & digital services.'}
+                ? `${active23Section.nameBn} — অফিশিয়াল প্যাকেজ, দ্রুত ডেলিভারি ও নিরাপদ পেমেন্ট।`
+                : `${active23Section.nameEn} — Official packages, fast delivery & verified BDT pricing.`
+              : matchedCategory
+                ? lang === 'bn'
+                  ? matchedCategory.descriptionBn
+                  : matchedCategory.descriptionEn
+                : lang === 'bn'
+                  ? 'সকল ২৩টি ডিজিটাল ও গেমিং ক্যাটাগরি — ফ্রি ফায়ার, eFootball Android/iPhone, PUBG, TikTok, VPN, OTT ও ChatGPT।'
+                  : 'Browse all 23 organized catalog categories — Free Fire, eFootball Android/iPhone, PUBG, TikTok, VPN, OTT & ChatGPT.'}
           </p>
         </div>
 
@@ -374,12 +444,15 @@ export function CategoryCatalogPage({
           <div className="flex items-center gap-2">
             <select
               value={availFilter}
-              onChange={(e) => setAvailFilter(e.target.value as 'all' | 'in_stock' | 'limited')}
+              onChange={(e) =>
+                setAvailFilter(e.target.value as 'all' | 'in_stock' | 'limited' | 'out_of_stock')
+              }
               className="px-3 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-bold text-[#172033] focus:outline-none focus:border-[#FF8500]"
             >
               <option value="all">{t(lang, 'allStatuses')}</option>
               <option value="in_stock">{t(lang, 'inStock')}</option>
               <option value="limited">{t(lang, 'limited')}</option>
+              <option value="out_of_stock">{t(lang, 'outOfStock')}</option>
             </select>
 
             <div className="relative flex items-center">
@@ -402,38 +475,115 @@ export function CategoryCatalogPage({
       </div>
 
       {route === 'services' && (
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          <button
-            type="button"
-            onClick={() => setSelectedCat('all')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 ${
-              selectedCat === 'all'
-                ? 'dh-orange-gradient text-white'
-                : 'bg-white border border-[#E6ECFA] text-[#172033]'
-            }`}
-          >
-            {t(lang, 'allCategories')}
-          </button>
-          {categories
-            .filter((c) => c.active)
-            .map((cat) => (
+        <div className="space-y-2.5">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedCat('all');
+                handleSelect23('all');
+              }}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 ${
+                selectedCat === 'all' && selectedSection === 'all'
+                  ? 'dh-orange-gradient text-white'
+                  : 'bg-white border border-[#E6ECFA] text-[#172033]'
+              }`}
+            >
+              {t(lang, 'allCategories')}
+            </button>
+            {categories
+              .filter((c) => c.active)
+              .map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedCat(cat.id);
+                    setSelectedSection('all');
+                    onSelectCatalogSection?.('');
+                  }}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 ${
+                    selectedCat === cat.id && selectedSection === 'all'
+                      ? 'dh-orange-gradient text-white'
+                      : 'bg-white border border-[#E6ECFA] text-[#172033]'
+                  }`}
+                >
+                  {lang === 'bn' ? cat.nameBn : cat.nameEn}
+                </button>
+              ))}
+          </div>
+
+          {/* Complete 23-Category Quick Filter Strip */}
+          <div className="rounded-2xl bg-white border border-[#E6ECFA] p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-extrabold text-[#172033] uppercase tracking-wider">
+                {lang === 'bn' ? 'সকল ২৩টি সার্ভিস ক্যাটাগরি' : 'All 23 Catalog Categories'}
+              </span>
               <button
-                key={cat.id}
                 type="button"
-                onClick={() => setSelectedCat(cat.id)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 ${
-                  selectedCat === cat.id
-                    ? 'dh-orange-gradient text-white'
-                    : 'bg-white border border-[#E6ECFA] text-[#172033]'
+                onClick={() => setExpand23((prev) => !prev)}
+                className="text-[11px] font-bold text-[#FF8500] hover:underline"
+              >
+                {expand23
+                  ? lang === 'bn'
+                    ? 'সংক্ষিপ্ত করুন'
+                    : 'Compact View'
+                  : lang === 'bn'
+                    ? 'সব ২৩টি একসাথে দেখুন'
+                    : 'Expand All 23'}
+              </button>
+            </div>
+            <div
+              className={
+                expand23
+                  ? 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-1.5'
+                  : 'flex gap-1.5 overflow-x-auto pb-1'
+              }
+            >
+              <button
+                type="button"
+                onClick={() => handleSelect23('all')}
+                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 text-left transition-colors ${
+                  selectedSection === 'all'
+                    ? 'bg-[#172033] text-white'
+                    : 'bg-[#F3F6FF] text-[#172033] hover:bg-[#FFF3E5] hover:text-[#FF8500]'
                 }`}
               >
-                {lang === 'bn' ? cat.nameBn : cat.nameEn}
+                {lang === 'bn' ? 'সব সার্ভিস' : 'All Services'}
               </button>
-            ))}
+              {CATALOG_23_CATEGORIES.map((sec) => {
+                const count = sectionCounts.get(sec.id) || 0;
+                const isActive = selectedSection === sec.id;
+                return (
+                  <button
+                    key={sec.id}
+                    type="button"
+                    onClick={() => handleSelect23(sec.id)}
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 flex items-center justify-between gap-1.5 transition-colors ${
+                      isActive
+                        ? 'bg-[#FF8500] text-white shadow-xs'
+                        : 'bg-[#F3F6FF] text-[#172033] hover:bg-[#FFF3E5] hover:text-[#FF8500]'
+                    }`}
+                  >
+                    <span className="truncate">{lang === 'bn' ? sec.shortBn : sec.shortEn}</span>
+                    {count > 0 && (
+                      <span
+                        className={`text-[10px] font-mono-num ${
+                          isActive ? 'text-white/90' : 'text-[#777777]'
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
-      {subcategories.length > 1 && (
+      {subcategories.length > 1 && selectedSection === 'all' && (
         <div className="flex gap-1.5 overflow-x-auto pb-1">
           <button
             type="button"
@@ -472,6 +622,8 @@ export function CategoryCatalogPage({
             type="button"
             onClick={() => {
               setSelectedCat('all');
+              setSelectedSection('all');
+              onSelectCatalogSection?.('');
               setSelectedSubcat('all');
               setAvailFilter('all');
               setSearch('');
@@ -566,11 +718,13 @@ export function OffersPage({
             <div key={c.id} className="dh-card rounded-2xl p-5 flex items-center justify-between gap-3">
               <div>
                 <p className="text-lg font-extrabold font-mono-num text-[#FF8500]">
-                  {c.discountType === 'percent' ? `${c.discountValue}% OFF` : `৳${c.discountValue} OFF`}
+                  {c.discountType === 'percent' ? `${c.discountValue}% OFF` : `${formatBdt(c.discountValue)} OFF`}
                 </p>
                 <p className="text-xs font-mono-num font-bold text-[#172033] mt-0.5">{c.code}</p>
                 <p className="text-[11px] text-[#777777] mt-1">
-                  {lang === 'bn' ? `ন্যূনতম অর্ডার: ৳${c.minOrderBdt}` : `Min order: ৳${c.minOrderBdt}`}
+                  {lang === 'bn'
+                    ? `ন্যূনতম অর্ডার: ${formatBdt(c.minOrderBdt)}`
+                    : `Min order: ${formatBdt(c.minOrderBdt)}`}
                 </p>
               </div>
               <button
@@ -683,36 +837,51 @@ export function SupportAndContactPage({
           </p>
         </div>
 
-        <div className="dh-card rounded-2xl p-5 space-y-2.5">
+        <div className="dh-card rounded-2xl p-5 space-y-2.5 min-w-0">
           <Send className="w-5 h-5 text-[#FF8500]" />
-          <h3 className="text-sm font-bold text-[#172033]">
+          <h3 className="text-sm font-bold text-[#172033] dark:text-slate-100">
             {lang === 'bn' ? 'সরাসরি কাস্টমার সাপোর্ট ও চ্যানেল' : 'Direct Customer Support & Channels'}
           </h3>
           <div className="space-y-2 pt-1">
             <a
-              href={settings.telegramLink || 'https://t.me/zenvoofficial'}
+              href={settings.messengerLink || settings.facebookLink || 'https://m.me/digitalhubbd'}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#F3F6FF] hover:bg-[#FFF3E5] border border-[#E6ECFA] text-xs font-bold text-[#172033] transition-colors"
+              className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800/80 hover:bg-[#FFF3E5] dark:hover:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs font-bold text-[#172033] dark:text-slate-100 transition-colors"
             >
-              <span className="inline-flex items-center gap-1.5">
-                <Send className="w-3.5 h-3.5 text-[#0088cc]" />
-                {t(lang, 'telegramAdminLabel')}
+              <span className="inline-flex items-center gap-1.5 min-w-0">
+                <MessageCircle className="w-3.5 h-3.5 text-[#0084FF] shrink-0" />
+                <span className="truncate">{lang === 'bn' ? 'মেসেঞ্জার সাপোর্ট' : 'Messenger Support'}</span>
               </span>
-              <span className="font-mono-num text-[#FF8500]">@zenvoofficial</span>
+              <span className="text-[11px] font-bold text-[#0084FF] shrink-0">
+                {lang === 'bn' ? 'চ্যাট করুন' : 'Open Chat'}
+              </span>
             </a>
 
             <a
               href={settings.whatsappLink || 'https://wa.me/8801352838945'}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#F3F6FF] hover:bg-[#FFF3E5] border border-[#E6ECFA] text-xs font-bold text-[#172033] transition-colors"
+              className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800/80 hover:bg-[#FFF3E5] dark:hover:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs font-bold text-[#172033] dark:text-slate-100 transition-colors"
             >
-              <span className="inline-flex items-center gap-1.5">
-                <MessageCircle className="w-3.5 h-3.5 text-[#16A34A]" />
-                {t(lang, 'whatsappAdminLabel')}
+              <span className="inline-flex items-center gap-1.5 min-w-0">
+                <MessageCircle className="w-3.5 h-3.5 text-[#16A34A] shrink-0" />
+                <span className="truncate">{t(lang, 'whatsappAdminLabel')}</span>
               </span>
-              <span className="font-mono-num text-[#16A34A]">+880 1352-838945</span>
+              <span className="font-mono-num text-[#16A34A] shrink-0">+880 1352-838945</span>
+            </a>
+
+            <a
+              href={settings.telegramLink || 'https://t.me/zenvoofficial'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800/80 hover:bg-[#FFF3E5] dark:hover:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs font-bold text-[#172033] dark:text-slate-100 transition-colors"
+            >
+              <span className="inline-flex items-center gap-1.5 min-w-0">
+                <Send className="w-3.5 h-3.5 text-[#0088cc] shrink-0" />
+                <span className="truncate">{t(lang, 'telegramAdminLabel')}</span>
+              </span>
+              <span className="font-mono-num text-[#FF8500] shrink-0">@zenvoofficial</span>
             </a>
 
             <a
@@ -721,11 +890,11 @@ export function SupportAndContactPage({
               rel="noopener noreferrer"
               className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#172033] hover:bg-[#FF8500] text-xs font-bold text-white transition-colors"
             >
-              <span className="inline-flex items-center gap-1.5">
-                <Send className="w-3.5 h-3.5" />
-                {t(lang, 'telegramChannelLabel')}
+              <span className="inline-flex items-center gap-1.5 min-w-0">
+                <Send className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{t(lang, 'telegramChannelLabel')}</span>
               </span>
-              <span className="text-[11px] opacity-90">
+              <span className="text-[11px] opacity-90 shrink-0">
                 {lang === 'bn' ? 'চ্যানেল খুলুন' : 'Open Channel'}
               </span>
             </a>

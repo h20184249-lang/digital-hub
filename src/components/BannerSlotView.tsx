@@ -94,7 +94,7 @@ export function BannerSlotView({
   };
 
   return (
-    <div className={`space-y-3 ${className}`}>
+    <div className={`w-full max-w-full overflow-hidden space-y-3 ${className}`}>
       <PublisherScriptSlot
         placement={slot}
         adFormat="banner"
@@ -106,7 +106,7 @@ export function BannerSlotView({
         <div
           onMouseEnter={() => setPaused(true)}
           onMouseLeave={() => setPaused(false)}
-          className="relative dh-card rounded-2xl overflow-hidden group hover:border-[#FF8500] transition-colors"
+          className="relative w-full max-w-full dh-card rounded-2xl overflow-hidden group hover:border-[#FF8500] transition-colors"
         >
           {launch?.ok ? (
             <a
@@ -118,7 +118,7 @@ export function BannerSlotView({
               className="relative flex flex-col md:flex-row items-stretch cursor-pointer"
             >
               {(current.imageUrl || current.mobileImageUrl) && (
-                <div className="relative md:w-64 lg:w-72 h-32 md:h-auto shrink-0 overflow-hidden bg-[#172033]">
+                <div className="relative w-full md:w-64 lg:w-72 aspect-[16/7] sm:aspect-[21/7] md:aspect-auto md:min-h-[112px] shrink-0 overflow-hidden bg-[#172033]">
                   {current.mobileImageUrl && (
                     <img
                       key={`mob_${current.id}_${retryNonce}`}
@@ -150,36 +150,40 @@ export function BannerSlotView({
                 </div>
               )}
 
-              <div className="flex-1 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-white to-[#FFF7EE]">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
+              <div className="flex-1 min-w-0 p-3.5 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-white to-[#FFF7EE] dark:from-slate-900 dark:to-slate-800/90">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5 mb-1">
                     {current.adCode && (
-                      <span className="px-2 py-0.5 rounded-md bg-[#FFF3E5] text-[#FF8500] text-[10px] font-bold font-mono-num">
+                      <span className="px-2 py-0.5 rounded-md bg-[#FFF3E5] dark:bg-orange-500/20 text-[#FF8500] text-[10px] font-bold font-mono-num shrink-0">
                         {current.adCode}
                       </span>
                     )}
-                    {subtitle && <span className="text-xs text-[#777777] font-medium truncate">{subtitle}</span>}
+                    {subtitle && (
+                      <span className="text-[11px] sm:text-xs text-[#777777] dark:text-slate-400 font-medium truncate">
+                        {subtitle}
+                      </span>
+                    )}
                   </div>
-                  <h3 className="text-sm sm:text-base font-bold text-[#172033] group-hover:text-[#FF8500] transition-colors leading-snug">
+                  <h3 className="text-sm sm:text-base font-bold text-[#172033] dark:text-slate-100 group-hover:text-[#FF8500] transition-colors leading-snug line-clamp-2">
                     {title}
                   </h3>
                 </div>
 
-                <div className={`flex items-center gap-2 shrink-0 ${slotBanners.length > 1 ? 'pr-20 sm:pr-20' : ''}`}>
-                  <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl dh-orange-gradient text-white text-xs sm:text-sm font-bold shadow-xs group-hover:opacity-95 transition-opacity">
+                <div className={`flex items-center gap-2 shrink-0 ${slotBanners.length > 1 ? 'md:pr-20' : ''}`}>
+                  <span className="inline-flex items-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl dh-orange-gradient text-white text-xs sm:text-sm font-bold shadow-xs group-hover:opacity-95 transition-opacity whitespace-nowrap">
                     <span>{t(lang, 'openDestination')}</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                   </span>
                 </div>
               </div>
             </a>
           ) : (
-            <div className="p-4 bg-amber-50 border border-amber-200 flex items-center justify-between gap-3 text-xs">
+            <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 flex items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2 min-w-0">
                 <AlertCircle className="w-4 h-4 text-[#FF8500] shrink-0" />
                 <div className="min-w-0">
-                  <p className="font-bold text-[#172033] truncate">{title || current.adCode}</p>
-                  <p className="text-amber-800">
+                  <p className="font-bold text-[#172033] dark:text-slate-100 truncate">{title || current.adCode}</p>
+                  <p className="text-amber-800 dark:text-amber-300">
                     {lang === 'bn' ? 'ব্যানারের গন্তব্য লিংকটি অনুপলব্ধ।' : 'Banner destination link unavailable.'}
                   </p>
                 </div>
@@ -187,7 +191,7 @@ export function BannerSlotView({
               <button
                 type="button"
                 onClick={() => setRetryNonce((n) => n + 1)}
-                className="px-3 py-1.5 rounded-xl bg-white border border-amber-300 text-[#172033] font-bold inline-flex items-center gap-1 shrink-0"
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-amber-300 dark:border-amber-700 text-[#172033] dark:text-slate-100 font-bold inline-flex items-center gap-1 shrink-0"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>{lang === 'bn' ? 'রিট্রাই' : 'Retry'}</span>
@@ -196,7 +200,7 @@ export function BannerSlotView({
           )}
 
           {slotBanners.length > 1 && (
-            <div className="absolute right-3 bottom-3 sm:top-1/2 sm:-translate-y-1/2 sm:bottom-auto z-10 flex items-center gap-1">
+            <div className="absolute top-2.5 right-2.5 md:top-1/2 md:-translate-y-1/2 md:right-3 z-10 flex items-center gap-1">
               <button
                 type="button"
                 onClick={(e) => {
@@ -204,7 +208,7 @@ export function BannerSlotView({
                   e.stopPropagation();
                   setActiveIdx((p) => (p - 1 + slotBanners.length) % slotBanners.length);
                 }}
-                className="p-1.5 rounded-lg border border-[#E6ECFA] bg-white/95 text-[#172033] hover:border-[#FF8500] shadow-xs"
+                className="p-1.5 rounded-lg border border-[#E6ECFA] dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 text-[#172033] dark:text-slate-100 hover:border-[#FF8500] shadow-xs"
                 aria-label="Previous banner"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -216,7 +220,7 @@ export function BannerSlotView({
                   e.stopPropagation();
                   setActiveIdx((p) => (p + 1) % slotBanners.length);
                 }}
-                className="p-1.5 rounded-lg border border-[#E6ECFA] bg-white/95 text-[#172033] hover:border-[#FF8500] shadow-xs"
+                className="p-1.5 rounded-lg border border-[#E6ECFA] dark:border-slate-700 bg-white/95 dark:bg-slate-900/95 text-[#172033] dark:text-slate-100 hover:border-[#FF8500] shadow-xs"
                 aria-label="Next banner"
               >
                 <ChevronRight className="w-4 h-4" />

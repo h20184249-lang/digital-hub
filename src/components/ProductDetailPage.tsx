@@ -47,10 +47,16 @@ import {
   validateTransactionIdServer,
 } from '../lib/firestoreService';
 import {
+  formatBdt,
+  getEffectiveProductAvailability,
+  getFirstAvailablePackage,
   getNormalizedPackages,
+  getPackageAvailability,
   getProductOrderFormType,
   getProductStockCount,
   getRulesAndRefundPoints,
+  hasGenuineDiscount,
+  isPackagePurchasable,
 } from '../lib/catalogHelpers';
 import {
   buildServiceDeliveryNote,
@@ -110,7 +116,9 @@ export function ProductDetailPage({
   onOrderSuccess,
 }: ProductDetailPageProps) {
   const packages = useMemo(() => getNormalizedPackages(product), [product]);
-  const [selectedPackage, setSelectedPackage] = useState<ProductPackage | null>(packages[0] || null);
+  const [selectedPackage, setSelectedPackage] = useState<ProductPackage | null>(
+    () => getFirstAvailablePackage(product) || packages[0] || null
+  );
   const [quantity, setQuantity] = useState(1);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [method, setMethod] = useState<CheckoutPaymentMethod>('bkash');
@@ -129,8 +137,7 @@ export function ProductDetailPage({
   const checkoutSectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const pkgs = getNormalizedPackages(product);
-    setSelectedPackage(pkgs[0] || null);
+    setSelectedPackage(getFirstAvailablePackage(product) || getNormalizedPackages(product)[0] || null);
     setQuantity(1);
     setCheckoutOpen(false);
     setError('');
@@ -167,13 +174,21 @@ export function ProductDetailPage({
 
   const category = categories.find((c) => c.id === product.categoryId);
   const brandMeta = product.brandKey ? BRAND_META[product.brandKey.toLowerCase()] : undefined;
+  const effectiveAvail = getEffectiveProductAvailability(product);
   const stockCount = getProductStockCount(product);
+  const isProductOutOfStock = effectiveAvail === 'out_of_stock' || stockCount <= 0;
   const formType = getProductOrderFormType(product);
   const { rules, refundPolicy } = useMemo(() => getRulesAndRefundPoints(product, lang), [product, lang]);
 
   const activePackage = selectedPackage || packages[0];
+  const activePkgPurchasable = !isProductOutOfStock && isPackagePurchasable(activePackage, product);
   const unitPrice = activePackage ? activePackage.priceBdt : product.priceBdt;
   const originalUnitPrice = activePackage?.originalPriceBdt ?? product.originalPriceBdt;
+  const showGenuineDiscount = hasGenuineDiscount(unitPrice, originalUnitPrice);
+  const discountPct =
+    showGenuineDiscount && originalUnitPrice
+      ? Math.min(95, Math.max(1, Math.round(((originalUnitPrice - unitPrice) / originalUnitPrice) * 100)))
+      : 0;
   const totalCost = Math.max(1, unitPrice * quantity);
   const walletBalance = wallet?.availableBalanceBdt || 0;
   const walletSufficient = walletBalance >= totalCost;
@@ -232,12 +247,20 @@ export function ProductDetailPage({
   const handleSubmitOrder = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    if (!activePkgPurchasable) {
+      setError(
+        lang === 'bn'
+          ? 'নির্বাচিত প্যাকেজটি বর্তমানে Out of Stock। অনুগ্রহ করে অন্য একটি উপলব্ধ প্যাকেজ নির্বাচন করুন।'
+          : 'The selected package is currently Out of Stock. Please choose an available package.'
+      );
+      return;
+    }
     if (!user) {
       onOpenAuth();
       return;
     }
 
-    const validationErr = validateServiceOrderValues(formType, serviceValues, lang);
+    const validationErr = validateServiceOrderValues(formType, serviceValues, lang, product);
     if (validationErr) {
       setError(validationErr);
       return;
@@ -353,18 +376,18 @@ export function ProductDetailPage({
           </span>
           <span
             className={`px-2.5 py-1 rounded-xl text-[11px] font-extrabold border ${
-              product.availability === 'in_stock'
+              effectiveAvail === 'in_stock' && !isProductOutOfStock
                 ? 'bg-emerald-950/75 border-emerald-400/30 text-emerald-300'
-                : product.availability === 'limited'
+                : effectiveAvail === 'limited' && !isProductOutOfStock
                   ? 'bg-amber-950/75 border-amber-400/30 text-amber-300'
                   : 'bg-red-950/75 border-red-400/30 text-red-300'
             }`}
           >
-            {product.availability === 'in_stock'
-              ? `${stockCount} ${t(lang, 'inStock')}`
-              : product.availability === 'limited'
-                ? `${stockCount} ${t(lang, 'limited')}`
-                : t(lang, 'outOfStock')}
+            {isProductOutOfStock
+              ? t(lang, 'outOfStock')
+              : effectiveAvail === 'limited'
+                ? t(lang, 'limited')
+                : t(lang, 'inStock')}
           </span>
         </div>
       </div>
@@ -375,9 +398,9 @@ export function ProductDetailPage({
         <div className="lg:col-span-5 space-y-4">
           <div className="relative aspect-[16/11] rounded-3xl overflow-hidden border border-[#E6ECFA] shadow-sm group">
             <ProductVisualArtwork product={product} lang={lang} variant="hero" />
-            {product.discountPercent && product.discountPercent > 0 ? (
+            {!isProductOutOfStock && discountPct > 0 ? (
               <span className="absolute top-3 right-3 px-2.5 py-1 rounded-xl bg-[#DC2626] text-white text-xs font-extrabold font-mono-num shadow-sm">
-                -{product.discountPercent}%
+                -{discountPct}%
               </span>
             ) : null}
           </div>
@@ -417,30 +440,18 @@ export function ProductDetailPage({
             <div className="flex items-center gap-2 font-mono-num font-extrabold">
               <span
                 className={
-                  product.availability === 'in_stock'
-                    ? 'text-[#059669]'
-                    : product.availability === 'limited'
+                  isProductOutOfStock
+                    ? 'text-[#DC2626]'
+                    : effectiveAvail === 'limited'
                       ? 'text-[#FF8500]'
-                      : 'text-[#DC2626]'
+                      : 'text-[#059669]'
                 }
               >
-                {stockCount} {lang === 'bn' ? 'টি উপলব্ধ' : 'Units'}
-              </span>
-              <span className="text-[#E6ECFA]">|</span>
-              <span
-                className={
-                  product.availability === 'in_stock'
-                    ? 'text-[#059669]'
-                    : product.availability === 'limited'
-                      ? 'text-[#FF8500]'
-                      : 'text-[#DC2626]'
-                }
-              >
-                {product.availability === 'in_stock'
-                  ? t(lang, 'inStock')
-                  : product.availability === 'limited'
+                {isProductOutOfStock
+                  ? t(lang, 'outOfStock')
+                  : effectiveAvail === 'limited'
                     ? t(lang, 'limited')
-                    : t(lang, 'outOfStock')}
+                    : t(lang, 'inStock')}
               </span>
             </div>
           </div>
@@ -483,16 +494,16 @@ export function ProductDetailPage({
 
             <div className="flex flex-wrap items-baseline gap-3 pt-1">
               <span className="text-3xl font-extrabold font-mono-num text-[#FF8500]">
-                ৳{unitPrice}
+                {formatBdt(unitPrice)}
               </span>
-              {originalUnitPrice && originalUnitPrice > 0 && originalUnitPrice !== unitPrice && (
+              {showGenuineDiscount && originalUnitPrice && (
                 <span className="px-2 py-0.5 rounded-md bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-mono-num text-[#777777] line-through">
-                  ৳{originalUnitPrice}
+                  {formatBdt(originalUnitPrice)}
                 </span>
               )}
-              {originalUnitPrice && originalUnitPrice > unitPrice && (
+              {discountPct > 0 && (
                 <span className="px-2 py-0.5 rounded-md bg-[#DC2626] text-white text-[11px] font-extrabold font-mono-num">
-                  -{Math.min(95, Math.max(1, Math.round(((originalUnitPrice - unitPrice) / originalUnitPrice) * 100)))}%
+                  -{discountPct}%
                 </span>
               )}
               {activePackage && (
@@ -531,36 +542,60 @@ export function ProductDetailPage({
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                 {packages.map((pkg) => {
                   const isSel = activePackage?.id === pkg.id;
+                  const pkgAvail = getPackageAvailability(pkg, product);
+                  const pkgOut = isProductOutOfStock || pkgAvail === 'out_of_stock';
+                  const pkgGenuineDiscount = hasGenuineDiscount(pkg.priceBdt, pkg.originalPriceBdt);
+                  const pkgDuration = lang === 'bn' ? pkg.durationBn || pkg.durationEn : pkg.durationEn || pkg.durationBn;
                   return (
                     <button
                       key={pkg.id}
                       type="button"
-                      onClick={() => setSelectedPackage(pkg)}
+                      disabled={pkgOut}
+                      onClick={() => {
+                        if (!pkgOut) setSelectedPackage(pkg);
+                      }}
                       className={`p-3 rounded-2xl border text-left transition-all ${
-                        isSel
-                          ? 'border-[#FF8500] bg-[#FFF7EE] ring-2 ring-[#FF8500]/25'
-                          : 'border-[#E6ECFA] bg-[#F3F6FF] hover:border-[#FF8500]/60'
+                        pkgOut
+                          ? 'border-red-200 bg-red-50/50 opacity-65 cursor-not-allowed'
+                          : isSel
+                            ? 'border-[#FF8500] bg-[#FFF7EE] ring-2 ring-[#FF8500]/25'
+                            : 'border-[#E6ECFA] bg-[#F3F6FF] hover:border-[#FF8500]/60'
                       }`}
                     >
-                      {pkg.tag && (
-                        <span className="inline-block px-1.5 py-0.5 rounded bg-[#FF8500] text-white text-[9px] font-extrabold uppercase mb-1">
-                          {pkg.tag}
-                        </span>
-                      )}
+                      <div className="flex items-center justify-between gap-1 mb-1 min-h-[18px]">
+                        {pkgOut ? (
+                          <span className="inline-block px-1.5 py-0.5 rounded bg-[#DC2626] text-white text-[9px] font-extrabold uppercase">
+                            {t(lang, 'outOfStock')}
+                          </span>
+                        ) : pkg.tag ? (
+                          <span className="inline-block px-1.5 py-0.5 rounded bg-[#FF8500] text-white text-[9px] font-extrabold uppercase">
+                            {pkg.tag}
+                          </span>
+                        ) : pkgAvail === 'limited' ? (
+                          <span className="inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[9px] font-extrabold uppercase">
+                            {t(lang, 'limited')}
+                          </span>
+                        ) : (
+                          <span />
+                        )}
+                      </div>
                       <p className="text-xs font-bold text-[#172033] leading-snug">
                         {lang === 'bn' ? pkg.nameBn : pkg.nameEn}
                       </p>
+                      {pkgDuration && (
+                        <p className="text-[10px] text-[#777777] mt-0.5 truncate">{pkgDuration}</p>
+                      )}
                       <div className="flex items-baseline gap-1.5 mt-1">
-                        <span className="text-sm font-extrabold font-mono-num text-[#FF8500]">
-                          ৳{pkg.priceBdt}
+                        <span
+                          className={`text-sm font-extrabold font-mono-num ${
+                            pkgOut ? 'text-[#777777]' : 'text-[#FF8500]'
+                          }`}
+                        >
+                          {formatBdt(pkg.priceBdt)}
                         </span>
-                        {pkg.originalPriceBdt && pkg.originalPriceBdt > 0 && pkg.originalPriceBdt !== pkg.priceBdt && (
-                          <span className="text-[10px] font-mono-num text-[#777777]">
-                            {pkg.originalPriceBdt > pkg.priceBdt ? (
-                              <span className="line-through">৳{pkg.originalPriceBdt}</span>
-                            ) : (
-                              <span>({t(lang, 'originalPriceLabel')} ৳{pkg.originalPriceBdt})</span>
-                            )}
+                        {pkgGenuineDiscount && pkg.originalPriceBdt && (
+                          <span className="text-[10px] font-mono-num text-[#777777] line-through">
+                            {formatBdt(pkg.originalPriceBdt)}
                           </span>
                         )}
                       </div>
@@ -574,9 +609,11 @@ export function ProductDetailPage({
             <div className="p-3.5 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-1.5 text-xs">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-bold text-[#172033]">{t(lang, 'priceBreakdownLabel')}</span>
-                {originalUnitPrice && originalUnitPrice > 0 && (
-                  <span className="text-[11px] font-mono-num text-[#777777]">
-                    {t(lang, 'originalPriceLabel')}: ৳{originalUnitPrice} · {t(lang, 'websitePriceLabel')}: ৳{unitPrice}
+                {showGenuineDiscount && originalUnitPrice && (
+                  <span className="text-[11px] font-mono-num text-[#059669] font-bold">
+                    {lang === 'bn'
+                      ? `সাশ্রয়: ${formatBdt((originalUnitPrice - unitPrice) * quantity)}`
+                      : `You save ${formatBdt((originalUnitPrice - unitPrice) * quantity)}`}
                   </span>
                 )}
               </div>
@@ -584,10 +621,12 @@ export function ProductDetailPage({
                 <span className="font-semibold text-[#777777]">
                   {t(lang, 'totalPayable')}:{' '}
                   <span className="font-mono-num text-[#172033] font-bold">
-                    ৳{unitPrice} × {quantity}
+                    {formatBdt(unitPrice)} × {quantity}
                   </span>
                 </span>
-                <span className="text-base font-extrabold font-mono-num text-[#FF8500]">৳{totalCost}</span>
+                <span className="text-base font-extrabold font-mono-num text-[#FF8500]">
+                  {formatBdt(totalCost)}
+                </span>
               </div>
             </div>
 
@@ -690,25 +729,25 @@ export function ProductDetailPage({
 
             <button
               type="button"
-              disabled={product.availability === 'out_of_stock' || stockCount <= 0}
+              disabled={!activePkgPurchasable}
               onClick={() => onAddToCart(product, quantity, activePackage)}
-              className="flex-1 min-w-[140px] py-3 px-4 rounded-xl bg-[#172033] text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 hover:bg-[#23314d] disabled:opacity-50"
+              className="flex-1 min-w-[140px] py-3 px-4 rounded-xl bg-[#172033] text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 hover:bg-[#23314d] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <ShoppingCart className="w-4 h-4" />
-              <span>{t(lang, 'addToCart')}</span>
+              <span>{!activePkgPurchasable ? t(lang, 'outOfStock') : t(lang, 'addToCart')}</span>
             </button>
 
             <button
               type="button"
-              disabled={product.availability === 'out_of_stock' || stockCount <= 0}
+              disabled={!activePkgPurchasable}
               onClick={openInlineCheckout}
-              className="flex-1 min-w-[170px] py-3 px-5 rounded-xl dh-orange-gradient text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 shadow-md hover:opacity-95 disabled:opacity-50"
+              className="flex-1 min-w-[170px] py-3 px-5 rounded-xl dh-orange-gradient text-white text-xs sm:text-sm font-extrabold flex items-center justify-center gap-2 shadow-md hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <ShieldCheck className="w-4 h-4" />
               <span>
-                {product.availability === 'out_of_stock' || stockCount <= 0
+                {!activePkgPurchasable
                   ? t(lang, 'outOfStock')
-                  : `${t(lang, 'buyNow')} · ৳${totalCost}`}
+                  : `${t(lang, 'buyNow')} · ${formatBdt(totalCost)}`}
               </span>
             </button>
           </div>
@@ -781,7 +820,7 @@ export function ProductDetailPage({
                     {quantity}
                   </p>
                 </div>
-                <span className="text-2xl font-extrabold font-mono-num text-[#FF8500]">৳{totalCost}</span>
+                <span className="text-2xl font-extrabold font-mono-num text-[#FF8500]">{formatBdt(totalCost)}</span>
               </div>
 
               {!user && (
@@ -960,10 +999,14 @@ export function ProductDetailPage({
 
               <button
                 type="submit"
-                disabled={submitting || (method === 'wallet' && !walletSufficient)}
+                disabled={submitting || !activePkgPurchasable || (method === 'wallet' && !walletSufficient)}
                 className="w-full py-3 rounded-xl dh-orange-gradient text-white font-extrabold text-sm shadow-md hover:opacity-95 disabled:opacity-60"
               >
-                {submitting ? '...' : `${t(lang, 'submitPayment')} · ৳${totalCost}`}
+                {submitting
+                  ? '...'
+                  : !activePkgPurchasable
+                    ? t(lang, 'outOfStock')
+                    : `${t(lang, 'submitPayment')} · ${formatBdt(totalCost)}`}
               </button>
             </form>
           )}

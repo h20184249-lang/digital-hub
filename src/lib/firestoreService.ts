@@ -1125,11 +1125,15 @@ export async function registerReferralServer(referralCode: string): Promise<{
 export async function startWatchEarnSessionServer(params: {
   unitId: string;
   provider: string;
+  launchUrl?: string;
 }): Promise<{
   ok: boolean;
   sessionId: string;
   sessionToken: string;
   status: string;
+  requiredSeconds: number;
+  rewardCoins: number;
+  serverStartedAt: number;
   requiresS2SCallback: boolean;
   message: string;
 }> {
@@ -1138,6 +1142,9 @@ export async function startWatchEarnSessionServer(params: {
     sessionId?: string;
     sessionToken?: string;
     status?: string;
+    requiredSeconds?: number;
+    rewardCoins?: number;
+    serverStartedAt?: number;
     requiresS2SCallback?: boolean;
     message?: string;
   }>('/api/watch-earn/session/start', {
@@ -1149,8 +1156,77 @@ export async function startWatchEarnSessionServer(params: {
     ok: true,
     sessionId: data.sessionId || '',
     sessionToken: data.sessionToken || '',
-    status: data.status || 'started',
+    status: data.status || 'watching',
+    requiredSeconds: Number(data.requiredSeconds || 5),
+    rewardCoins: Number(data.rewardCoins || 10),
+    serverStartedAt: Number(data.serverStartedAt || Date.now()),
     requiresS2SCallback: data.requiresS2SCallback === true,
+    message: data.message || '',
+  };
+}
+
+export async function completeWatchEarnSessionServer(params: {
+  sessionId: string;
+  sessionToken: string;
+  adLoaded: boolean;
+  failureReason?: string;
+}): Promise<{
+  ok: boolean;
+  verified: boolean;
+  alreadyCredited: boolean;
+  status: string;
+  coinsAwarded: number;
+  bdtEquivalent: number;
+  coinsAvailable: number;
+  coinsLifetimeEarned: number;
+  coinsRedeemed: number;
+  adsWatchedToday: number;
+  coinsEarnedToday: number;
+  dailyAdLimit: number;
+  dailyCoinLimit: number;
+  message: string;
+}> {
+  const resp = await fetch(apiUrl('/api/watch-earn/session/complete'), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(params),
+  });
+  const data = (await resp.json().catch(() => ({}))) as {
+    ok?: boolean;
+    verified?: boolean;
+    alreadyCredited?: boolean;
+    status?: string;
+    coinsAwarded?: number;
+    bdtEquivalent?: number;
+    coinsAvailable?: number;
+    coinsLifetimeEarned?: number;
+    coinsRedeemed?: number;
+    adsWatchedToday?: number;
+    coinsEarnedToday?: number;
+    dailyAdLimit?: number;
+    dailyCoinLimit?: number;
+    message?: string;
+    error?: string;
+  };
+  if (!resp.ok) {
+    throw new Error(data.error || data.message || 'Could not complete ad reward verification.');
+  }
+  notifyDashboardInvalidation();
+  return {
+    ok: Boolean(data.ok),
+    verified: Boolean(data.verified),
+    alreadyCredited: Boolean(data.alreadyCredited),
+    status: data.status || 'credited',
+    coinsAwarded: Number(data.coinsAwarded || 0),
+    bdtEquivalent: Number(data.bdtEquivalent || 0),
+    coinsAvailable: Number(data.coinsAvailable || 0),
+    coinsLifetimeEarned: Number(data.coinsLifetimeEarned || 0),
+    coinsRedeemed: Number(data.coinsRedeemed || 0),
+    adsWatchedToday: Number(data.adsWatchedToday || 0),
+    coinsEarnedToday: Number(data.coinsEarnedToday || 0),
+    dailyAdLimit: Number(data.dailyAdLimit || 5),
+    dailyCoinLimit: Number(data.dailyCoinLimit || 100),
     message: data.message || '',
   };
 }
@@ -1189,10 +1265,18 @@ export async function verifyWatchEarnSessionServer(sessionId: string): Promise<{
   };
 }
 
-export async function getWatchEarnSummaryServer(): Promise<{
+export interface WatchEarnSummaryPayload {
   coinsAvailable: number;
   coinsLifetimeEarned: number;
   coinsRedeemed: number;
+  adsWatchedToday: number;
+  coinsEarnedToday: number;
+  dailyAdLimit: number;
+  dailyCoinLimit: number;
+  coinsPerAd: number;
+  coinsPerBdt: number;
+  minRedeemCoins: number;
+  watchEarnEnabled: boolean;
   creditedSessions: Array<{
     sessionId: string;
     provider: string;
@@ -1200,7 +1284,24 @@ export async function getWatchEarnSummaryServer(): Promise<{
     coins: number;
     creditedAt: string;
   }>;
-}> {
+}
+
+const EMPTY_WATCH_EARN_SUMMARY: WatchEarnSummaryPayload = {
+  coinsAvailable: 0,
+  coinsLifetimeEarned: 0,
+  coinsRedeemed: 0,
+  adsWatchedToday: 0,
+  coinsEarnedToday: 0,
+  dailyAdLimit: 5,
+  dailyCoinLimit: 100,
+  coinsPerAd: 10,
+  coinsPerBdt: 10,
+  minRedeemCoins: 50,
+  watchEarnEnabled: true,
+  creditedSessions: [],
+};
+
+export async function getWatchEarnSummaryServer(): Promise<WatchEarnSummaryPayload> {
   try {
     const resp = await fetch(apiUrl('/api/watch-earn/summary'), {
       method: 'GET',
@@ -1208,28 +1309,25 @@ export async function getWatchEarnSummaryServer(): Promise<{
       headers: { Accept: 'application/json' },
     });
     if (!resp.ok) {
-      return { coinsAvailable: 0, coinsLifetimeEarned: 0, coinsRedeemed: 0, creditedSessions: [] };
+      return EMPTY_WATCH_EARN_SUMMARY;
     }
-    const data = (await resp.json().catch(() => ({}))) as {
-      coinsAvailable?: number;
-      coinsLifetimeEarned?: number;
-      coinsRedeemed?: number;
-      creditedSessions?: Array<{
-        sessionId: string;
-        provider: string;
-        providerEventId: string;
-        coins: number;
-        creditedAt: string;
-      }>;
-    };
+    const data = (await resp.json().catch(() => ({}))) as Partial<WatchEarnSummaryPayload>;
     return {
-      coinsAvailable: data.coinsAvailable || 0,
-      coinsLifetimeEarned: data.coinsLifetimeEarned || 0,
-      coinsRedeemed: data.coinsRedeemed || 0,
-      creditedSessions: data.creditedSessions || [],
+      coinsAvailable: Number(data.coinsAvailable || 0),
+      coinsLifetimeEarned: Number(data.coinsLifetimeEarned || 0),
+      coinsRedeemed: Number(data.coinsRedeemed || 0),
+      adsWatchedToday: Number(data.adsWatchedToday || 0),
+      coinsEarnedToday: Number(data.coinsEarnedToday || 0),
+      dailyAdLimit: Number(data.dailyAdLimit || 5),
+      dailyCoinLimit: Number(data.dailyCoinLimit || 100),
+      coinsPerAd: Number(data.coinsPerAd || 10),
+      coinsPerBdt: Number(data.coinsPerBdt || 10),
+      minRedeemCoins: Number(data.minRedeemCoins || 50),
+      watchEarnEnabled: data.watchEarnEnabled !== false,
+      creditedSessions: Array.isArray(data.creditedSessions) ? data.creditedSessions : [],
     };
   } catch {
-    return { coinsAvailable: 0, coinsLifetimeEarned: 0, coinsRedeemed: 0, creditedSessions: [] };
+    return EMPTY_WATCH_EARN_SUMMARY;
   }
 }
 
@@ -2043,16 +2141,31 @@ export async function adminSaveProduct(
   const cleanPackages = (prod.packages || [])
     .filter((pk) => pk.nameEn.trim() && pk.priceBdt > 0)
     .slice(0, 200)
-    .map((pk, idx) => ({
-      id: sanitizeId(pk.id || `pkg_${idx + 1}`),
-      nameBn: (pk.nameBn || pk.nameEn).trim().slice(0, 120),
-      nameEn: (pk.nameEn || pk.nameBn).trim().slice(0, 120),
-      priceBdt: Math.max(1, Math.round(pk.priceBdt)),
-      ...(pk.originalPriceBdt && pk.originalPriceBdt > 0
-        ? { originalPriceBdt: Math.round(pk.originalPriceBdt) }
-        : {}),
-      ...(pk.tag ? { tag: pk.tag.trim().slice(0, 32) } : {}),
-    }));
+    .map((pk, idx) => {
+      const cleanPkPrice = Math.max(1, Math.round(pk.priceBdt));
+      const rawPkOrig = pk.originalPriceBdt && pk.originalPriceBdt > 0 ? Math.round(pk.originalPriceBdt) : 0;
+      const genuinePkOrig = rawPkOrig > cleanPkPrice ? rawPkOrig : 0;
+      const rawPkSupplier =
+        typeof pk.supplierPriceBdt === 'number' && pk.supplierPriceBdt > 0
+          ? Math.round(pk.supplierPriceBdt)
+          : rawPkOrig > 0 && rawPkOrig <= cleanPkPrice
+            ? rawPkOrig
+            : 0;
+      return {
+        id: sanitizeId(pk.id || `pkg_${idx + 1}`),
+        nameBn: (pk.nameBn || pk.nameEn).trim().slice(0, 120),
+        nameEn: (pk.nameEn || pk.nameBn).trim().slice(0, 120),
+        priceBdt: cleanPkPrice,
+        ...(genuinePkOrig > 0 ? { originalPriceBdt: genuinePkOrig } : {}),
+        ...(rawPkSupplier > 0 ? { supplierPriceBdt: rawPkSupplier } : {}),
+        ...(pk.availability ? { availability: pk.availability } : {}),
+        ...(pk.durationBn ? { durationBn: pk.durationBn.trim().slice(0, 60) } : {}),
+        ...(pk.durationEn ? { durationEn: pk.durationEn.trim().slice(0, 60) } : {}),
+        ...(pk.deliveryDurationBn ? { deliveryDurationBn: pk.deliveryDurationBn.trim().slice(0, 60) } : {}),
+        ...(pk.deliveryDurationEn ? { deliveryDurationEn: pk.deliveryDurationEn.trim().slice(0, 60) } : {}),
+        ...(pk.tag ? { tag: pk.tag.trim().slice(0, 32) } : {}),
+      };
+    });
 
   const cleanStock =
     typeof prod.stockCount === 'number' && !Number.isNaN(prod.stockCount)
@@ -2065,7 +2178,13 @@ export async function adminSaveProduct(
 
   const cleanPrice = Math.max(1, Math.round(Number(prod.priceBdt) || 1));
   const rawOrig = Math.round(Number(prod.originalPriceBdt ?? prod.regularPriceBdt ?? 0) || 0);
-  const cleanOrig = rawOrig > 0 ? rawOrig : 0;
+  const cleanOrig = rawOrig > cleanPrice ? rawOrig : 0;
+  const cleanSupplier =
+    typeof prod.supplierPriceBdt === 'number' && prod.supplierPriceBdt > 0
+      ? Math.round(prod.supplierPriceBdt)
+      : rawOrig > 0 && rawOrig <= cleanPrice
+        ? rawOrig
+        : 0;
   const computedDiscount =
     cleanOrig > cleanPrice
       ? Math.min(95, Math.max(1, Math.round(((cleanOrig - cleanPrice) / cleanOrig) * 100)))
@@ -2087,6 +2206,7 @@ export async function adminSaveProduct(
   const payload: Record<string, unknown> = {
     id: prod.id,
     categoryId: prod.categoryId,
+    ...(prod.catalogSectionId ? { catalogSectionId: prod.catalogSectionId.trim().slice(0, 60) } : {}),
     subcategoryBn: (prod.subcategoryBn || '').trim().slice(0, 100),
     subcategoryEn: (prod.subcategoryEn || '').trim().slice(0, 100),
     brandKey: (prod.brandKey || '').trim().slice(0, 40),
@@ -2097,11 +2217,12 @@ export async function adminSaveProduct(
     priceBdt: cleanPrice,
     originalPriceBdt: cleanOrig,
     regularPriceBdt: cleanOrig || cleanPrice,
+    ...(cleanSupplier > 0 ? { supplierPriceBdt: cleanSupplier } : {}),
     discountPercent: computedDiscount,
     currency: 'BDT',
-    ...(cleanPackages.length > 0 ? { packages: cleanPackages } : {}),
+    ...(cleanPackages.length > 0 ? { packages: cleanPackages } : { packages: [] }),
     availability: prod.availability || 'in_stock',
-    stockCount: cleanStock,
+    stockCount: prod.availability === 'out_of_stock' ? 0 : cleanStock,
     ...(prod.orderFormType ? { orderFormType: prod.orderFormType } : {}),
     deliveryDurationBn: (prod.deliveryDurationBn || prod.deliveryDurationEn || '৫ - ১৫ মিনিট').trim().slice(0, 100),
     deliveryDurationEn: (prod.deliveryDurationEn || prod.deliveryDurationBn || '5 - 15 mins').trim().slice(0, 100),
@@ -2154,8 +2275,11 @@ export async function adminQuickUpdatePackage(
       | 'sectionTag'
       | 'sortOrder'
       | 'availability'
+      | 'stockCount'
       | 'priceBdt'
       | 'originalPriceBdt'
+      | 'supplierPriceBdt'
+      | 'packages'
       | 'customLogoUrl'
       | 'imageUrl'
       | 'badge'

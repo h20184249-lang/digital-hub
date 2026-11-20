@@ -764,49 +764,61 @@ export function AdminAdsPanel({
       )}
 
       {subTab === 'units' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-          {managedAdUnits.map((unit) => (
-            <div
-              key={unit.id}
-              className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 flex items-center justify-between gap-3"
-            >
-              <div className="min-w-0">
-                <p className="font-extrabold text-[#172033] dark:text-slate-100 truncate">
-                  #{unit.unitNumber} · {unit.label}
-                </p>
-                <p className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400">
-                  {unit.provider} · {unit.format} · Placements: {unit.placements.join(', ')}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await adminSaveManagedAdUnit({
-                      id: unit.id,
-                      enabled: !unit.enabled,
-                      placements: unit.placements,
-                      showOnMobile: unit.showOnMobile,
-                      showOnDesktop: unit.showOnDesktop,
-                      priority: unit.priority,
-                      rotationSeconds: unit.rotationSeconds,
-                      supportsRewardedVerification: unit.supportsRewardedVerification,
-                    });
-                    onSuccess(`Ad unit ${unit.label} ${!unit.enabled ? 'enabled' : 'disabled'}.`);
-                  } catch (err) {
-                    onError(err instanceof Error ? err.message : 'Update failed.');
-                  }
-                }}
-                className={`px-3 py-1.5 rounded-xl font-bold shrink-0 ${
-                  unit.enabled
-                    ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                }`}
-              >
-                {unit.enabled ? 'Enabled' : 'Disabled'}
-              </button>
+        <div className="space-y-3 text-xs">
+          <div className="rounded-2xl bg-[#FFF7ED] dark:bg-orange-950/25 border border-[#FFDDB3] dark:border-orange-900/40 px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="font-extrabold text-[#172033] dark:text-slate-100">
+                Active Ad Units: {managedAdUnits.filter((u) => u.enabled).length} / {managedAdUnits.length}
+              </p>
+              <p className="text-[11px] text-[#555555] dark:text-slate-300 mt-0.5">
+                All mobile and desktop banner frames auto-scale to viewport width. Optional third-party networks (AdSense, Adsterra, Monetag) can be configured in the Ad Networks tab once you have Publisher/Zone IDs.
+              </p>
             </div>
-          ))}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {managedAdUnits.map((unit) => (
+              <div
+                key={unit.id}
+                className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <p className="font-extrabold text-[#172033] dark:text-slate-100 truncate">
+                    #{unit.unitNumber} · {unit.label}
+                  </p>
+                  <p className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400 break-words">
+                    {unit.provider} · {unit.format} · {unit.showOnMobile ? 'Mobile' : ''}{unit.showOnMobile && unit.showOnDesktop ? '+' : ''}{unit.showOnDesktop ? 'Desktop' : ''} · {unit.placements.join(', ')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await adminSaveManagedAdUnit({
+                        id: unit.id,
+                        enabled: !unit.enabled,
+                        placements: unit.placements,
+                        showOnMobile: unit.showOnMobile,
+                        showOnDesktop: unit.showOnDesktop,
+                        priority: unit.priority,
+                        rotationSeconds: unit.rotationSeconds,
+                        supportsRewardedVerification: unit.supportsRewardedVerification,
+                      });
+                      onSuccess(`Ad unit ${unit.label} ${!unit.enabled ? 'enabled' : 'disabled'}.`);
+                    } catch (err) {
+                      onError(err instanceof Error ? err.message : 'Update failed.');
+                    }
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-bold shrink-0 ${
+                    unit.enabled
+                      ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                  }`}
+                >
+                  {unit.enabled ? 'Enabled' : 'Disabled'}
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

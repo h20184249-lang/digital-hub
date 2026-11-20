@@ -1,12 +1,12 @@
-import { FormEvent, MouseEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
-  Coins,
   Clock,
-  ExternalLink,
+  Coins,
   Film,
   History,
+  Loader2,
   Lock,
   Play,
   RefreshCw,
@@ -18,6 +18,7 @@ import {
   AdNetworkConfig,
   AdRewardTransaction,
   AdViewingSession,
+  Advertisement,
   AppRoute,
   AuthUser,
   Language,
@@ -32,11 +33,16 @@ import {
   getWatchEarnSummaryServer,
   redeemWatchEarnCoinsServer,
   startWatchEarnSessionServer,
-  trackAdEvent,
   verifyWatchEarnSessionServer,
+  WatchEarnSummaryPayload,
 } from '../lib/firestoreService';
-import { resolveAdBrowserUrl, tryAcquireAdLaunchLock } from '../lib/adNavigation';
 import { ManagedPlacementSlot } from './AdUnitFrame';
+import {
+  buildWatchableAdItems,
+  WatchableAdItem,
+  WatchAdModal,
+  WatchRewardCompletionResult,
+} from './WatchEarnWidgets';
 
 interface WatchAndEarnPageProps {
   lang: Language;
@@ -44,6 +50,7 @@ interface WatchAndEarnPageProps {
   profile: UserProfile | null;
   wallet: WalletAccount | null;
   settings: SiteSettings;
+  advertisements?: Advertisement[];
   managedAdUnits: ManagedAdUnitConfig[];
   adNetworks: AdNetworkConfig[];
   viewingSessions: AdViewingSession[];
@@ -58,40 +65,52 @@ export function WatchAndEarnPage({
   profile,
   wallet,
   settings,
+  advertisements = [],
   managedAdUnits,
-  adNetworks,
   viewingSessions,
   rewardTransactions,
   onNavigate,
   onOpenAuth,
 }: WatchAndEarnPageProps) {
-  const [selectedUnitKey, setSelectedUnitKey] = useState<string>('');
-  const [serverSummary, setServerSummary] = useState<{
-    coinsAvailable: number;
-    coinsLifetimeEarned: number;
-    coinsRedeemed: number;
-    creditedSessions: Array<{
-      sessionId: string;
-      provider: string;
-      providerEventId: string;
-      coins: number;
-      creditedAt: string;
-    }>;
-  }>({ coinsAvailable: 0, coinsLifetimeEarned: 0, coinsRedeemed: 0, creditedSessions: [] });
+  const [selectedAdId, setSelectedAdId] = useState<string>('');
+  const [serverSummary, setServerSummary] = useState<WatchEarnSummaryPayload>({
+    coinsAvailable: 0,
+    coinsLifetimeEarned: 0,
+    coinsRedeemed: 0,
+    adsWatchedToday: 0,
+    coinsEarnedToday: 0,
+    dailyAdLimit: Math.max(1, settings.rewardedAdDailyLimit ?? 5),
+    dailyCoinLimit: Math.max(10, settings.watchEarnDailyCoinLimit ?? 100),
+    coinsPerAd: Math.max(1, settings.watchEarnCoinsPerAd ?? 10),
+    coinsPerBdt: Math.max(1, settings.watchEarnCoinsPerBdt ?? 10),
+    minRedeemCoins: Math.max(10, settings.watchEarnMinRedeemCoins ?? 50),
+    watchEarnEnabled: settings.watchEarnEnabled !== false,
+    creditedSessions: [],
+  });
+  const [modalOpen, setModalOpen] = useState(false);
+  const [activeAd, setActiveAd] = useState<WatchableAdItem | null>(null);
   const [activeSession, setActiveSession] = useState<{
     sessionId: string;
     sessionToken: string;
-    unitId: string;
-    provider: string;
-    launchUrl: string;
-    status: string;
-    message: string;
+    requiredSeconds: number;
+    rewardCoins: number;
   } | null>(null);
   const [busyPlay, setBusyPlay] = useState(false);
   const [busyVerify, setBusyVerify] = useState(false);
   const [redeemAmount, setRedeemAmount] = useState('');
   const [busyRedeem, setBusyRedeem] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'info' | 'err'; text: string } | null>(null);
+  const startLockRef = useRef(false);
+
+  const watchableAds = useMemo(
+    () => buildWatchableAdItems(advertisements, managedAdUnits),
+    [advertisements, managedAdUnits]
+  );
+
+  const selectedAd = useMemo(() => {
+    if (watchableAds.length === 0) return null;
+    return watchableAds.find((a) => a.id === selectedAdId) || watchableAds[0];
+  }, [watchableAds, selectedAdId]);
 
   const refreshServerSummary = () => {
     if (!user) return;
@@ -101,75 +120,6 @@ export function WatchAndEarnPage({
   useEffect(() => {
     refreshServerSummary();
   }, [user?.uid]);
-
-  const authorizedRewardProviders = useMemo(() => {
-    const netProviders = adNetworks
-      .filter(
-        (n) =>
-          n.enabled &&
-          n.approvalStatus === 'active' &&
-          n.supportsIncentivizedRewards &&
-          n.provider !== 'adsense'
-      )
-      .map((n) => ({
-        id: n.id,
-        provider: n.provider.toUpperCase(),
-        label: n.name,
-        url: n.scriptSrc || '',
-      }));
-    const unitProviders = managedAdUnits
-      .filter((u) => u.enabled && u.supportsRewardedVerification)
-      .map((u) => ({
-        id: u.id,
-        provider: u.provider,
-        label: lang === 'bn' ? u.labelBn : u.label,
-        url: u.originalUrl,
-      }));
-    return [...netProviders, ...unitProviders];
-  }, [adNetworks, managedAdUnits, lang]);
-
-  const directPartnerUnits = useMemo(
-    () =>
-      managedAdUnits
-        .filter((u) => u.enabled && u.format === 'direct_link')
-        .sort((a, b) => a.priority - b.priority),
-    [managedAdUnits]
-  );
-
-  const effectiveTarget = useMemo(() => {
-    if (authorizedRewardProviders.length > 0) {
-      return (
-        authorizedRewardProviders.find((p) => p.id === selectedUnitKey) ||
-        authorizedRewardProviders[0]
-      );
-    }
-    const fallbackUnit =
-      directPartnerUnits.find((u) => u.placements.includes('watch_earn')) ||
-      directPartnerUnits[0] ||
-      managedAdUnits.find((u) => u.enabled) ||
-      managedAdUnits[0];
-    return fallbackUnit
-      ? {
-          id: fallbackUnit.id,
-          provider: fallbackUnit.provider,
-          label: lang === 'bn' ? fallbackUnit.labelBn : fallbackUnit.label,
-          url: fallbackUnit.originalUrl,
-        }
-      : {
-          id: 'UNIT_02',
-          provider: 'ARWF',
-          label: 'ARWF Partner Offer',
-          url: 'https://arwf.org/4/268e1645e2ede4000fc61453e86fca74',
-        };
-  }, [authorizedRewardProviders, directPartnerUnits, managedAdUnits, selectedUnitKey, lang]);
-
-  const heroLaunch = useMemo(
-    () =>
-      resolveAdBrowserUrl(effectiveTarget.url, {
-        dh_unit: effectiveTarget.id,
-      }),
-    [effectiveTarget.url, effectiveTarget.id]
-  );
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -185,11 +135,11 @@ export function WatchAndEarnPage({
     () =>
       viewingSessions.map((s) => {
         const credited = creditedSessionMap.get(s.id);
-        if (credited) {
+        if (credited || String(s.status || '').toLowerCase() === 'credited') {
           return {
             ...s,
             status: 'credited' as const,
-            coinsAwarded: Math.max(s.coinsAwarded || 0, credited.coins),
+            coinsAwarded: Math.max(s.coinsAwarded || 0, credited?.coins || 0),
             failureReason: '',
           };
         }
@@ -208,121 +158,128 @@ export function WatchAndEarnPage({
     [reconciledViewingSessions, todayStr]
   );
 
-  const todayServerCredited = useMemo(
-    () => serverSummary.creditedSessions.filter((s) => s.creditedAt.slice(0, 10) === todayStr),
-    [serverSummary.creditedSessions, todayStr]
-  );
+  const dailyAdLimit = Math.max(1, serverSummary.dailyAdLimit || settings.rewardedAdDailyLimit || 5);
+  const dailyCoinLimit = Math.max(10, serverSummary.dailyCoinLimit || settings.watchEarnDailyCoinLimit || 100);
+  const coinsPerAd = Math.max(1, serverSummary.coinsPerAd || settings.watchEarnCoinsPerAd || 10);
+  const coinsPerBdt = Math.max(1, serverSummary.coinsPerBdt || settings.watchEarnCoinsPerBdt || 10);
+  const minRedeemCoins = Math.max(10, serverSummary.minRedeemCoins || settings.watchEarnMinRedeemCoins || 50);
 
-  const dailyAdLimit = Math.max(1, settings.rewardedAdDailyLimit ?? 5);
-  const dailyCoinLimit = Math.max(10, settings.watchEarnDailyCoinLimit ?? 100);
-  const coinsPerAd = Math.max(1, settings.watchEarnCoinsPerAd ?? 10);
-  const coinsPerBdt = Math.max(1, settings.watchEarnCoinsPerBdt ?? 10);
-  const minRedeemCoins = Math.max(10, settings.watchEarnMinRedeemCoins ?? 50);
-
-  const adsWatchedToday = Math.max(todayCredited.length, todayServerCredited.length);
+  const adsWatchedToday = Math.max(todayCredited.length, serverSummary.adsWatchedToday || 0);
   const coinsEarnedToday = Math.max(
     todayCredited.reduce((s, x) => s + (x.coinsAwarded || 0), 0),
-    todayServerCredited.reduce((s, x) => s + (x.coins || 0), 0)
+    serverSummary.coinsEarnedToday || 0
   );
   const currentCoinBalance = Math.max(wallet?.coinsAvailable ?? 0, serverSummary.coinsAvailable);
   const totalCoinsEarned = Math.max(wallet?.coinsLifetimeEarned ?? 0, serverSummary.coinsLifetimeEarned);
-  const watchEarnEnabled = settings.watchEarnEnabled !== false && settings.rewardedAdEnabled !== false;
+  const watchEarnEnabled =
+    settings.adsEnabled !== false &&
+    settings.watchEarnEnabled !== false &&
+    settings.rewardedAdEnabled !== false;
+  const canWatchMore = adsWatchedToday < dailyAdLimit && coinsEarnedToday + coinsPerAd <= dailyCoinLimit;
 
-  // Poll S2S status softly while waiting for provider callback
-  useEffect(() => {
-    if (!activeSession || activeSession.status !== 'awaiting_callback') return;
-    let cancelled = false;
-    let attempts = 0;
-    const interval = setInterval(async () => {
-      if (cancelled || attempts >= 8) {
-        clearInterval(interval);
-        return;
-      }
-      attempts += 1;
-      try {
-        const res = await verifyWatchEarnSessionServer(activeSession.sessionId);
-        if (cancelled) return;
-        if (res.verified || res.status === 'credited' || res.status === 'verification_failed') {
-          setActiveSession((prev) =>
-            prev && prev.sessionId === activeSession.sessionId
-              ? { ...prev, status: res.status, message: res.message }
-              : prev
-          );
-          if (res.verified) {
-            setFeedback({ type: 'ok', text: res.message });
-            refreshServerSummary();
-            clearInterval(interval);
-          }
-        }
-      } catch {
-        // Non-fatal polling retry
-      }
-    }, 6000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [activeSession?.sessionId, activeSession?.status]);
-
-  const handlePlayAdAndEarn = async (e?: MouseEvent<HTMLAnchorElement | HTMLButtonElement>) => {
+  const startWatchSession = async (targetAd?: WatchableAdItem | null) => {
     if (!user) {
-      if (e) e.preventDefault();
       onOpenAuth();
       return;
     }
-
-    if (e && heroLaunch.ok) {
-      if (!tryAcquireAdLaunchLock(effectiveTarget.id, heroLaunch.finalHttpUrl)) {
-        e.preventDefault();
-        return;
-      }
-      trackAdEvent(effectiveTarget.id, 'click', 'watch_earn_hero', 'direct_link');
-    } else if (e) {
-      e.preventDefault();
+    if (profile?.status === 'suspended') {
+      setFeedback({
+        type: 'err',
+        text: lang === 'bn' ? 'আপনার অ্যাকাউন্ট সাময়িকভাবে সাসপেন্ড আছে।' : 'Your account is currently suspended.',
+      });
+      return;
     }
-
-    setFeedback(null);
-
-    if (authorizedRewardProviders.length === 0) {
+    if (!watchEarnEnabled) {
+      setFeedback({
+        type: 'err',
+        text:
+          lang === 'bn'
+            ? 'ওয়াচ ও আর্ন বর্তমানে অ্যাডমিন দ্বারা বন্ধ রাখা হয়েছে।'
+            : 'Watch & Earn is currently paused by the administrator.',
+      });
+      return;
+    }
+    if (!canWatchMore) {
       setFeedback({
         type: 'info',
         text:
           lang === 'bn'
-            ? `${effectiveTarget.provider} (${effectiveTarget.id}) বিজ্ঞাপনটি নতুন Chrome ট্যাবে ওপেন হয়েছে। এটি একটি স্ট্যান্ডার্ড স্পন্সরড বিজ্ঞাপন (০ কয়েন); অ্যাডমিন থেকে S2S রিওয়ার্ডেড প্রোভাইডার যুক্ত হলে কয়েন যোগ হবে।`
-            : `Opened ${effectiveTarget.provider} (${effectiveTarget.id}) partner ad in a new Chrome tab. Standard partner ads award 0 coins until an S2S-verified rewarded provider is enabled by Admin.`,
+            ? `আজকের দৈনিক বিজ্ঞাপন সীমা (${dailyAdLimit}/${dailyAdLimit}) পূর্ণ হয়েছে। আগামীকাল আবার চেষ্টা করুন।`
+            : `Today's daily ad limit (${dailyAdLimit}/${dailyAdLimit}) is complete. Come back tomorrow!`,
       });
       return;
     }
+    const chosen = targetAd || selectedAd;
+    if (!chosen) {
+      setFeedback({
+        type: 'err',
+        text:
+          lang === 'bn'
+            ? 'বর্তমানে দেখার মতো কোনো সক্রিয় বিজ্ঞাপন নেই।'
+            : 'No active advertisements are available right now.',
+      });
+      return;
+    }
+    if (startLockRef.current || modalOpen) return;
 
+    startLockRef.current = true;
     setBusyPlay(true);
+    setFeedback(null);
+
     try {
       const res = await startWatchEarnSessionServer({
-        unitId: effectiveTarget.id,
-        provider: effectiveTarget.provider,
+        unitId: chosen.unitId,
+        provider: chosen.provider,
+        launchUrl: chosen.targetUrl,
       });
-      if (res.sessionId) {
-        setActiveSession({
-          sessionId: res.sessionId,
-          sessionToken: res.sessionToken,
-          unitId: effectiveTarget.id,
-          provider: effectiveTarget.provider,
-          launchUrl: effectiveTarget.url,
-          status: res.status,
-          message: res.message,
-        });
-      }
-      setFeedback({
-        type: res.status === 'awaiting_callback' ? 'ok' : 'info',
-        text: res.message,
+      setSelectedAdId(chosen.id);
+      setActiveAd(chosen);
+      setActiveSession({
+        sessionId: res.sessionId,
+        sessionToken: res.sessionToken,
+        requiredSeconds: res.requiredSeconds || 5,
+        rewardCoins: res.rewardCoins || coinsPerAd,
       });
+      setModalOpen(true);
     } catch (err) {
       setFeedback({
         type: 'err',
-        text: err instanceof Error ? err.message : 'Could not start rewarded session.',
+        text: err instanceof Error ? err.message : 'Could not start Watch & Earn session.',
       });
     } finally {
       setBusyPlay(false);
+      startLockRef.current = false;
     }
+  };
+
+  const handleRewardCredited = (res: WatchRewardCompletionResult) => {
+    setServerSummary((prev) => ({
+      ...prev,
+      coinsAvailable: res.coinsAvailable,
+      coinsLifetimeEarned: res.coinsLifetimeEarned,
+      coinsRedeemed: res.coinsRedeemed,
+      adsWatchedToday: res.adsWatchedToday,
+      coinsEarnedToday: res.coinsEarnedToday,
+      dailyAdLimit: res.dailyAdLimit,
+      dailyCoinLimit: res.dailyCoinLimit,
+    }));
+    setFeedback({
+      type: 'ok',
+      text: res.alreadyCredited
+        ? lang === 'bn'
+          ? 'এই বিজ্ঞাপনটির কয়েন ইতিমধ্যে আপনার অ্যাকাউন্টে যোগ করা হয়েছে।'
+          : 'Coins for this ad session were already credited.'
+        : lang === 'bn'
+          ? `অভিনন্দন! +${res.coinsAwarded} কয়েন স্বয়ংক্রিয়ভাবে আপনার অ্যাকাউন্টে যোগ হয়েছে (বর্তমান ব্যালেন্স: ${res.coinsAvailable} কয়েন)।`
+          : `Success! +${res.coinsAwarded} Coins credited automatically to your balance (New balance: ${res.coinsAvailable} Coins).`,
+    });
+    // Advance selected ad to next one automatically
+    if (watchableAds.length > 1 && activeAd) {
+      const curIdx = watchableAds.findIndex((a) => a.id === activeAd.id);
+      const nextAd = watchableAds[(curIdx + 1) % watchableAds.length];
+      if (nextAd) setSelectedAdId(nextAd.id);
+    }
+    refreshServerSummary();
   };
 
   const handleVerifySession = async (sessionId: string) => {
@@ -330,11 +287,8 @@ export function WatchAndEarnPage({
     setBusyVerify(true);
     try {
       const res = await verifyWatchEarnSessionServer(sessionId);
-      setActiveSession((prev) =>
-        prev && prev.sessionId === sessionId ? { ...prev, status: res.status, message: res.message } : prev
-      );
       setFeedback({
-        type: res.verified ? 'ok' : res.status === 'awaiting_callback' ? 'info' : 'err',
+        type: res.verified ? 'ok' : 'info',
         text: res.message,
       });
       if (res.verified) {
@@ -371,7 +325,7 @@ export function WatchAndEarnPage({
               : `Converted ${res.coinsRedeemed} coins into ৳${res.bdtCredited} wallet balance.`
             : lang === 'bn'
               ? `${res.coinsRedeemed} কয়েন (৳${res.bdtCredited}) রিডেম্পশন অনুরোধ জমা হয়েছে; অ্যাডমিন অনুমোদনের পর ওয়ালেটে যোগ হবে।`
-              : `Submitted ${res.coinsRedeemed} coin redemption (৳${res.bdtCredited}); credits to wallet upon owner settlement.`,
+              : `Submitted ${res.coinsRedeemed} coin redemption (৳${res.bdtCredited}); credits to wallet upon admin approval.`,
       });
       refreshServerSummary();
     } catch (err) {
@@ -384,61 +338,56 @@ export function WatchAndEarnPage({
     }
   };
 
-  const activeSessionLaunch = activeSession
-    ? resolveAdBrowserUrl(activeSession.launchUrl, {
-        sub_id: activeSession.sessionToken,
-        dh_unit: activeSession.unitId,
-      })
-    : null;
-
   return (
-    <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-6 space-y-6">
+    <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 lg:px-8 py-5 sm:py-6 space-y-6">
       {/* Header Hero */}
-      <section className="dh-card rounded-3xl p-5 sm:p-7 bg-gradient-to-br from-[#172033] via-[#1f2d47] to-[#263659] text-white border-none space-y-5">
+      <section className="dh-card rounded-3xl p-4 sm:p-7 bg-gradient-to-br from-[#172033] via-[#1f2d47] to-[#263659] text-white border-none space-y-5 overflow-hidden">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="space-y-2 max-w-2xl">
+          <div className="space-y-2 max-w-2xl min-w-0">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#FF8500]/20 border border-[#FF8500]/40 text-[#FF9B19] text-[11px] font-bold uppercase tracking-wider">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              {lang === 'bn' ? 'সার্ভার-যাচাইকৃত ওয়াচ ও আর্ন' : 'Server-Verified Watch & Earn'}
+              <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+              {lang === 'bn' ? '৫ সেকেন্ডে অটো-কয়েন রিওয়ার্ড' : '5-Second Auto-Credit Watch & Earn'}
             </span>
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              {lang === 'bn' ? 'বিজ্ঞাপন দেখুন ও কয়েন আয় করুন' : 'Watch Rewarded Ads & Earn Coins'}
+            <h1 className="text-xl sm:text-3xl font-extrabold tracking-tight leading-tight">
+              {lang === 'bn' ? 'বিজ্ঞাপন দেখুন ও কয়েন আয় করুন' : 'Watch Ads & Earn Coins'}
             </h1>
             <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
               {lang === 'bn'
-                ? `প্রতিটি যাচাইকৃত রিওয়ার্ডেড সেশনে ${coinsPerAd} কয়েন পান (${coinsPerBdt} কয়েন = ৳১)। যেকোনো বিজ্ঞাপনে ক্লিক করলে সরাসরি নতুন Chrome ট্যাবে ওপেন হবে। সাধারণ ডিসপ্লে বা ডাইরেক্ট লিংকে কয়েন যোগ হয় না।`
-                : `Earn ${coinsPerAd} coins per server-verified rewarded ad completion (${coinsPerBdt} coins = ৳1). Clicking any ad opens its real URL in a new Chrome browser tab. Ordinary banner clicks, direct links, or page reloads never credit fake coins.`}
+                ? `প্রতিটি বিজ্ঞাপন ৫ সেকেন্ড সম্পূর্ণ দেখলেই কোনো ক্লেইম বাটন ছাড়াই স্বয়ংক্রিয়ভাবে +${coinsPerAd} কয়েন আপনার অ্যাকাউন্টে স্থায়ীভাবে যোগ হবে (${coinsPerBdt} কয়েন = ৳১)।`
+                : `Watch any real ad for 5 full seconds and receive +${coinsPerAd} coins automatically with zero extra clicks (${coinsPerBdt} coins = ৳1). Balance persists permanently in your account.`}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            {watchEarnEnabled && profile?.status !== 'suspended' && heroLaunch.ok ? (
-              <a
-                href={heroLaunch.href}
-                target="_blank"
-                rel="noopener noreferrer nofollow"
-                onClick={handlePlayAdAndEarn}
-                className="px-6 py-3.5 rounded-2xl dh-orange-gradient text-white text-sm font-extrabold inline-flex items-center gap-2 shadow-lg hover:opacity-95 cursor-pointer"
-              >
+            <button
+              type="button"
+              disabled={busyPlay || !watchEarnEnabled || profile?.status === 'suspended' || (Boolean(user) && !canWatchMore)}
+              onClick={() => void startWatchSession()}
+              className="px-5 sm:px-6 py-3.5 rounded-2xl dh-orange-gradient text-white text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 shadow-lg hover:opacity-95 disabled:opacity-50 cursor-pointer"
+            >
+              {busyPlay ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
                 <Play className="w-4 h-4 fill-current" />
-                <span>{busyPlay ? (lang === 'bn' ? 'চালু হচ্ছে...' : 'Starting...') : 'PLAY AD & EARN'}</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            ) : (
-              <button
-                type="button"
-                disabled={busyPlay || !watchEarnEnabled || profile?.status === 'suspended'}
-                onClick={() => handlePlayAdAndEarn()}
-                className="px-6 py-3.5 rounded-2xl dh-orange-gradient text-white text-sm font-extrabold inline-flex items-center gap-2 shadow-lg hover:opacity-95 disabled:opacity-50"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>{busyPlay ? (lang === 'bn' ? 'লোড হচ্ছে...' : 'Starting...') : 'PLAY AD & EARN'}</span>
-              </button>
-            )}
+              )}
+              <span>
+                {busyPlay
+                  ? lang === 'bn'
+                    ? 'চালু হচ্ছে...'
+                    : 'Starting...'
+                  : user && !canWatchMore
+                    ? lang === 'bn'
+                      ? 'আজকের সীমা পূর্ণ'
+                      : 'Daily Limit Reached'
+                    : lang === 'bn'
+                      ? `বিজ্ঞাপন দেখুন (+${coinsPerAd} কয়েন)`
+                      : `WATCH AD & EARN (+${coinsPerAd})`}
+              </span>
+            </button>
             <button
               type="button"
               onClick={() => onNavigate('wallet')}
-              className="px-4 py-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm font-bold inline-flex items-center gap-1.5"
+              className="px-4 py-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 cursor-pointer"
             >
               <Wallet className="w-4 h-4 text-[#FF9B19]" />
               <span>{lang === 'bn' ? 'ওয়ালেট দেখুন' : 'My Wallet'}</span>
@@ -447,47 +396,47 @@ export function WatchAndEarnPage({
         </div>
 
         {/* 5 Core Metrics Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          <div className="p-3.5 rounded-2xl bg-white/10 border border-white/10">
-            <p className="text-[11px] text-white/70">
-              {lang === 'bn' ? 'মোট রিওয়ার্ডেড অ্যাড' : 'Rewarded Providers'}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
+            <p className="text-[11px] text-white/70 truncate">
+              {lang === 'bn' ? 'উপলব্ধ বিজ্ঞাপন' : 'Available Ads'}
             </p>
-            <p className="text-2xl font-extrabold font-mono-num text-[#FF9B19] mt-0.5">
-              {authorizedRewardProviders.length}
+            <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-[#FF9B19] mt-0.5">
+              {watchableAds.length}
             </p>
           </div>
-          <div className="p-3.5 rounded-2xl bg-white/10 border border-white/10">
-            <p className="text-[11px] text-white/70">
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
+            <p className="text-[11px] text-white/70 truncate">
               {lang === 'bn' ? 'আজকে দেখা হয়েছে' : 'Ads Watched Today'}
             </p>
-            <p className="text-2xl font-extrabold font-mono-num mt-0.5">
+            <p className="text-xl sm:text-2xl font-extrabold font-mono-num mt-0.5">
               {adsWatchedToday} / {dailyAdLimit}
             </p>
           </div>
-          <div className="p-3.5 rounded-2xl bg-white/10 border border-white/10">
-            <p className="text-[11px] text-white/70">
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
+            <p className="text-[11px] text-white/70 truncate">
               {lang === 'bn' ? 'মোট অর্জিত কয়েন' : 'Total Coins Earned'}
             </p>
-            <p className="text-2xl font-extrabold font-mono-num text-emerald-400 mt-0.5">
+            <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-emerald-400 mt-0.5">
               {totalCoinsEarned}
             </p>
           </div>
-          <div className="p-3.5 rounded-2xl bg-white/10 border border-white/10">
-            <p className="text-[11px] text-white/70">
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
+            <p className="text-[11px] text-white/70 truncate">
               {lang === 'bn' ? 'বর্তমান কয়েন ব্যালেন্স' : 'Current Coin Balance'}
             </p>
-            <p className="text-2xl font-extrabold font-mono-num text-[#FACC15] mt-0.5">
+            <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-[#FACC15] mt-0.5">
               {currentCoinBalance}
-              <span className="text-xs font-normal text-white/70 ml-1.5">
+              <span className="text-[11px] font-normal text-white/70 ml-1">
                 (৳{(currentCoinBalance / coinsPerBdt).toFixed(2)})
               </span>
             </p>
           </div>
-          <div className="p-3.5 rounded-2xl bg-white/10 border border-white/10 col-span-2 sm:col-span-1">
-            <p className="text-[11px] text-white/70">
-              {lang === 'bn' ? 'দৈনিক আয়ের সীমা' : 'Daily Earning Limit'}
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 col-span-2 sm:col-span-1 min-w-0">
+            <p className="text-[11px] text-white/70 truncate">
+              {lang === 'bn' ? 'দৈনিক আয়ের সীমা' : 'Daily Coin Limit'}
             </p>
-            <p className="text-2xl font-extrabold font-mono-num mt-0.5">
+            <p className="text-xl sm:text-2xl font-extrabold font-mono-num mt-0.5">
               {coinsEarnedToday} / {dailyCoinLimit}
             </p>
           </div>
@@ -498,10 +447,10 @@ export function WatchAndEarnPage({
         <div
           className={`p-4 rounded-2xl border text-xs sm:text-sm font-semibold flex items-start gap-2.5 ${
             feedback.type === 'ok'
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
               : feedback.type === 'info'
-                ? 'bg-[#F3F6FF] border-[#E6ECFA] text-[#172033]'
-                : 'bg-amber-50 border-amber-200 text-amber-900'
+                ? 'bg-[#F3F6FF] dark:bg-slate-800 border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-100'
+                : 'bg-amber-50 dark:bg-amber-950/35 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-300'
           }`}
         >
           {feedback.type === 'ok' ? (
@@ -515,170 +464,119 @@ export function WatchAndEarnPage({
 
       {!user && (
         <div className="dh-card rounded-3xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <Lock className="w-6 h-6 text-[#FF8500] shrink-0" />
-            <div>
-              <p className="text-sm font-bold text-[#172033]">
-                {lang === 'bn' ? 'সাইন ইন প্রয়োজন' : 'Sign in to Track Your Coin Balance'}
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-[#172033] dark:text-slate-100">
+                {lang === 'bn' ? 'কয়েন আয় করতে সাইন ইন করুন' : 'Sign In to Earn & Save Coins'}
               </p>
-              <p className="text-xs text-[#777777]">
+              <p className="text-xs text-[#777777] dark:text-slate-400">
                 {lang === 'bn'
-                  ? 'কয়েন সংগ্রহ ও ওয়ালেটে রূপান্তর করতে আপনার মোবাইল নম্বর অ্যাকাউন্ট দিয়ে লগইন করুন।'
-                  : 'Log in with your mobile number account to start Watch & Earn sessions and redeem coins.'}
+                  ? 'আপনার মোবাইল নম্বর বা ইমেইল অ্যাকাউন্ট দিয়ে লগইন করলে প্রতিটি ৫ সেকেন্ডের বিজ্ঞাপনের কয়েন স্থায়ীভাবে জমা থাকবে।'
+                  : 'Log in with your mobile number or email account so your 5-second ad coins save permanently.'}
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onOpenAuth}
-            className="px-5 py-2.5 rounded-xl dh-orange-gradient text-white text-xs font-bold shrink-0"
+            className="px-5 py-2.5 rounded-xl dh-orange-gradient text-white text-xs font-bold shrink-0 cursor-pointer"
           >
             {lang === 'bn' ? 'লগইন / রেজিস্টার' : 'Sign In / Register'}
           </button>
         </div>
       )}
 
-      {/* Active Session Status & Authorized Provider Runner + Coin Redemption */}
+      {/* Watchable Ads Selector + Coin Redemption */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2 dh-card rounded-3xl p-5 space-y-4">
+        <div className="lg:col-span-2 dh-card rounded-3xl p-4 sm:p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-base sm:text-lg font-bold text-[#172033] flex items-center gap-2">
+              <h2 className="text-base sm:text-lg font-bold text-[#172033] dark:text-slate-100 flex items-center gap-2">
                 <Film className="w-5 h-5 text-[#FF8500]" />
-                {lang === 'bn' ? 'রিওয়ার্ডেড অ্যাড সেশন' : 'Rewarded Ad Session Verification'}
+                {lang === 'bn' ? 'বিজ্ঞাপন নির্বাচন করুন (৫ সেকেন্ড = অটো কয়েন)' : 'Select an Ad to Watch (5s = Auto Coins)'}
               </h2>
-              <p className="text-xs text-[#777777]">
+              <p className="text-xs text-[#777777] dark:text-slate-400">
                 {lang === 'bn'
-                  ? 'কেবলমাত্র সার্ভার-টু-সার্ভার (S2S) কলব্যাক অনুমোদিত নেটওয়ার্ক থেকেই কয়েন প্রদান করা হয়।'
-                  : 'Only explicit S2S-verified non-AdSense rewarded providers can credit coins after real callback validation.'}
+                  ? `যেকোনো বিজ্ঞাপনে ট্যাপ করুন → ৫ সেকেন্ড দেখুন → +${coinsPerAd} কয়েন সাথে সাথে জমা হবে।`
+                  : `Tap any available ad → view for 5 seconds → +${coinsPerAd} coins credited automatically.`}
               </p>
             </div>
           </div>
 
           {!watchEarnEnabled ? (
-            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-800 font-semibold">
+            <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 font-semibold">
               {lang === 'bn'
                 ? 'ওয়াচ ও আর্ন বর্তমানে অ্যাডমিন দ্বারা বন্ধ রাখা হয়েছে।'
                 : 'Watch & Earn is currently paused by the administrator.'}
             </div>
-          ) : authorizedRewardProviders.length === 0 ? (
-            <div className="p-4 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-2 text-xs">
-              <p className="font-bold text-[#172033]">
-                {lang === 'bn'
-                  ? 'কোনো S2S-ভেরিফায়েড রিওয়ার্ডেড অ্যাড নেটওয়ার্ক এখনো কনফিগার করা হয়নি'
-                  : 'Standard Sponsored Mode Active (No S2S Rewarded Provider Enabled Yet)'}
-              </p>
-              <p className="text-[#777777] leading-relaxed">
-                {lang === 'bn'
-                  ? 'নিরাপত্তা নীতির কারণে সাধারণ ডাইরেক্ট লিংক বা ব্যানার অ্যাড (AFDERS, ARWF, BICEA, AUCTIONR, ASIAFILM) কখনোই অটো-কয়েন দেয় না। তবে PLAY AD & EARN বা নিচের যেকোনো কার্ডে ক্লিক করলে বিজ্ঞাপনটি সরাসরি Chrome-এ ওপেন হবে।'
-                  : 'Standard display and direct partner ads (AFDERS, ARWF, BICEA, AUCTIONR, ASIAFILM) open cleanly in a new Chrome tab when clicked, without issuing unverified coins. Once Admin enables a rewarded network with an S2S postback secret, verified sessions credit coins automatically.'}
-              </p>
-            </div>
           ) : (
-            <div className="space-y-3">
-              <label className="block text-xs font-bold text-[#172033]">
-                {lang === 'bn' ? 'অনুমোদিত প্রোভাইডার নির্বাচন করুন' : 'Select Authorized Rewarded Provider'}
-              </label>
-              <select
-                value={effectiveTarget.id}
-                onChange={(e) => setSelectedUnitKey(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-semibold"
-              >
-                {authorizedRewardProviders.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label} ({p.provider}) — +{coinsPerAd} coins/verified view
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {activeSession && (
-            <div className="p-4 rounded-2xl bg-[#FFF7EE] border border-[#FF8500]/30 space-y-2.5 text-xs">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-bold text-[#172033] font-mono-num">
-                  Session: {activeSession.sessionId} ({activeSession.provider})
-                </span>
-                <span
-                  className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold ${
-                    activeSession.status === 'credited'
-                      ? 'bg-emerald-100 text-[#16A34A]'
-                      : activeSession.status === 'awaiting_callback'
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'bg-red-100 text-[#DC2626]'
-                  }`}
-                >
-                  {activeSession.status}
-                </span>
-              </div>
-              <p className="text-[#777777]">{activeSession.message}</p>
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                {activeSessionLaunch?.ok && (
-                  <a
-                    href={activeSessionLaunch.href}
-                    target="_blank"
-                    rel="noopener noreferrer nofollow"
-                    onClick={(e) => {
-                      if (!tryAcquireAdLaunchLock(`sess_${activeSession.sessionId}`, activeSessionLaunch.finalHttpUrl)) {
-                        e.preventDefault();
-                        return;
-                      }
-                      trackAdEvent(activeSession.unitId, 'click', 'watch_earn_session', 'direct_link');
-                    }}
-                    className="px-4 py-2 rounded-xl dh-orange-gradient text-white font-bold inline-flex items-center gap-1.5 hover:opacity-95"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span>{lang === 'bn' ? 'Chrome-এ বিজ্ঞাপন খুলুন' : 'Open Ad in Chrome'}</span>
-                  </a>
-                )}
-                {activeSession.status !== 'credited' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {watchableAds.slice(0, 8).map((item) => {
+                const isSelected = selectedAd?.id === item.id;
+                return (
                   <button
+                    key={item.id}
                     type="button"
-                    disabled={busyVerify}
-                    onClick={() => handleVerifySession(activeSession.sessionId)}
-                    className="px-4 py-2 rounded-xl bg-[#172033] text-white font-bold inline-flex items-center gap-1.5 hover:bg-[#FF8500] transition-colors disabled:opacity-60"
+                    disabled={busyPlay || (Boolean(user) && !canWatchMore)}
+                    onClick={() => void startWatchSession(item)}
+                    className={`group text-left p-3 rounded-2xl border transition-all flex items-center justify-between gap-2.5 cursor-pointer disabled:opacity-55 ${
+                      isSelected
+                        ? 'bg-[#FFF7EE] dark:bg-orange-500/15 border-[#FF8500] shadow-xs'
+                        : 'bg-[#F3F6FF] dark:bg-slate-800/80 border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500]'
+                    }`}
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${busyVerify ? 'animate-spin' : ''}`} />
-                    <span>
-                      {activeSession.status === 'verification_failed'
-                        ? lang === 'bn'
-                          ? 'পুনরায় যাচাই করুন'
-                          : 'Retry Verification'
-                        : lang === 'bn'
-                          ? 'S2S ভেরিফিকেশন চেক করুন'
-                          : 'Check S2S Callback Status'}
-                    </span>
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="w-9 h-9 rounded-xl dh-orange-gradient text-white flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                        <Play className="w-4 h-4 fill-current ml-0.5" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-mono-num font-bold px-1.5 py-0.5 rounded bg-[#172033] text-white">
+                            {item.unitId}
+                          </span>
+                          <span className="text-[10px] font-bold text-[#16A34A] dark:text-emerald-400">
+                            +{coinsPerAd} {lang === 'bn' ? 'কয়েন' : 'Coins'}
+                          </span>
+                        </div>
+                        <p className="text-xs font-bold text-[#172033] dark:text-slate-100 truncate mt-0.5">
+                          {lang === 'bn' ? item.titleBn : item.titleEn}
+                        </p>
+                        <p className="text-[10px] text-[#777777] dark:text-slate-400 truncate">
+                          {item.provider} · 5s {lang === 'bn' ? 'ভেরিফায়েড ভিউ' : 'verified view'}
+                        </p>
+                      </div>
+                    </div>
                   </button>
-                )}
-                <span className="text-[11px] font-mono-num text-[#777777]">
-                  Token: {activeSession.sessionToken.slice(0, 12)}...
-                </span>
-              </div>
+                );
+              })}
             </div>
           )}
         </div>
 
         {/* Coin to BDT Wallet Redemption */}
-        <form onSubmit={handleRedeemCoins} className="dh-card rounded-3xl p-5 space-y-3.5">
+        <form onSubmit={handleRedeemCoins} className="dh-card rounded-3xl p-4 sm:p-5 space-y-3.5">
           <div className="flex items-center gap-2">
             <Coins className="w-5 h-5 text-[#FF8500]" />
-            <h2 className="text-base font-bold text-[#172033]">
+            <h2 className="text-base font-bold text-[#172033] dark:text-slate-100">
               {lang === 'bn' ? 'কয়েন থেকে ওয়ালেট টাকা' : 'Redeem Coins to Wallet'}
             </h2>
           </div>
-          <p className="text-xs text-[#777777]">
+          <p className="text-xs text-[#777777] dark:text-slate-400">
             {lang === 'bn'
               ? `রেট: ${coinsPerBdt} কয়েন = ৳১ · ন্যূনতম ${minRedeemCoins} কয়েন।`
               : `Rate: ${coinsPerBdt} Coins = ৳1 BDT · Minimum ${minRedeemCoins} coins required.`}
           </p>
-          <div className="p-3 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex items-center justify-between text-xs">
-            <span className="text-[#777777]">{lang === 'bn' ? 'ব্যবহারযোগ্য কয়েন' : 'Available Coins'}</span>
-            <span className="font-mono-num font-extrabold text-[#172033] text-sm">
-              {currentCoinBalance}
+          <div className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 flex items-center justify-between text-xs">
+            <span className="text-[#777777] dark:text-slate-400">
+              {lang === 'bn' ? 'ব্যবহারযোগ্য কয়েন' : 'Available Coins'}
+            </span>
+            <span className="font-mono-num font-extrabold text-[#172033] dark:text-slate-100 text-sm">
+              {currentCoinBalance} (৳{(currentCoinBalance / coinsPerBdt).toFixed(2)})
             </span>
           </div>
           <div>
-            <label className="block text-xs font-bold text-[#172033] mb-1">
+            <label className="block text-xs font-bold text-[#172033] dark:text-slate-200 mb-1">
               {lang === 'bn' ? 'কয়েনের পরিমাণ' : 'Coins to Convert'}
             </label>
             <input
@@ -688,13 +586,13 @@ export function WatchAndEarnPage({
               value={redeemAmount}
               onChange={(e) => setRedeemAmount(e.target.value)}
               placeholder={`${minRedeemCoins}`}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-mono-num"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs font-mono-num text-[#172033] dark:text-slate-100"
             />
           </div>
           <button
             type="submit"
             disabled={busyRedeem || currentCoinBalance < minRedeemCoins || profile?.status === 'suspended'}
-            className="w-full py-2.5 rounded-xl dh-orange-gradient text-white text-xs font-bold disabled:opacity-50"
+            className="w-full py-2.5 rounded-xl dh-orange-gradient text-white text-xs font-bold disabled:opacity-50 cursor-pointer"
           >
             {busyRedeem
               ? lang === 'bn'
@@ -709,13 +607,13 @@ export function WatchAndEarnPage({
 
       {/* Watch History & Reward History */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="dh-card rounded-3xl p-5 space-y-3">
-          <h3 className="text-base font-bold text-[#172033] flex items-center gap-2">
+        <div className="dh-card rounded-3xl p-4 sm:p-5 space-y-3">
+          <h3 className="text-base font-bold text-[#172033] dark:text-slate-100 flex items-center gap-2">
             <Clock className="w-4 h-4 text-[#FF8500]" />
             {lang === 'bn' ? 'ওয়াচ হিস্ট্রি' : 'Watch History'} ({reconciledViewingSessions.length})
           </h3>
           {reconciledViewingSessions.length === 0 ? (
-            <p className="text-xs text-[#777777] py-6 text-center">
+            <p className="text-xs text-[#777777] dark:text-slate-400 py-6 text-center">
               {lang === 'bn' ? 'এখনো কোনো অ্যাড সেশন নেই।' : 'No Watch & Earn sessions recorded yet.'}
             </p>
           ) : (
@@ -723,13 +621,13 @@ export function WatchAndEarnPage({
               {reconciledViewingSessions.slice(0, 20).map((s) => (
                 <div
                   key={s.id}
-                  className="p-3 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex items-start justify-between gap-2 text-xs"
+                  className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 flex items-start justify-between gap-2 text-xs"
                 >
                   <div className="min-w-0">
-                    <p className="font-bold text-[#172033] truncate">
+                    <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
                       {s.provider} · {s.unitId}
                     </p>
-                    <p className="text-[11px] text-[#777777] truncate">
+                    <p className="text-[11px] text-[#777777] dark:text-slate-400 truncate">
                       {formatDateShort(s.createdAt, lang)}
                       {s.failureReason ? ` · ${s.failureReason}` : ''}
                     </p>
@@ -738,24 +636,27 @@ export function WatchAndEarnPage({
                     <span
                       className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
                         s.status === 'credited'
-                          ? 'bg-emerald-100 text-[#16A34A]'
-                          : s.status === 'awaiting_callback'
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-red-100 text-[#DC2626]'
+                          ? 'bg-emerald-100 dark:bg-emerald-500/20 text-[#16A34A] dark:text-emerald-300'
+                          : s.status === 'watching' || s.status === 'awaiting_callback'
+                            ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300'
+                            : 'bg-red-100 dark:bg-red-500/20 text-[#DC2626] dark:text-red-300'
                       }`}
                     >
                       {s.status}
                     </span>
                     {s.coinsAwarded > 0 && (
-                      <span className="font-mono-num font-bold text-[#16A34A]">+{s.coinsAwarded} coins</span>
+                      <span className="font-mono-num font-bold text-[#16A34A] dark:text-emerald-400">
+                        +{s.coinsAwarded} coins
+                      </span>
                     )}
                     {s.status === 'awaiting_callback' && (
                       <button
                         type="button"
                         disabled={busyVerify}
-                        onClick={() => handleVerifySession(s.id)}
-                        className="text-[10px] font-bold text-[#FF8500] hover:underline"
+                        onClick={() => void handleVerifySession(s.id)}
+                        className="text-[10px] font-bold text-[#FF8500] hover:underline inline-flex items-center gap-0.5"
                       >
+                        <RefreshCw className={`w-2.5 h-2.5 ${busyVerify ? 'animate-spin' : ''}`} />
                         {lang === 'bn' ? 'চেক করুন' : 'Verify'}
                       </button>
                     )}
@@ -766,13 +667,13 @@ export function WatchAndEarnPage({
           )}
         </div>
 
-        <div className="dh-card rounded-3xl p-5 space-y-3">
-          <h3 className="text-base font-bold text-[#172033] flex items-center gap-2">
+        <div className="dh-card rounded-3xl p-4 sm:p-5 space-y-3">
+          <h3 className="text-base font-bold text-[#172033] dark:text-slate-100 flex items-center gap-2">
             <History className="w-4 h-4 text-[#FF8500]" />
             {lang === 'bn' ? 'রিওয়ার্ড হিস্ট্রি' : 'Reward History'} ({rewardTransactions.length})
           </h3>
           {rewardTransactions.length === 0 ? (
-            <p className="text-xs text-[#777777] py-6 text-center">
+            <p className="text-xs text-[#777777] dark:text-slate-400 py-6 text-center">
               {lang === 'bn' ? 'এখনো কোনো রিওয়ার্ড লেনদেন নেই।' : 'No coin reward transactions yet.'}
             </p>
           ) : (
@@ -780,23 +681,25 @@ export function WatchAndEarnPage({
               {rewardTransactions.slice(0, 20).map((tx) => (
                 <div
                   key={tx.id}
-                  className="p-3 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex items-center justify-between gap-2 text-xs"
+                  className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 flex items-center justify-between gap-2 text-xs"
                 >
                   <div className="min-w-0">
-                    <p className="font-bold text-[#172033] truncate">
+                    <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
                       {tx.note || tx.type} ({tx.provider})
                     </p>
-                    <p className="text-[11px] text-[#777777]">{formatDateShort(tx.createdAt, lang)}</p>
+                    <p className="text-[11px] text-[#777777] dark:text-slate-400">
+                      {formatDateShort(tx.createdAt, lang)}
+                    </p>
                   </div>
                   <div className="text-right shrink-0 font-mono-num">
                     <p
                       className={`font-extrabold ${
-                        tx.coins >= 0 ? 'text-[#16A34A]' : 'text-[#FF8500]'
+                        tx.coins >= 0 ? 'text-[#16A34A] dark:text-emerald-400' : 'text-[#FF8500]'
                       }`}
                     >
                       {tx.coins >= 0 ? `+${tx.coins}` : tx.coins} coins
                     </p>
-                    <p className="text-[11px] text-[#777777]">৳{tx.bdtEquivalent}</p>
+                    <p className="text-[11px] text-[#777777] dark:text-slate-400">৳{tx.bdtEquivalent}</p>
                   </div>
                 </div>
               ))}
@@ -805,12 +708,12 @@ export function WatchAndEarnPage({
         </div>
       </div>
 
-      {/* Standard Sponsored Ads Placement (All Clickable -> Chrome Tab) */}
-      <div className="dh-card rounded-3xl p-5 space-y-3">
+      {/* Sponsored Partner Ads Placement */}
+      <div className="dh-card rounded-3xl p-4 sm:p-5 space-y-3">
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-[#FF8500]" />
-          <h3 className="text-sm font-bold text-[#172033]">
-            {lang === 'bn' ? 'স্পন্সরড পার্টনার বিজ্ঞাপন (Chrome-এ ওপেন হবে)' : 'Sponsored Partner Placement (Opens in Chrome)'}
+          <h3 className="text-sm font-bold text-[#172033] dark:text-slate-100">
+            {lang === 'bn' ? 'স্পন্সরড পার্টনার বিজ্ঞাপন' : 'Sponsored Partner Placement'}
           </h3>
         </div>
         <ManagedPlacementSlot
@@ -821,6 +724,43 @@ export function WatchAndEarnPage({
           variant="grid"
         />
       </div>
+
+      <WatchAdModal
+        open={modalOpen}
+        ad={activeAd}
+        session={activeSession}
+        lang={lang}
+        coinsPerBdt={coinsPerBdt}
+        canWatchMore={canWatchMore}
+        onClose={() => {
+          setModalOpen(false);
+          setActiveSession(null);
+        }}
+        onRewardCredited={handleRewardCredited}
+        onSwitchAd={() => {
+          const curIdx = activeAd ? watchableAds.findIndex((a) => a.id === activeAd.id) : 0;
+          const nextAd = watchableAds[(curIdx + 1) % Math.max(1, watchableAds.length)];
+          setModalOpen(false);
+          setActiveSession(null);
+          if (nextAd) {
+            setTimeout(() => void startWatchSession(nextAd), 120);
+          }
+        }}
+        onWatchNext={() => {
+          const curIdx = activeAd ? watchableAds.findIndex((a) => a.id === activeAd.id) : 0;
+          const nextAd = watchableAds[(curIdx + 1) % Math.max(1, watchableAds.length)];
+          setModalOpen(false);
+          setActiveSession(null);
+          if (nextAd) {
+            setTimeout(() => void startWatchSession(nextAd), 120);
+          }
+        }}
+        onGoWallet={() => {
+          setModalOpen(false);
+          setActiveSession(null);
+          onNavigate('wallet');
+        }}
+      />
     </div>
   );
 }

@@ -17,9 +17,10 @@ import {
   User as UserIcon,
   Wallet,
 } from 'lucide-react';
-import { AppRoute, AuthUser, Language, UserProfile } from '../types/marketplace';
+import { AppRoute, AuthUser, Language, SiteSettings, UserProfile } from '../types/marketplace';
 import { t } from '../lib/i18n';
 import { DigitalHubLogo } from './DigitalHubLogo';
+import { FloatingSupportWidget } from './FloatingSupportWidget';
 
 interface NavbarProps {
   route: AppRoute;
@@ -28,6 +29,7 @@ interface NavbarProps {
   setLang: (l: Language) => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  settings: SiteSettings;
   siteName?: string;
   logoUrl?: string;
   user: AuthUser | null;
@@ -49,6 +51,7 @@ export function Navbar({
   setLang,
   theme,
   onToggleTheme,
+  settings,
   siteName,
   logoUrl,
   user,
@@ -97,12 +100,12 @@ export function Navbar({
         </div>
       )}
 
-      <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-[#E6ECFA] dark:border-slate-800 shadow-xs transition-colors">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
+      <header className="sticky top-0 z-40 w-full max-w-full bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-[#E6ECFA] dark:border-slate-800 shadow-xs transition-colors">
+        <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-1.5 sm:gap-2">
           <button
             type="button"
             onClick={() => go('home')}
-            className="text-left focus:outline-none shrink-0"
+            className="text-left focus:outline-none min-w-0 shrink"
             aria-label={`${siteName || 'DIGITAL HUB'} Home`}
           >
             <DigitalHubLogo
@@ -234,11 +237,11 @@ export function Navbar({
           </nav>
 
           {/* Right Header Controls: Theme + Language + Wallet Balance + Cart + Profile */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
             <button
               type="button"
               onClick={onToggleTheme}
-              className="p-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-200 hover:border-[#FF8500] transition-colors"
+              className="p-1.5 sm:p-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-200 hover:border-[#FF8500] transition-colors"
               aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
               title={theme === 'dark' ? (lang === 'bn' ? 'লাইট মোড' : 'Light Mode') : lang === 'bn' ? 'ডার্ক মোড' : 'Dark Mode'}
             >
@@ -262,17 +265,17 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('wallet')}
-              className="dh-orange-gradient text-white px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-2xl text-xs sm:text-sm font-bold flex items-center gap-1.5 shadow-sm hover:opacity-95 transition-opacity whitespace-nowrap"
+              className="dh-orange-gradient text-white px-2 sm:px-3.5 py-1.5 sm:py-2 rounded-xl sm:rounded-2xl text-[11px] sm:text-sm font-bold flex items-center gap-1 sm:gap-1.5 shadow-sm hover:opacity-95 transition-opacity whitespace-nowrap"
               title={t(lang, 'navWallet')}
             >
-              <Wallet className="w-4 h-4 shrink-0" />
-              <span className="font-mono-num">৳ {walletBalanceBdt.toFixed(2)}</span>
+              <Wallet className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span className="font-mono-num">৳{walletBalanceBdt.toFixed(0)}</span>
             </button>
 
             <button
               type="button"
               onClick={onOpenCart}
-              className="relative p-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-200 hover:border-[#FF8500] transition-colors"
+              className="relative p-1.5 sm:p-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-200 hover:border-[#FF8500] transition-colors"
               aria-label={t(lang, 'cart')}
             >
               <ShoppingCart className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -294,10 +297,10 @@ export function Navbar({
                   <img
                     src={profile?.photoUrl || user.photoURL || ''}
                     alt={profile?.displayName || 'User'}
-                    className="w-8 h-8 sm:w-9 sm:h-9 rounded-full object-cover border border-[#FF8500]/40"
+                    className="w-7 h-7 sm:w-9 sm:h-9 rounded-full object-cover border border-[#FF8500]/40"
                   />
                 ) : (
-                  <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[#172033] dark:bg-[#FF8500] text-white flex items-center justify-center text-xs font-bold">
+                  <div className="w-7 h-7 sm:w-9 sm:h-9 rounded-full bg-[#172033] dark:bg-[#FF8500] text-white flex items-center justify-center text-xs font-bold">
                     {(profile?.displayName || user.displayName || user.phone || user.email || 'U').slice(0, 1).toUpperCase()}
                   </div>
                 )}
@@ -309,11 +312,11 @@ export function Navbar({
                 )}
               </button>
             ) : (
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1 sm:gap-1.5">
                 <button
                   type="button"
                   onClick={onOpenAuth}
-                  className="px-3 sm:px-3.5 py-2 rounded-xl bg-[#172033] dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold hover:opacity-90 transition-opacity whitespace-nowrap"
+                  className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl bg-[#172033] dark:bg-slate-100 text-white dark:text-slate-900 text-[11px] sm:text-xs font-bold hover:opacity-90 transition-opacity whitespace-nowrap"
                 >
                   {t(lang, 'signIn')}
                 </button>
@@ -333,40 +336,40 @@ export function Navbar({
       {/* Mobile 5-Tab Bottom Navigation */}
       <nav
         aria-label="Mobile Navigation"
-        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white dark:bg-slate-900 border-t border-[#E6ECFA] dark:border-slate-800 shadow-[0_-6px_24px_rgba(23,32,51,0.08)] px-2 h-16 flex items-center justify-around"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-40 w-full max-w-full bg-white dark:bg-slate-900 border-t border-[#E6ECFA] dark:border-slate-800 shadow-[0_-6px_24px_rgba(23,32,51,0.08)] px-1.5 h-16 flex items-center justify-around"
       >
         <button
           type="button"
           onClick={() => go('home')}
-          className={`flex flex-col items-center justify-center gap-0.5 min-w-[56px] text-[11px] font-semibold ${
+          className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 text-[10px] sm:text-[11px] font-semibold ${
             route === 'home' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
           <Home className="w-5 h-5" />
-          <span>{t(lang, 'navHome')}</span>
+          <span className="truncate max-w-full px-0.5">{t(lang, 'navHome')}</span>
         </button>
 
         <button
           type="button"
           onClick={() => go('orders')}
-          className={`flex flex-col items-center justify-center gap-0.5 min-w-[56px] text-[11px] font-semibold ${
+          className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 text-[10px] sm:text-[11px] font-semibold ${
             route === 'orders' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
           <PackageCheck className="w-5 h-5" />
-          <span>{t(lang, 'navOrders')}</span>
+          <span className="truncate max-w-full px-0.5">{t(lang, 'navOrders')}</span>
         </button>
 
         <button
           type="button"
           onClick={() => go('add-money')}
-          className="relative -top-3.5 flex flex-col items-center justify-center"
+          className="relative -top-3.5 flex-1 min-w-0 flex flex-col items-center justify-center"
         >
           <span className="w-12 h-12 rounded-full dh-orange-gradient text-white flex items-center justify-center shadow-lg border-4 border-white dark:border-slate-900">
             <Plus className="w-6 h-6" />
           </span>
           <span
-            className={`mt-0.5 text-[10px] font-bold ${
+            className={`mt-0.5 text-[10px] font-bold truncate max-w-full ${
               route === 'add-money' ? 'text-[#FF8500]' : 'text-[#172033] dark:text-slate-200'
             }`}
           >
@@ -377,40 +380,31 @@ export function Navbar({
         <button
           type="button"
           onClick={() => go('wallet')}
-          className={`flex flex-col items-center justify-center gap-0.5 min-w-[56px] text-[11px] font-semibold ${
+          className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 text-[10px] sm:text-[11px] font-semibold ${
             route === 'wallet' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
           <Wallet className="w-5 h-5" />
-          <span>{t(lang, 'navWallet')}</span>
+          <span className="truncate max-w-full px-0.5">{t(lang, 'navWallet')}</span>
         </button>
 
         <button
           type="button"
           onClick={() => (user ? go(isAdmin && route === 'account' ? 'admin' : 'account') : onOpenAuth())}
-          className={`flex flex-col items-center justify-center gap-0.5 min-w-[56px] text-[11px] font-semibold relative ${
+          className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 text-[10px] sm:text-[11px] font-semibold relative ${
             route === 'account' || route === 'admin' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
           <UserIcon className="w-5 h-5" />
-          <span>{t(lang, 'navAccount')}</span>
+          <span className="truncate max-w-full px-0.5">{t(lang, 'navAccount')}</span>
           {unreadNotifications > 0 && (
             <span className="absolute top-0 right-2 w-2 h-2 rounded-full bg-[#DC2626]" />
           )}
         </button>
       </nav>
 
-      {/* Floating Customer Support Button */}
-      {route !== 'support' && route !== 'admin' && (
-        <button
-          type="button"
-          onClick={() => go('support')}
-          aria-label={t(lang, 'navSupport')}
-          className="fixed right-3 sm:right-5 bottom-20 lg:bottom-6 z-30 w-12 h-12 rounded-full bg-[#172033] text-white shadow-lg border-2 border-[#FF8500] flex items-center justify-center hover:bg-[#FF8500] transition-colors"
-        >
-          <Headphones className="w-5 h-5" />
-        </button>
-      )}
+      {/* Expandable Floating Customer Support Buttons (Messenger, WhatsApp, Telegram) */}
+      {route !== 'admin' && <FloatingSupportWidget lang={lang} settings={settings} />}
     </>
   );
 }

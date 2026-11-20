@@ -136,7 +136,7 @@ export function resolveStudioImage(
 
   if (bk === 'pubg' || bk === 'codm' || bk === 'airdrop') return artPubgTacticalImg;
   if (bk === 'mlbb' || bk === 'valorant' || bk === 'genshin' || bk === 'roblox') return gamingMobaValorantImg;
-  if (bk === 'efootball' || bk === 'eafc' || bk === 'dls') return artFootballStadiumImg;
+  if (bk === 'efootball' || bk === 'efootball_android' || bk === 'efootball_iphone' || bk === 'eafc' || bk === 'dls') return artFootballStadiumImg;
   if (bk === 'coc' || bk === 'clashroyale') return artClashFantasyImg;
   if (['domain', 'hosting', 'ssl', 'webdesign', 'antivirus', 'idm'].includes(bk)) return artWebCloudHostingImg;
   if (['photoshop', 'illustrator', 'premiere', 'lightroom', 'adobe', 'videoediting', 'canva'].includes(bk)) {

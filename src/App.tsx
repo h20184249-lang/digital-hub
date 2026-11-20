@@ -89,6 +89,7 @@ import { AdPlayerSection } from './components/AdPlayerSection';
 import { ManagedPlacementSlot } from './components/AdUnitFrame';
 import { NativeAdRow, SocialBarWidget } from './components/AutomaticAdEngine';
 import { WatchAndEarnPage } from './components/WatchAndEarnPage';
+import { WatchEarnHomeBanner } from './components/WatchEarnWidgets';
 import { AuthModal } from './components/AuthModal';
 import { CartDrawer, getCartItemKey } from './components/CartDrawer';
 import { HomepagePaymentSection } from './components/PremiumPaymentSection';
@@ -108,6 +109,14 @@ import {
   ProductCard,
   SupportAndContactPage,
 } from './components/StorefrontPages';
+import { ServiceBrandLogo } from './components/BrandLogos';
+import {
+  CATALOG_23_CATEGORIES,
+  getEffectiveProductAvailability,
+  getFirstAvailablePackage,
+  getProductCatalogSectionId,
+  isPackagePurchasable,
+} from './lib/catalogHelpers';
 
 export default function App() {
   const [detailProductId, setDetailProductId] = useState<string>(
@@ -198,6 +207,7 @@ export default function App() {
   });
   const [homeSearch, setHomeSearch] = useState('');
   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
+  const [catalogSectionFilter, setCatalogSectionFilter] = useState('');
   const [heroSlide, setHeroSlide] = useState(0);
   const [toast, setToast] = useState('');
 
@@ -463,9 +473,30 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [route, detailProduct, settings.siteName]);
 
+  const openCatalogSection = (sectionId: string) => {
+    setCatalogSearchQuery('');
+    setCatalogSectionFilter(sectionId);
+    setRoute('services');
+  };
+
   const handleAddToCart = (product: Product, qty = 1, selectedPackage?: ProductPackage) => {
-    const pkg =
-      selectedPackage || (product.packages && product.packages.length > 0 ? product.packages[0] : undefined);
+    if (getEffectiveProductAvailability(product) === 'out_of_stock') {
+      showToast(
+        lang === 'bn'
+          ? `${product.titleBn} বর্তমানে স্টকে নেই (Out of Stock)।`
+          : `${product.titleEn} is currently Out of Stock.`
+      );
+      return;
+    }
+    const pkg = selectedPackage || getFirstAvailablePackage(product);
+    if (!isPackagePurchasable(pkg, product)) {
+      showToast(
+        lang === 'bn'
+          ? 'নির্বাচিত প্যাকেজটি বর্তমানে স্টকে নেই (Out of Stock)।'
+          : 'Selected package is currently Out of Stock.'
+      );
+      return;
+    }
     const itemToAdd: CartItem = { product, quantity: qty, selectedPackage: pkg };
     const targetKey = getCartItemKey(itemToAdd);
 
@@ -498,6 +529,7 @@ export default function App() {
 
   const handleHomeSearchSubmit = (e: FormEvent) => {
     e.preventDefault();
+    setCatalogSectionFilter('');
     setCatalogSearchQuery(homeSearch.trim());
     setRoute('services');
   };
@@ -604,18 +636,20 @@ export default function App() {
   const isMaintenanceBlocked = Boolean(settings.maintenanceMode && !isAdmin);
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F3F6FF] dark:bg-slate-950 text-[#172033] dark:text-slate-100 pb-20 lg:pb-0 transition-colors">
+    <div className="min-h-screen w-full max-w-full overflow-x-clip flex flex-col bg-[#F3F6FF] dark:bg-slate-950 text-[#172033] dark:text-slate-100 pb-20 lg:pb-0 transition-colors">
       {!isMaintenanceBlocked && route !== 'admin' && (
         <Navbar
           route={route}
           setRoute={(r) => {
             setCatalogSearchQuery('');
+            setCatalogSectionFilter('');
             setRoute(r);
           }}
           lang={lang}
           setLang={setLang}
           theme={theme}
           onToggleTheme={toggleTheme}
+          settings={settings}
           siteName={settings.siteName}
           logoUrl={settings.logoUrl}
           user={user}
@@ -638,7 +672,7 @@ export default function App() {
       )}
 
       {!isMaintenanceBlocked && route !== 'admin' && (
-        <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 lg:px-8 pt-2">
+        <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 lg:px-8 pt-2 overflow-hidden">
           <ManagedPlacementSlot
             placement="top_header"
             units={managedAdUnits}
@@ -649,13 +683,13 @@ export default function App() {
       )}
 
       {toast && (
-        <div className="fixed top-20 right-4 z-50 px-4 py-2.5 rounded-2xl bg-[#172033] text-white text-xs font-bold shadow-xl border border-[#FF8500] flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-[#FF8500]" />
-          <span>{toast}</span>
+        <div className="fixed top-20 right-3 sm:right-4 z-50 max-w-[calc(100vw-1.5rem)] sm:max-w-md px-4 py-2.5 rounded-2xl bg-[#172033] text-white text-xs font-bold shadow-xl border border-[#FF8500] flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-[#FF8500] shrink-0" />
+          <span className="break-words">{toast}</span>
         </div>
       )}
 
-      <main className="flex-1">
+      <main className="flex-1 w-full min-w-0">
         {isMaintenanceBlocked ? (
           <div className="min-h-[82vh] flex items-center justify-center px-4 py-12">
             <div className="max-w-lg w-full rounded-3xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 shadow-lg p-7 sm:p-9 text-center space-y-5">
@@ -858,8 +892,76 @@ export default function App() {
               })}
             </section>
 
+            {/* 2B. Complete 23 Catalog Categories Directory */}
+            <section className="dh-card rounded-3xl p-4 sm:p-5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <LayoutGrid className="w-4 h-4 text-[#FF8500]" />
+                  <h2 className="text-sm sm:text-base font-extrabold text-[#172033]">
+                    {lang === 'bn' ? 'সকল ২৩টি সার্ভিস ক্যাটাগরি' : 'Browse All 23 Catalog Categories'}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openCatalogSection('')}
+                  className="text-xs font-bold text-[#FF8500] hover:underline flex items-center gap-0.5"
+                >
+                  <span>{t(lang, 'viewAll')}</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                {CATALOG_23_CATEGORIES.map((sec) => {
+                  const matchedProds = products.filter(
+                    (p) => p.active && getProductCatalogSectionId(p) === sec.id
+                  );
+                  const pkgTotal = matchedProds.reduce(
+                    (sum, p) => sum + Math.max(1, p.packages?.length || 1),
+                    0
+                  );
+                  return (
+                    <button
+                      key={sec.id}
+                      type="button"
+                      onClick={() => openCatalogSection(sec.id)}
+                      className="flex items-center gap-2 p-2 rounded-2xl bg-[#F3F6FF] hover:bg-[#FFF3E5] border border-[#E6ECFA] hover:border-[#FF8500]/50 transition-colors text-left group"
+                    >
+                      <ServiceBrandLogo brandKey={sec.brandKey} size={32} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-bold text-[#172033] group-hover:text-[#FF8500] leading-tight line-clamp-2">
+                          {lang === 'bn' ? sec.shortBn : sec.shortEn}
+                        </p>
+                        {pkgTotal > 0 && (
+                          <p className="text-[10px] font-mono-num text-[#777777]">
+                            {pkgTotal} {lang === 'bn' ? 'প্যাক' : 'packs'}
+                          </p>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
             {/* Download Our Mobile App (PWA Install Card) */}
             <MobileAppDownloadCard lang={lang} siteName={settings.siteName} />
+
+            {/* Prominent Watch Ads & Earn Coins Section (Homepage Mobile + Desktop) */}
+            <WatchEarnHomeBanner
+              lang={lang}
+              user={user}
+              profile={profile}
+              wallet={wallet}
+              settings={settings}
+              advertisements={advertisements}
+              managedAdUnits={managedAdUnits}
+              onNavigate={setRoute}
+              onOpenAuth={() => {
+                setAuthInitialMode('login');
+                setAuthModalOpen(true);
+              }}
+              onToast={showToast}
+            />
 
             {/* Homepage Top Ad Placement */}
             <BannerSlotView
@@ -1135,19 +1237,19 @@ export default function App() {
 
             {/* 10. Gift Cards & VIP Community Spotlight */}
             <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="dh-card rounded-3xl p-5 flex items-center justify-between gap-4 bg-gradient-to-br from-white to-[#FFF7EE]">
-                <div className="space-y-1.5">
+              <div className="dh-card rounded-3xl p-4 sm:p-5 flex items-center justify-between gap-3 sm:gap-4 bg-gradient-to-br from-white to-[#FFF7EE] dark:from-slate-900 dark:to-slate-800/90 overflow-hidden">
+                <div className="space-y-1.5 min-w-0 flex-1">
                   <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#FF8500] uppercase">
-                    <Gift className="w-3.5 h-3.5" />
+                    <Gift className="w-3.5 h-3.5 shrink-0" />
                     Gift Cards & Vouchers
                   </span>
-                  <h3 className="text-base sm:text-lg font-extrabold text-[#172033]">
+                  <h3 className="text-sm sm:text-lg font-extrabold text-[#172033] dark:text-slate-100 leading-snug">
                     {lang === 'bn' ? 'Steam, UniPin, PlayStation ও Google Play' : 'Steam, UniPin, PSN & Google Play Codes'}
                   </h3>
                   <button
                     type="button"
                     onClick={() => setRoute('gift-cards')}
-                    className="px-4 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold mt-1"
+                    className="px-3.5 sm:px-4 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold mt-1"
                   >
                     {t(lang, 'navGiftCards')} →
                   </button>
@@ -1155,23 +1257,23 @@ export default function App() {
                 <img
                   src={STUDIO_IMAGES.giftVouchers}
                   alt="Gift Cards"
-                  className="w-24 h-24 rounded-2xl object-cover shrink-0"
+                  className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover shrink-0"
                 />
               </div>
 
-              <div className="dh-card rounded-3xl p-5 flex items-center justify-between gap-4 bg-gradient-to-br from-[#172033] to-[#23314d] text-white border-none">
-                <div className="space-y-1.5">
+              <div className="dh-card rounded-3xl p-4 sm:p-5 flex items-center justify-between gap-3 sm:gap-4 bg-gradient-to-br from-[#172033] to-[#23314d] text-white border-none overflow-hidden">
+                <div className="space-y-1.5 min-w-0 flex-1">
                   <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#FF9B19] uppercase">
-                    <Sparkles className="w-3.5 h-3.5" />
+                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
                     VIP Community
                   </span>
-                  <h3 className="text-base sm:text-lg font-extrabold">
+                  <h3 className="text-sm sm:text-lg font-extrabold leading-snug">
                     {lang === 'bn' ? 'প্রাইভেট টেলিগ্রাম ভিআইপি গ্রুপ' : 'Telegram VIP Groups & Learning'}
                   </h3>
                   <button
                     type="button"
                     onClick={() => setRoute('vip-groups')}
-                    className="px-4 py-1.5 rounded-xl bg-[#FF8500] text-white text-xs font-bold mt-1"
+                    className="px-3.5 sm:px-4 py-1.5 rounded-xl bg-[#FF8500] text-white text-xs font-bold mt-1"
                   >
                     {t(lang, 'navVip')} →
                   </button>
@@ -1179,7 +1281,7 @@ export default function App() {
                 <img
                   src={STUDIO_IMAGES.bannerVip}
                   alt="VIP Community"
-                  className="w-24 h-24 rounded-2xl object-cover shrink-0"
+                  className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover shrink-0"
                 />
               </div>
             </section>
@@ -1330,11 +1432,14 @@ export default function App() {
             settings={settings}
             lang={lang}
             initialSearch={catalogSearchQuery}
+            initialCatalogSection={catalogSectionFilter}
+            onSelectCatalogSection={setCatalogSectionFilter}
             onSelectProduct={openProductDetail}
             onQuickOrder={openQuickOrder}
             onAddToCart={(p) => handleAddToCart(p, 1)}
             onNavigate={(r) => {
               setCatalogSearchQuery('');
+              setCatalogSectionFilter('');
               setRoute(r);
             }}
           />
@@ -1448,6 +1553,7 @@ export default function App() {
             profile={profile}
             wallet={wallet}
             settings={settings}
+            advertisements={advertisements}
             managedAdUnits={managedAdUnits}
             adNetworks={adNetworks}
             viewingSessions={viewingSessions}
@@ -1469,9 +1575,11 @@ export default function App() {
             profile={profile}
             wallet={wallet}
             walletTxs={walletTxs}
+            adRewardTransactions={adRewardTransactions}
             withdrawals={withdrawals}
             paymentMethods={paymentMethods}
             settings={settings}
+            onNavigate={setRoute}
             onOpenAuth={() => setAuthModalOpen(true)}
           />
         )}
@@ -1579,7 +1687,7 @@ export default function App() {
               <span className="text-[#172033] dark:text-slate-100">{settings.siteName || 'DIGITAL HUB'}</span>
             </p>
             <p className="text-[#777777] dark:text-slate-400">{lang === 'bn' ? settings.taglineBn : settings.taglineEn}</p>
-            <p className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400">
+            <p className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400 break-words">
               bKash: {settings.bkashNumber} · Nagad: {settings.nagadNumber} · Rocket: {settings.rocketNumber}
             </p>
           </div>

@@ -106,6 +106,14 @@ interface EffectiveSiteSettings {
   referralMaxRewardBdt: number;
   referralEligibility: string;
   loginAlertsEnabled: boolean;
+  adsEnabled: boolean;
+  watchEarnEnabled: boolean;
+  rewardedAdEnabled: boolean;
+  watchEarnCoinsPerAd: number;
+  watchEarnCoinsPerBdt: number;
+  watchEarnDailyCoinLimit: number;
+  rewardedAdDailyLimit: number;
+  watchEarnMinRedeemCoins: number;
 }
 
 interface AttemptRow {
@@ -230,6 +238,14 @@ async function getGlobalSiteSettings(db: AppDatabase): Promise<EffectiveSiteSett
     referralMaxRewardBdt: Math.max(0, Number(raw.referralMaxRewardBdt ?? 5000) || 0),
     referralEligibility: String(raw.referralEligibility || 'first_paid_order'),
     loginAlertsEnabled: raw.loginAlertsEnabled !== false,
+    adsEnabled: raw.adsEnabled !== false,
+    watchEarnEnabled: raw.watchEarnEnabled !== false,
+    rewardedAdEnabled: raw.rewardedAdEnabled !== false,
+    watchEarnCoinsPerAd: Math.max(1, Math.floor(Number(raw.watchEarnCoinsPerAd ?? 10) || 10)),
+    watchEarnCoinsPerBdt: Math.max(1, Number(raw.watchEarnCoinsPerBdt ?? 10) || 10),
+    watchEarnDailyCoinLimit: Math.max(10, Math.floor(Number(raw.watchEarnDailyCoinLimit ?? 100) || 100)),
+    rewardedAdDailyLimit: Math.max(1, Math.floor(Number(raw.rewardedAdDailyLimit ?? 5) || 5)),
+    watchEarnMinRedeemCoins: Math.max(10, Math.floor(Number(raw.watchEarnMinRedeemCoins ?? 50) || 50)),
   };
 }
 
@@ -468,18 +484,34 @@ async function ensureWalletAccount(db: AppDatabase, uid: string): Promise<{
   promotionalCreditsBdt: number;
   totalAddedBdt: number;
   totalSpentBdt: number;
+  coinsAvailable: number;
+  coinsLifetimeEarned: number;
+  coinsRedeemed: number;
   lastTxId: string;
   updatedAt: number;
 }> {
-  const existing = await db.first<{
-    uid: string;
-    available_balance_bdt: number;
-    promotional_credits_bdt: number;
-    total_added_bdt: number;
-    total_spent_bdt: number;
-    last_tx_id: string;
-    updated_at: number;
-  }>('SELECT * FROM wallet_accounts WHERE uid = ?', [uid]);
+  const [existing, coinBal] = await Promise.all([
+    db.first<{
+      uid: string;
+      available_balance_bdt: number;
+      promotional_credits_bdt: number;
+      total_added_bdt: number;
+      total_spent_bdt: number;
+      last_tx_id: string;
+      updated_at: number;
+    }>('SELECT * FROM wallet_accounts WHERE uid = ?', [uid]),
+    db.first<{
+      coins_available: number;
+      coins_lifetime_earned: number;
+      coins_redeemed: number;
+    }>('SELECT coins_available, coins_lifetime_earned, coins_redeemed FROM watch_earn_balances WHERE user_id = ?', [
+      uid,
+    ]),
+  ]);
+
+  const coinsAvailable = Number(coinBal?.coins_available || 0);
+  const coinsLifetimeEarned = Number(coinBal?.coins_lifetime_earned || 0);
+  const coinsRedeemed = Number(coinBal?.coins_redeemed || 0);
 
   if (existing) {
     return {
@@ -488,6 +520,9 @@ async function ensureWalletAccount(db: AppDatabase, uid: string): Promise<{
       promotionalCreditsBdt: Number(existing.promotional_credits_bdt || 0),
       totalAddedBdt: Number(existing.total_added_bdt || 0),
       totalSpentBdt: Number(existing.total_spent_bdt || 0),
+      coinsAvailable,
+      coinsLifetimeEarned,
+      coinsRedeemed,
       lastTxId: existing.last_tx_id || '',
       updatedAt: Number(existing.updated_at || Date.now()),
     };
@@ -506,6 +541,9 @@ async function ensureWalletAccount(db: AppDatabase, uid: string): Promise<{
     promotionalCreditsBdt: 0,
     totalAddedBdt: 0,
     totalSpentBdt: 0,
+    coinsAvailable,
+    coinsLifetimeEarned,
+    coinsRedeemed,
     lastTxId: '',
     updatedAt: now,
   };
@@ -2576,6 +2614,63 @@ export function createPhoneAuthAndAppRouter(): express.Router {
     }
   });
 
+  const WATCH_EARN_REQUIRED_SECONDS = 5;
+  const WATCH_EARN_MIN_ELAPSED_MS = 4500;
+  const WATCH_EARN_SESSION_TTL_MS = 10 * 60 * 1000;
+
+  async function computeWatchEarnUserStats(db: AppDatabase, userId: string, siteSettings: EffectiveSiteSettings) {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const [bal, creditedRows] = await Promise.all([
+      db.first<{
+        coins_available: number;
+        coins_lifetime_earned: number;
+        coins_redeemed: number;
+      }>('SELECT coins_available, coins_lifetime_earned, coins_redeemed FROM watch_earn_balances WHERE user_id = ?', [
+        userId,
+      ]),
+      db.all<{ id: string; payload_json: string; updated_at: number }>(
+        `SELECT id, payload_json, updated_at FROM ad_viewing_sessions WHERE user_id = ? AND LOWER(status) = 'credited' ORDER BY updated_at DESC LIMIT 100`,
+        [userId]
+      ),
+    ]);
+
+    let adsWatchedToday = 0;
+    let coinsEarnedToday = 0;
+    const creditedSessions = creditedRows.map((r) => {
+      const obj = parseJsonSafe<Record<string, unknown>>(r.payload_json, {});
+      const coins = Number(obj.coinsAwarded || 0);
+      const creditedAtStr = String(
+        obj.creditedAt || (r.updated_at ? new Date(r.updated_at).toISOString() : '')
+      );
+      if (creditedAtStr.slice(0, 10) === todayStr) {
+        adsWatchedToday += 1;
+        coinsEarnedToday += coins;
+      }
+      return {
+        sessionId: String(obj.id || r.id || ''),
+        provider: String(obj.provider || ''),
+        providerEventId: String(obj.providerEventId || ''),
+        coins,
+        creditedAt: creditedAtStr,
+      };
+    });
+
+    return {
+      coinsAvailable: Number(bal?.coins_available || 0),
+      coinsLifetimeEarned: Number(bal?.coins_lifetime_earned || 0),
+      coinsRedeemed: Number(bal?.coins_redeemed || 0),
+      adsWatchedToday,
+      coinsEarnedToday,
+      dailyAdLimit: siteSettings.rewardedAdDailyLimit,
+      dailyCoinLimit: siteSettings.watchEarnDailyCoinLimit,
+      coinsPerAd: siteSettings.watchEarnCoinsPerAd,
+      coinsPerBdt: siteSettings.watchEarnCoinsPerBdt,
+      minRedeemCoins: siteSettings.watchEarnMinRedeemCoins,
+      watchEarnEnabled: siteSettings.watchEarnEnabled && siteSettings.rewardedAdEnabled && siteSettings.adsEnabled,
+      creditedSessions: creditedSessions.slice(0, 50),
+    };
+  }
+
   router.get('/watch-earn/summary', async (req, res) => {
     try {
       const resolved = await resolveSessionFromRequest(req);
@@ -2584,33 +2679,9 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       const { db, user } = resolved;
-      const bal = await db.first<{
-        coins_available: number;
-        coins_lifetime_earned: number;
-        coins_redeemed: number;
-      }>('SELECT * FROM watch_earn_balances WHERE user_id = ?', [user.uid]);
-
-      const creditedRows = await db.all<{ payload_json: string }>(
-        `SELECT payload_json FROM ad_viewing_sessions WHERE user_id = ? AND status = 'Credited' ORDER BY updated_at DESC LIMIT 50`,
-        [user.uid]
-      );
-
-      res.json({
-        ok: true,
-        coinsAvailable: Number(bal?.coins_available || 0),
-        coinsLifetimeEarned: Number(bal?.coins_lifetime_earned || 0),
-        coinsRedeemed: Number(bal?.coins_redeemed || 0),
-        creditedSessions: creditedRows.map((r) => {
-          const obj = parseJsonSafe<Record<string, unknown>>(r.payload_json, {});
-          return {
-            sessionId: String(obj.id || ''),
-            provider: String(obj.provider || ''),
-            providerEventId: String(obj.providerEventId || ''),
-            coins: Number(obj.coinsAwarded || 0),
-            creditedAt: String(obj.creditedAt || ''),
-          };
-        }),
-      });
+      const siteSettings = await getGlobalSiteSettings(db);
+      const stats = await computeWatchEarnUserStats(db, user.uid, siteSettings);
+      res.json({ ok: true, ...stats });
     } catch (err) {
       handleRouteError(res, err, 'Watch & Earn তথ্য লোড করা যায়নি।');
     }
@@ -2624,15 +2695,69 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       const { db, user } = resolved;
+      if (user.status === 'suspended') {
+        res.status(403).json({
+          ok: false,
+          error: 'আপনার অ্যাকাউন্ট সাময়িকভাবে সাসপেন্ড আছে।',
+        });
+        return;
+      }
+
+      const siteSettings = await getGlobalSiteSettings(db);
+      if (!siteSettings.watchEarnEnabled || !siteSettings.rewardedAdEnabled || !siteSettings.adsEnabled) {
+        res.status(403).json({
+          ok: false,
+          error: 'ওয়াচ ও আর্ন বর্তমানে অ্যাডমিন দ্বারা বন্ধ রাখা হয়েছে।',
+        });
+        return;
+      }
+
       const body = (req.body || {}) as { unitId?: string; provider?: string; launchUrl?: string };
       const unitId = String(body.unitId || '').trim().slice(0, 80);
-      const provider = String(body.provider || 'partner').trim().slice(0, 60);
+      const provider = String(body.provider || 'PARTNER').trim().slice(0, 60);
       const launchUrl = String(body.launchUrl || '').trim().slice(0, 600);
       if (!unitId) {
         res.status(400).json({ ok: false, error: 'সঠিক অ্যাড ইউনিট নির্বাচন করুন।' });
         return;
       }
+
+      const stats = await computeWatchEarnUserStats(db, user.uid, siteSettings);
+      if (stats.adsWatchedToday >= stats.dailyAdLimit) {
+        res.status(429).json({
+          ok: false,
+          error: `আজকের দৈনিক বিজ্ঞাপন সীমা (${stats.dailyAdLimit}/${stats.dailyAdLimit}) পূর্ণ হয়েছে। আগামীকাল আবার চেষ্টা করুন।`,
+        });
+        return;
+      }
+      if (stats.coinsEarnedToday + stats.coinsPerAd > stats.dailyCoinLimit) {
+        res.status(429).json({
+          ok: false,
+          error: `আজকের দৈনিক কয়েন সীমা (${stats.dailyCoinLimit} কয়েন) পূর্ণ হয়েছে।`,
+        });
+        return;
+      }
+
       const now = Date.now();
+      // Prevent simultaneous active reward timers per user
+      const activeWatching = await db.first<{ id: string; created_at: number }>(
+        `SELECT id, created_at FROM ad_viewing_sessions WHERE user_id = ? AND status = 'watching' ORDER BY created_at DESC LIMIT 1`,
+        [user.uid]
+      );
+      if (activeWatching && now - Number(activeWatching.created_at || 0) < WATCH_EARN_MIN_ELAPSED_MS) {
+        const waitSec = Math.ceil((WATCH_EARN_MIN_ELAPSED_MS - (now - Number(activeWatching.created_at || 0))) / 1000);
+        res.status(429).json({
+          ok: false,
+          error: `একটি বিজ্ঞাপন টাইমার ইতিমধ্যে চালু আছে। অনুগ্রহ করে ${waitSec} সেকেন্ড অপেক্ষা করুন।`,
+        });
+        return;
+      }
+
+      // Expire any stale unfinished watching sessions older than the timer window
+      await db.run(
+        `UPDATE ad_viewing_sessions SET status = 'expired', updated_at = ? WHERE user_id = ? AND status = 'watching' AND created_at < ?`,
+        [now, user.uid, now - WATCH_EARN_MIN_ELAPSED_MS]
+      );
+
       const sessionId = generateSecureId('wsess', 8);
       const sessionToken = generateSecureId('wtok', 12);
       const payload = {
@@ -2643,14 +2768,16 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         provider,
         sessionToken,
         launchUrl,
-        status: 'Pending',
+        status: 'watching',
+        requiredSeconds: WATCH_EARN_REQUIRED_SECONDS,
+        rewardCoins: stats.coinsPerAd,
         coinsAwarded: 0,
         createdAt: now,
         updatedAt: now,
       };
       await db.run(
         'INSERT INTO ad_viewing_sessions (id, user_id, session_token, status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [sessionId, user.uid, sessionToken, 'Pending', JSON.stringify(payload), now, now]
+        [sessionId, user.uid, sessionToken, 'watching', JSON.stringify(payload), now, now]
       );
       res.status(201).json({
         ok: true,
@@ -2659,11 +2786,242 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         unitId,
         provider,
         launchUrl,
-        status: 'Pending',
-        message: 'বিজ্ঞাপন সেশন শুরু হয়েছে। বিজ্ঞাপন সম্পূর্ণ দেখে ভেরিফাই করুন।',
+        status: 'watching',
+        requiredSeconds: WATCH_EARN_REQUIRED_SECONDS,
+        rewardCoins: stats.coinsPerAd,
+        serverStartedAt: now,
+        message: `${WATCH_EARN_REQUIRED_SECONDS} সেকেন্ড বিজ্ঞাপনটি দেখুন — সম্পন্ন হলে স্বয়ংক্রিয়ভাবে +${stats.coinsPerAd} কয়েন যোগ হবে।`,
       });
     } catch (err) {
       handleRouteError(res, err, 'সেশন শুরু করা যায়নি।');
+    }
+  });
+
+  router.post('/watch-earn/session/complete', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'লগইন প্রয়োজন।' });
+        return;
+      }
+      const { db, user } = resolved;
+      if (user.status === 'suspended') {
+        res.status(403).json({ ok: false, error: 'আপনার অ্যাকাউন্ট সাময়িকভাবে সাসপেন্ড আছে।' });
+        return;
+      }
+
+      const body = (req.body || {}) as {
+        sessionId?: string;
+        sessionToken?: string;
+        adLoaded?: boolean;
+        failureReason?: string;
+      };
+      const sessionId = String(body.sessionId || '').trim();
+      const sessionToken = String(body.sessionToken || '').trim();
+      const adLoaded = body.adLoaded === true;
+      const failureReason = String(body.failureReason || '').trim().slice(0, 240);
+
+      if (!sessionId || !sessionToken) {
+        res.status(400).json({ ok: false, error: 'অবৈধ বিজ্ঞাপন সেশন তথ্য।' });
+        return;
+      }
+
+      const row = await db.first<{
+        id: string;
+        user_id: string;
+        session_token: string;
+        status: string;
+        payload_json: string;
+        created_at: number;
+      }>(
+        'SELECT id, user_id, session_token, status, payload_json, created_at FROM ad_viewing_sessions WHERE id = ? LIMIT 1',
+        [sessionId]
+      );
+
+      if (!row || row.user_id !== user.uid || row.session_token !== sessionToken) {
+        res.status(404).json({ ok: false, error: 'বিজ্ঞাপন সেশনটি খুঁজে পাওয়া যায়নি।' });
+        return;
+      }
+
+      const siteSettings = await getGlobalSiteSettings(db);
+      const currentStatus = String(row.status || '').toLowerCase();
+      const existingObj = parseJsonSafe<Record<string, unknown>>(row.payload_json, {});
+
+      // Duplicate reward prevention: already credited sessions return idempotent balance without re-crediting
+      if (currentStatus === 'credited') {
+        const stats = await computeWatchEarnUserStats(db, user.uid, siteSettings);
+        res.json({
+          ok: true,
+          verified: true,
+          alreadyCredited: true,
+          status: 'credited',
+          coinsAwarded: 0,
+          ...stats,
+          message: 'এই বিজ্ঞাপনটির কয়েন ইতিমধ্যে আপনার অ্যাকাউন্টে যোগ করা হয়েছে।',
+        });
+        return;
+      }
+
+      const now = Date.now();
+
+      // Honest verification: never credit coins if the ad failed to load
+      if (!adLoaded) {
+        const failedPayload = {
+          ...existingObj,
+          status: 'load_failed',
+          coinsAwarded: 0,
+          failureReason: failureReason || 'Advertisement failed to load in viewport',
+          updatedAt: now,
+        };
+        await db.run(
+          `UPDATE ad_viewing_sessions SET status = 'load_failed', payload_json = ?, updated_at = ? WHERE id = ? AND user_id = ? AND LOWER(status) != 'credited'`,
+          [JSON.stringify(failedPayload), now, sessionId, user.uid]
+        );
+        res.status(400).json({
+          ok: false,
+          verified: false,
+          status: 'load_failed',
+          coinsAwarded: 0,
+          error: 'বিজ্ঞাপনটি লোড হয়নি বলে কোনো কয়েন যোগ করা হয়নি। অনুগ্রহ করে অন্য বিজ্ঞাপন চেষ্টা করুন।',
+        });
+        return;
+      }
+
+      if (currentStatus === 'expired' || now - Number(row.created_at || 0) > WATCH_EARN_SESSION_TTL_MS) {
+        res.status(400).json({
+          ok: false,
+          verified: false,
+          status: 'expired',
+          coinsAwarded: 0,
+          error: 'বিজ্ঞাপন সেশনটির মেয়াদ শেষ হয়েছে। নতুন করে বিজ্ঞাপন দেখুন।',
+        });
+        return;
+      }
+
+      // Enforce real server-side 5-second watch timer (rejects forged/premature requests)
+      const elapsedMs = now - Number(row.created_at || 0);
+      if (elapsedMs < WATCH_EARN_MIN_ELAPSED_MS) {
+        const remainingSeconds = Math.max(1, Math.ceil((WATCH_EARN_MIN_ELAPSED_MS - elapsedMs) / 1000));
+        res.status(400).json({
+          ok: false,
+          verified: false,
+          status: 'watching',
+          remainingSeconds,
+          coinsAwarded: 0,
+          error: `সম্পূর্ণ ৫ সেকেন্ড বিজ্ঞাপন দেখা বাকি আছে (${remainingSeconds} সেকেন্ড)।`,
+        });
+        return;
+      }
+
+      if (!siteSettings.watchEarnEnabled || !siteSettings.rewardedAdEnabled || !siteSettings.adsEnabled) {
+        res.status(403).json({
+          ok: false,
+          error: 'ওয়াচ ও আর্ন বর্তমানে বন্ধ আছে।',
+        });
+        return;
+      }
+
+      const preStats = await computeWatchEarnUserStats(db, user.uid, siteSettings);
+      const rewardCoins = Math.max(
+        1,
+        Math.floor(Number(existingObj.rewardCoins || siteSettings.watchEarnCoinsPerAd) || siteSettings.watchEarnCoinsPerAd)
+      );
+
+      if (preStats.adsWatchedToday >= preStats.dailyAdLimit) {
+        res.status(429).json({
+          ok: false,
+          error: `আজকের দৈনিক বিজ্ঞাপন সীমা (${preStats.dailyAdLimit}/${preStats.dailyAdLimit}) পূর্ণ হয়েছে।`,
+        });
+        return;
+      }
+      if (preStats.coinsEarnedToday + rewardCoins > preStats.dailyCoinLimit) {
+        res.status(429).json({
+          ok: false,
+          error: `আজকের দৈনিক কয়েন সীমা (${preStats.dailyCoinLimit} কয়েন) পূর্ণ হয়েছে।`,
+        });
+        return;
+      }
+
+      const creditedAtIso = new Date(now).toISOString();
+      const completedPayload = {
+        ...existingObj,
+        status: 'credited',
+        coinsAwarded: rewardCoins,
+        failureReason: '',
+        watchedDurationMs: elapsedMs,
+        verifiedAt: now,
+        creditedAt: creditedAtIso,
+        updatedAt: now,
+      };
+
+      // Atomic transition guarantees duplicate/concurrent requests can NEVER double-credit
+      const atomicUpd = await db.run(
+        `UPDATE ad_viewing_sessions
+         SET status = 'credited', payload_json = ?, updated_at = ?
+         WHERE id = ? AND user_id = ? AND LOWER(status) IN ('watching', 'pending', 'awaiting_callback', 'initiated')`,
+        [JSON.stringify(completedPayload), now, sessionId, user.uid]
+      );
+
+      if (atomicUpd.changes === 0) {
+        const latestStats = await computeWatchEarnUserStats(db, user.uid, siteSettings);
+        res.json({
+          ok: true,
+          verified: true,
+          alreadyCredited: true,
+          status: 'credited',
+          coinsAwarded: 0,
+          ...latestStats,
+          message: 'এই বিজ্ঞাপনটির কয়েন ইতিমধ্যে যোগ করা হয়েছে।',
+        });
+        return;
+      }
+
+      await db.run(
+        `INSERT INTO watch_earn_balances (user_id, coins_available, coins_lifetime_earned, coins_redeemed, updated_at)
+         VALUES (?, ?, ?, 0, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           coins_available = coins_available + excluded.coins_available,
+           coins_lifetime_earned = coins_lifetime_earned + excluded.coins_lifetime_earned,
+           updated_at = excluded.updated_at`,
+        [user.uid, rewardCoins, rewardCoins, now]
+      );
+
+      const rtxId = generateSecureId('rtx', 8);
+      const bdtEquivalent = Number((rewardCoins / siteSettings.watchEarnCoinsPerBdt).toFixed(2));
+      const rtxPayload = {
+        id: rtxId,
+        sessionId,
+        userId: user.uid,
+        userEmail: getUserPrimaryIdentifier(user),
+        provider: String(existingObj.provider || 'PARTNER'),
+        type: 'watch_earn_credit',
+        coins: rewardCoins,
+        bdtEquivalent,
+        status: 'Credited',
+        note: `Watch & Earn 5s verified view (${String(existingObj.unitId || 'AD')})`,
+        createdAt: now,
+      };
+      await db.run(
+        'INSERT INTO ad_reward_transactions (id, user_id, type, status, coins, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [rtxId, user.uid, 'watch_earn_credit', 'Credited', rewardCoins, JSON.stringify(rtxPayload), now]
+      );
+
+      const postStats = await computeWatchEarnUserStats(db, user.uid, siteSettings);
+
+      res.json({
+        ok: true,
+        verified: true,
+        alreadyCredited: false,
+        status: 'credited',
+        coinsAwarded: rewardCoins,
+        bdtEquivalent,
+        session: completedPayload,
+        rewardTransaction: rtxPayload,
+        ...postStats,
+        message: `অভিনন্দন! +${rewardCoins} কয়েন আপনার অ্যাকাউন্টে স্বয়ংক্রিয়ভাবে যোগ হয়েছে।`,
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'বিজ্ঞাপন রিওয়ার্ড প্রসেস করা যায়নি।');
     }
   });
 
@@ -2686,15 +3044,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       const obj = parseJsonSafe<Record<string, unknown>>(row.payload_json, {});
+      const isCredited = String(row.status || '').toLowerCase() === 'credited';
       res.json({
         ok: true,
-        verified: row.status === 'Credited',
-        status: row.status,
+        verified: isCredited,
+        status: isCredited ? 'credited' : row.status,
         coinsAwarded: Number(obj.coinsAwarded || 0),
-        message:
-          row.status === 'Credited'
-            ? 'সার্ভার পোস্টব্যাক যাচাই সম্পন্ন হয়েছে এবং কয়েন যুক্ত হয়েছে।'
-            : 'বিজ্ঞাপন পার্টনারের সার্ভার পোস্টব্যাকের জন্য অপেক্ষমান আছে।',
+        message: isCredited
+          ? 'বিজ্ঞাপন যাচাই সম্পন্ন হয়েছে এবং কয়েন স্থায়ীভাবে যুক্ত হয়েছে।'
+          : 'বিজ্ঞাপনটি সম্পূর্ণ দেখা ও যাচাইয়ের জন্য অপেক্ষমান আছে।',
       });
     } catch (err) {
       handleRouteError(res, err, 'সেশন যাচাই করা যায়নি।');
@@ -2709,10 +3067,21 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       const { db, user } = resolved;
+      if (user.status === 'suspended') {
+        res.status(403).json({ ok: false, error: 'আপনার অ্যাকাউন্ট সাময়িকভাবে সাসপেন্ড আছে।' });
+        return;
+      }
+      const siteSettings = await getGlobalSiteSettings(db);
+      const minRedeemCoins = siteSettings.watchEarnMinRedeemCoins;
+      const coinsPerBdt = siteSettings.watchEarnCoinsPerBdt;
+
       const body = (req.body || {}) as { coins?: number };
       const coins = Math.floor(Number(body.coins || 0));
-      if (!Number.isFinite(coins) || coins < 100) {
-        res.status(400).json({ ok: false, error: 'সর্বনিম্ন ১০০ কয়েন রিডিম করা যাবে।' });
+      if (!Number.isFinite(coins) || coins < minRedeemCoins) {
+        res.status(400).json({
+          ok: false,
+          error: `সর্বনিম্ন ${minRedeemCoins} কয়েন রিডিম করা যাবে।`,
+        });
         return;
       }
       const now = Date.now();
@@ -2729,7 +3098,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       const id = generateSecureId('rtx', 8);
-      const bdtEstimate = Number((coins / 10).toFixed(2));
+      const bdtEstimate = Number((coins / coinsPerBdt).toFixed(2));
       const payload = {
         id,
         sessionId: id,
@@ -2779,9 +3148,14 @@ export function createPhoneAuthAndAppRouter(): express.Router {
     }
   });
 
-  router.get('/catalog/overrides', async (_req, res) => {
+  router.get('/catalog/overrides', async (req, res) => {
     try {
       const db = await getAppDatabase();
+      const session = await resolveSessionFromRequest(req).catch(() => null);
+      const callerIsAdmin = Boolean(
+        session && (session.user.role === 'admin' || session.user.role === 'super_admin')
+      );
+
       const [overrideRows, reviewRows, announcementRows, pmRows] = await Promise.all([
         db.all<{ collection: string; doc_id: string; deleted: number; payload_json: string }>(
           'SELECT collection, doc_id, deleted, payload_json FROM catalog_overrides'
@@ -2797,13 +3171,45 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         ),
       ]);
 
+      const sanitizePublicProduct = (raw: unknown): unknown => {
+        if (callerIsAdmin || !raw || typeof raw !== 'object') return raw;
+        const obj = { ...(raw as Record<string, unknown>) };
+        delete obj.supplierPriceBdt;
+        const priceNum = typeof obj.priceBdt === 'number' ? obj.priceBdt : Number(obj.priceBdt || 0);
+        const origNum =
+          typeof obj.originalPriceBdt === 'number'
+            ? obj.originalPriceBdt
+            : Number(obj.originalPriceBdt || 0);
+        if (origNum > 0 && origNum <= priceNum) {
+          delete obj.originalPriceBdt;
+        }
+        if (Array.isArray(obj.packages)) {
+          obj.packages = obj.packages.map((pk) => {
+            if (!pk || typeof pk !== 'object') return pk;
+            const copy = { ...(pk as Record<string, unknown>) };
+            delete copy.supplierPriceBdt;
+            const pPrice = typeof copy.priceBdt === 'number' ? copy.priceBdt : Number(copy.priceBdt || 0);
+            const pOrig =
+              typeof copy.originalPriceBdt === 'number'
+                ? copy.originalPriceBdt
+                : Number(copy.originalPriceBdt || 0);
+            if (pOrig > 0 && pOrig <= pPrice) {
+              delete copy.originalPriceBdt;
+            }
+            return copy;
+          });
+        }
+        return obj;
+      };
+
       const overrides: Record<string, Array<{ id: string; deleted: boolean; data: unknown }>> = {};
       for (const r of overrideRows) {
         if (!overrides[r.collection]) overrides[r.collection] = [];
+        const parsed = parseJsonSafe(r.payload_json, {});
         overrides[r.collection].push({
           id: r.doc_id,
           deleted: r.deleted === 1,
-          data: parseJsonSafe(r.payload_json, {}),
+          data: r.collection === 'products' ? sanitizePublicProduct(parsed) : parsed,
         });
       }
 
@@ -5294,8 +5700,9 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           return;
         }
         const rawOrigPrice = Number(body.data.originalPriceBdt ?? body.data.regularPriceBdt ?? 0);
-        const originalPriceBdt = Number.isFinite(rawOrigPrice) && rawOrigPrice > 0 ? Math.round(rawOrigPrice) : 0;
         const cleanPriceBdt = Math.round(priceBdt);
+        const originalPriceBdt =
+          Number.isFinite(rawOrigPrice) && rawOrigPrice > cleanPriceBdt ? Math.round(rawOrigPrice) : 0;
         const computedDiscount =
           originalPriceBdt > cleanPriceBdt
             ? Math.min(95, Math.max(1, Math.round(((originalPriceBdt - cleanPriceBdt) / originalPriceBdt) * 100)))
@@ -5327,6 +5734,38 @@ export function createPhoneAuthAndAppRouter(): express.Router {
               .slice(0, 30)
           : undefined;
 
+        const sanitizedSubPackages = Array.isArray(body.data.packages)
+          ? (body.data.packages as Array<Record<string, unknown>>)
+              .filter((pk) => pk && String(pk.nameEn || pk.nameBn || '').trim() && Number(pk.priceBdt) > 0)
+              .slice(0, 200)
+              .map((pk, idx) => {
+                const pkPrice = Math.max(1, Math.round(Number(pk.priceBdt)));
+                const rawPkOrig = Number(pk.originalPriceBdt || 0);
+                const pkOrig = Number.isFinite(rawPkOrig) && rawPkOrig > pkPrice ? Math.round(rawPkOrig) : 0;
+                const rawPkSup = Number(pk.supplierPriceBdt || 0);
+                const pkSup = Number.isFinite(rawPkSup) && rawPkSup > 0 ? Math.round(rawPkSup) : 0;
+                const availRaw = String(pk.availability || '').trim();
+                const pkAvail =
+                  availRaw === 'out_of_stock' || availRaw === 'limited' || availRaw === 'in_stock'
+                    ? availRaw
+                    : undefined;
+                return {
+                  id: String(pk.id || `pkg_${idx + 1}`).trim().slice(0, 64),
+                  nameBn: String(pk.nameBn || pk.nameEn || '').trim().slice(0, 120),
+                  nameEn: String(pk.nameEn || pk.nameBn || '').trim().slice(0, 120),
+                  priceBdt: pkPrice,
+                  ...(pkOrig > 0 ? { originalPriceBdt: pkOrig } : {}),
+                  ...(pkSup > 0 ? { supplierPriceBdt: pkSup } : {}),
+                  ...(pkAvail ? { availability: pkAvail } : {}),
+                  ...(pk.durationBn ? { durationBn: String(pk.durationBn).trim().slice(0, 60) } : {}),
+                  ...(pk.durationEn ? { durationEn: String(pk.durationEn).trim().slice(0, 60) } : {}),
+                  ...(pk.deliveryDurationBn ? { deliveryDurationBn: String(pk.deliveryDurationBn).trim().slice(0, 60) } : {}),
+                  ...(pk.deliveryDurationEn ? { deliveryDurationEn: String(pk.deliveryDurationEn).trim().slice(0, 60) } : {}),
+                  ...(pk.tag ? { tag: String(pk.tag).trim().slice(0, 32) } : {}),
+                };
+              })
+          : undefined;
+
         payloadToSave = {
           ...body.data,
           id: docId,
@@ -5337,6 +5776,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           regularPriceBdt: originalPriceBdt || cleanPriceBdt,
           discountPercent: computedDiscount,
           currency: 'BDT',
+          ...(sanitizedSubPackages !== undefined ? { packages: sanitizedSubPackages } : {}),
           ...(featuresList ? { features: featuresList } : {}),
           createdAt: existingCreatedAt,
           updatedAt: now,

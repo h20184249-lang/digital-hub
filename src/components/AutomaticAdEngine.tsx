@@ -105,12 +105,12 @@ export function PublisherScriptSlot({
   if (!adsEnabled || !activeNetwork) return null;
 
   return (
-    <div className="dh-card rounded-2xl p-3 bg-white border border-[#E6ECFA]">
-      <div className="flex items-center justify-between text-[10px] text-[#777777] font-semibold mb-1.5 px-1">
-        <span className="uppercase tracking-wider">{activeNetwork.name}</span>
-        <span>Sponsored Network</span>
+    <div className="w-full max-w-full overflow-hidden dh-card rounded-2xl p-3 bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800">
+      <div className="flex items-center justify-between text-[10px] text-[#777777] dark:text-slate-400 font-semibold mb-1.5 px-1">
+        <span className="uppercase tracking-wider truncate">{activeNetwork.name}</span>
+        <span className="shrink-0">Sponsored Network</span>
       </div>
-      <div ref={containerRef} className="w-full overflow-hidden flex items-center justify-center min-h-[60px]" />
+      <div ref={containerRef} className="w-full max-w-full overflow-hidden flex items-center justify-center min-h-[60px]" />
     </div>
   );
 }
@@ -210,14 +210,14 @@ export function NativeAdRow({
       />
 
       {visibleAds.length > 0 && (
-        <div className="dh-card rounded-3xl p-4 sm:p-5 space-y-3">
+        <div className="w-full max-w-full overflow-hidden dh-card rounded-3xl p-4 sm:p-5 space-y-3">
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <span className="px-2 py-0.5 rounded-md bg-[#FFF3E5] text-[#FF8500] text-[10px] font-extrabold uppercase tracking-wider inline-flex items-center gap-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="px-2 py-0.5 rounded-md bg-[#FFF3E5] dark:bg-orange-500/20 text-[#FF8500] text-[10px] font-extrabold uppercase tracking-wider inline-flex items-center gap-1 shrink-0">
                 <Sparkles className="w-3 h-3" />
                 {lang === 'bn' ? 'স্পন্সরড নেটিভ ডিলস' : 'Sponsored Partner Picks'}
               </span>
-              <span className="text-[11px] text-[#777777] hidden sm:inline">
+              <span className="text-[11px] text-[#777777] dark:text-slate-400 hidden sm:inline truncate">
                 {lang === 'bn' ? 'নিরাপদ পার্টনার লিংক' : 'Safe external partner links'}
               </span>
             </div>
@@ -225,7 +225,7 @@ export function NativeAdRow({
               <button
                 type="button"
                 onClick={() => setRotationOffset((prev) => (prev + 1) % eligibleAds.length)}
-                className="text-[11px] font-bold text-[#FF8500] hover:underline flex items-center gap-1"
+                className="text-[11px] font-bold text-[#FF8500] hover:underline flex items-center gap-1 shrink-0"
               >
                 <RefreshCw className="w-3 h-3" />
                 <span>{lang === 'bn' ? 'পরবর্তী' : 'Rotate'}</span>
@@ -249,7 +249,7 @@ export function NativeAdRow({
                   }
                   trackAdEvent(ad.code || ad.id, 'click', placement, ad.adFormat || 'native');
                 }}
-                className="group rounded-2xl p-3 bg-[#F3F6FF] border border-[#E6ECFA] hover:border-[#FF8500] transition-all flex items-center gap-3 cursor-pointer"
+                className="group min-w-0 rounded-2xl p-3 bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500] transition-all flex items-center gap-3 cursor-pointer"
               >
                 {ad.thumbnailUrl && (
                   <img
@@ -258,27 +258,27 @@ export function NativeAdRow({
                     onError={(e) => {
                       e.currentTarget.src = STUDIO_IMAGES.bannerVip;
                     }}
-                    className="w-16 h-16 rounded-xl object-cover shrink-0 bg-[#172033]"
+                    className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl object-cover shrink-0 bg-[#172033]"
                     loading="lazy"
                   />
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="px-1.5 py-0.5 rounded bg-[#172033] text-white text-[10px] font-mono-num font-bold">
+                    <span className="px-1.5 py-0.5 rounded bg-[#172033] dark:bg-slate-950 text-white text-[10px] font-mono-num font-bold">
                       {ad.code}
                     </span>
                     <span className="text-[10px] font-bold text-[#FF8500] uppercase">
                       {ad.adFormat || 'native'}
                     </span>
                   </div>
-                  <p className="text-xs sm:text-sm font-bold text-[#172033] group-hover:text-[#FF8500] line-clamp-1">
+                  <p className="text-xs sm:text-sm font-bold text-[#172033] dark:text-slate-100 group-hover:text-[#FF8500] line-clamp-1">
                     {lang === 'bn' ? ad.titleBn : ad.titleEn}
                   </p>
-                  <p className="text-[11px] text-[#777777] line-clamp-1 mt-0.5">
+                  <p className="text-[11px] text-[#777777] dark:text-slate-400 line-clamp-1 mt-0.5">
                     {lang === 'bn' ? ad.descriptionBn || ad.descriptionEn : ad.descriptionEn || ad.descriptionBn}
                   </p>
                 </div>
-                <ExternalLink className="w-4 h-4 text-[#777777] group-hover:text-[#FF8500] shrink-0" />
+                <ExternalLink className="w-4 h-4 text-[#777777] dark:text-slate-400 group-hover:text-[#FF8500] shrink-0" />
               </a>
               );
             })}
@@ -350,7 +350,7 @@ export function SocialBarWidget({
         const socialLaunch = resolveAdBrowserUrl(active.targetUrl);
         if (!socialLaunch.ok) return null;
         return (
-        <div className="fixed left-3 bottom-20 lg:bottom-6 z-30 max-w-[270px] sm:max-w-xs bg-white/95 backdrop-blur-md border border-[#FF8500]/50 rounded-2xl shadow-xl p-2.5 flex items-center gap-2.5">
+        <div className="fixed left-2.5 sm:left-4 bottom-[74px] lg:bottom-6 z-30 max-w-[calc(100vw-82px)] sm:max-w-xs bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-[#FF8500]/50 rounded-2xl shadow-xl p-2 sm:p-2.5 flex items-center gap-2">
           <a
             href={socialLaunch.href}
             target="_blank"
@@ -362,7 +362,7 @@ export function SocialBarWidget({
               }
               trackAdEvent(active.code || active.id, 'click', 'social_bar', 'social_bar');
             }}
-            className="flex-1 min-w-0 flex items-center gap-2.5 text-left group cursor-pointer"
+            className="flex-1 min-w-0 flex items-center gap-2 text-left group cursor-pointer"
           >
             {active.thumbnailUrl && (
               <img
@@ -371,17 +371,17 @@ export function SocialBarWidget({
                 onError={(e) => {
                   e.currentTarget.src = STUDIO_IMAGES.bannerVip;
                 }}
-                className="w-10 h-10 rounded-xl object-cover shrink-0"
+                className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl object-cover shrink-0"
               />
             )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1">
-                <span className="px-1.5 py-0.2 rounded bg-[#FF8500] text-white text-[9px] font-bold font-mono-num">
+                <span className="px-1.5 py-0.5 rounded bg-[#FF8500] text-white text-[9px] font-bold font-mono-num">
                   {active.code}
                 </span>
-                <span className="text-[9px] font-bold uppercase text-[#777777]">Sponsored</span>
+                <span className="text-[9px] font-bold uppercase text-[#777777] dark:text-slate-400">Sponsored</span>
               </div>
-              <p className="text-xs font-bold text-[#172033] group-hover:text-[#FF8500] truncate mt-0.5">
+              <p className="text-xs font-bold text-[#172033] dark:text-slate-100 group-hover:text-[#FF8500] truncate mt-0.5">
                 {lang === 'bn' ? active.titleBn : active.titleEn}
               </p>
             </div>
@@ -390,7 +390,7 @@ export function SocialBarWidget({
             type="button"
             onClick={() => setDismissed(true)}
             aria-label="Close sponsored bar"
-            className="p-1 rounded-lg text-[#777777] hover:bg-[#F3F6FF] hover:text-[#172033] shrink-0"
+            className="p-1.5 rounded-lg text-[#777777] dark:text-slate-400 hover:bg-[#F3F6FF] dark:hover:bg-slate-800 hover:text-[#172033] dark:hover:text-white shrink-0"
           >
             <X className="w-3.5 h-3.5" />
           </button>

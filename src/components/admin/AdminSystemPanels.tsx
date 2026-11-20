@@ -751,6 +751,102 @@ export function AdminSettingsPanel({
               className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
             />
           </div>
+          <div>
+            <label className="block font-bold mb-1">Messenger Support Link</label>
+            <input
+              type="url"
+              value={draft.messengerLink || ''}
+              onChange={(e) => setDraft({ ...draft, messengerLink: e.target.value })}
+              placeholder="https://m.me/yourpage"
+              className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Watch Ads & Earn Coins Controls */}
+      <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100">
+            {lang === 'bn' ? 'ওয়াচ অ্যাডস ও আর্ন কয়েন সেটিংস' : 'Watch Ads & Earn Coins Settings'}
+          </h3>
+          <label className="inline-flex items-center gap-2 text-xs font-bold cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.watchEarnEnabled !== false}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  watchEarnEnabled: e.target.checked,
+                  rewardedAdEnabled: e.target.checked,
+                })
+              }
+              className="accent-[#FF8500] w-4 h-4"
+            />
+            <span>{lang === 'bn' ? 'ওয়াচ ও আর্ন সক্রিয়' : 'Watch & Earn Enabled'}</span>
+          </label>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div>
+            <label className="block font-bold mb-1">Coins Per 5s Ad</label>
+            <input
+              type="number"
+              min={1}
+              value={draft.watchEarnCoinsPerAd ?? 10}
+              onChange={(e) =>
+                setDraft({ ...draft, watchEarnCoinsPerAd: Math.max(1, Number(e.target.value) || 10) })
+              }
+              className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">Coins Per ৳1 BDT</label>
+            <input
+              type="number"
+              min={1}
+              value={draft.watchEarnCoinsPerBdt ?? 10}
+              onChange={(e) =>
+                setDraft({ ...draft, watchEarnCoinsPerBdt: Math.max(1, Number(e.target.value) || 10) })
+              }
+              className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">Daily Ad Limit</label>
+            <input
+              type="number"
+              min={1}
+              value={draft.rewardedAdDailyLimit ?? 5}
+              onChange={(e) =>
+                setDraft({ ...draft, rewardedAdDailyLimit: Math.max(1, Number(e.target.value) || 5) })
+              }
+              className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">Daily Coin Cap</label>
+            <input
+              type="number"
+              min={10}
+              value={draft.watchEarnDailyCoinLimit ?? 100}
+              onChange={(e) =>
+                setDraft({ ...draft, watchEarnDailyCoinLimit: Math.max(10, Number(e.target.value) || 100) })
+              }
+              className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+            />
+          </div>
+          <div>
+            <label className="block font-bold mb-1">Min Redeem Coins</label>
+            <input
+              type="number"
+              min={10}
+              value={draft.watchEarnMinRedeemCoins ?? 50}
+              onChange={(e) =>
+                setDraft({ ...draft, watchEarnMinRedeemCoins: Math.max(10, Number(e.target.value) || 50) })
+              }
+              className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+            />
+          </div>
         </div>
       </div>
 
