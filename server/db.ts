@@ -387,6 +387,15 @@ const SCHEMA_STATEMENTS: string[] = [
     by_placement_json TEXT NOT NULL DEFAULT '{}',
     last_event_at INTEGER NOT NULL DEFAULT 0
   )`,
+  `CREATE TABLE IF NOT EXISTS media_assets (
+    id TEXT PRIMARY KEY,
+    mime_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    data_base64 TEXT NOT NULL,
+    uploaded_by TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_media_assets_created ON media_assets(created_at DESC)`,
 ];
 
 async function seedDefaultPaymentMethodsIfEmpty(db: AppDatabase): Promise<void> {

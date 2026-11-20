@@ -73,6 +73,7 @@ export function Navbar({
     { id: 'vip-groups', label: t(lang, 'navVip') },
     { id: 'telegram-stars', label: t(lang, 'navStars') },
     { id: 'ai-marketplace', label: t(lang, 'navAi') },
+    { id: 'mobile-apps', label: lang === 'bn' ? 'মোবাইল অ্যাপ স্টোর' : 'Mobile App Store' },
     { id: 'software-store', label: t(lang, 'navSoftware') },
     { id: 'digital-products', label: t(lang, 'navDigital') },
     { id: 'graphic-design', label: t(lang, 'navDesign') },

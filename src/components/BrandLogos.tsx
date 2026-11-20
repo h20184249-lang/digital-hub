@@ -1118,15 +1118,17 @@ export function ProductVisualArtwork({
         {!isGeneratedProductCard && (
           <div className="absolute inset-0 bg-gradient-to-t from-[#0F172A]/85 via-[#0F172A]/25 to-transparent pointer-events-none" />
         )}
-        {!isGeneratedProductCard && (product.brandKey || product.customLogoUrl) && variant !== 'banner' && (
-          <div className="absolute top-2.5 left-2.5 drop-shadow-lg">
-            <ServiceBrandLogo
-              brandKey={product.brandKey}
-              customLogoUrl={product.customLogoUrl}
-              size={variant === 'hero' ? 48 : 36}
-            />
-          </div>
-        )}
+        {(!isGeneratedProductCard || Boolean(product.customLogoUrl)) &&
+          (product.brandKey || product.customLogoUrl) &&
+          variant !== 'banner' && (
+            <div className="absolute top-2.5 left-2.5 drop-shadow-lg">
+              <ServiceBrandLogo
+                brandKey={product.brandKey}
+                customLogoUrl={product.customLogoUrl}
+                size={variant === 'hero' ? 52 : 40}
+              />
+            </div>
+          )}
       </div>
     );
   }

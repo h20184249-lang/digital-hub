@@ -85,8 +85,11 @@ export function AdminNotificationsPanel({
   onError,
 }: AdminNotificationsPanelProps) {
   // Send Notification Form
-  const [targetUid, setTargetUid] = useState('ALL');
-  const [notifType, setNotifType] = useState<'system' | 'wallet' | 'order' | 'payment' | 'referral'>('system');
+  const [audienceMode, setAudienceMode] = useState<'all' | 'selected' | 'single'>('all');
+  const [targetUid, setTargetUid] = useState(users[0]?.uid || '');
+  const [selectedUids, setSelectedUids] = useState<string[]>([]);
+  const [userPickerSearch, setUserPickerSearch] = useState('');
+  const [notifType, setNotifType] = useState<'system' | 'wallet' | 'order' | 'payment' | 'referral' | 'promo'>('system');
   const [titleEn, setTitleEn] = useState('');
   const [titleBn, setTitleBn] = useState('');
   const [messageEn, setMessageEn] = useState('');
@@ -101,16 +104,44 @@ export function AdminNotificationsPanel({
   const [annMsgBn, setAnnMsgBn] = useState('');
   const [postingAnn, setPostingAnn] = useState(false);
 
+  const filteredPickerUsers = useMemo(() => {
+    const q = userPickerSearch.trim().toLowerCase();
+    if (!q) return users.slice(0, 60);
+    return users
+      .filter(
+        (u) =>
+          (u.displayName || '').toLowerCase().includes(q) ||
+          (u.email || '').toLowerCase().includes(q) ||
+          (u.phone || '').toLowerCase().includes(q) ||
+          u.uid.toLowerCase().includes(q)
+      )
+      .slice(0, 60);
+  }, [users, userPickerSearch]);
+
+  const toggleSelectedUid = (uid: string) => {
+    setSelectedUids((prev) => (prev.includes(uid) ? prev.filter((id) => id !== uid) : [...prev, uid]));
+  };
+
   const handleSendNotification = async (e: FormEvent) => {
     e.preventDefault();
     if (!titleEn.trim() || !messageEn.trim()) {
       onError('Notification title and message are required.');
       return;
     }
+    if (audienceMode === 'selected' && selectedUids.length === 0) {
+      onError('Please select at least one user from the list.');
+      return;
+    }
+    if (audienceMode === 'single' && !targetUid) {
+      onError('Please pick a recipient user.');
+      return;
+    }
     setSending(true);
     try {
       const res = await adminSendNotification({
-        targetUid,
+        ...(audienceMode === 'selected'
+          ? { targetUids: selectedUids }
+          : { targetUid: audienceMode === 'all' ? 'ALL' : targetUid }),
         titleEn: titleEn.trim(),
         titleBn: titleBn.trim() || titleEn.trim(),
         messageEn: messageEn.trim(),
@@ -118,14 +149,17 @@ export function AdminNotificationsPanel({
         type: notifType,
       });
       onSuccess(
-        targetUid === 'ALL'
-          ? `Broadcast sent to ${res.recipientCount} active users.`
-          : `Direct notification sent to ${targetUid}.`
+        audienceMode === 'all'
+          ? `Broadcast sent to ${res.recipientCount} active user(s).`
+          : audienceMode === 'selected'
+            ? `Notification sent to ${res.recipientCount} selected user(s).`
+            : `Direct notification sent to recipient.`
       );
       setTitleEn('');
       setTitleBn('');
       setMessageEn('');
       setMessageBn('');
+      if (audienceMode === 'selected') setSelectedUids([]);
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to send notification.');
     } finally {
@@ -159,41 +193,135 @@ export function AdminNotificationsPanel({
 
   return (
     <div className="space-y-5 text-xs">
-      {/* Direct / Broadcast Notification Composer */}
+      {/* Direct / Selected / Broadcast Notification Composer */}
       <form
         onSubmit={handleSendNotification}
-        className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-3"
+        className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-4"
       >
-        <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
-          <Bell className="w-4 h-4 text-[#FF8500]" />
-          {lang === 'bn' ? 'ইউজার নোটিফিকেশন পাঠান (একক বা সবাইকে)' : 'Send User Notification (Direct or All Users)'}
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="block font-bold mb-1">Recipient</label>
-            <select
-              value={targetUid}
-              onChange={(e) => setTargetUid(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
-            >
-              <option value="ALL">All Active Users (Broadcast)</option>
-              {users.map((u) => (
-                <option key={u.uid} value={u.uid}>
-                  {u.displayName || u.uid} ({u.email || u.phone || u.uid})
-                </option>
-              ))}
-            </select>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+            <Bell className="w-4 h-4 text-[#FF8500]" />
+            {lang === 'bn'
+              ? 'ব্রডকাস্ট / ইউজার নোটিফিকেশন (সবাই, নির্বাচিত বা একক)'
+              : 'Send Notifications (All Users, Selected Users, or Single User)'}
+          </h3>
+          <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#F3F6FF] dark:bg-slate-950 border border-[#E6ECFA] dark:border-slate-800 text-[11px] font-bold">
+            {(
+              [
+                { id: 'all', label: lang === 'bn' ? 'সব ইউজার' : 'All Users' },
+                { id: 'selected', label: lang === 'bn' ? `নির্বাচিত (${selectedUids.length})` : `Selected (${selectedUids.length})` },
+                { id: 'single', label: lang === 'bn' ? 'একক ইউজার' : 'Single User' },
+              ] as const
+            ).map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                onClick={() => setAudienceMode(mode.id)}
+                className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
+                  audienceMode === mode.id
+                    ? 'bg-[#FF8500] text-white'
+                    : 'text-[#5C6B84] dark:text-slate-400 hover:text-[#172033] dark:hover:text-white'
+                }`}
+              >
+                {mode.label}
+              </button>
+            ))}
           </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {audienceMode === 'single' ? (
+            <div>
+              <label className="block font-bold mb-1">Select Single Recipient</label>
+              <select
+                value={targetUid}
+                onChange={(e) => setTargetUid(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
+              >
+                <option value="">— Choose User —</option>
+                {users.map((u) => (
+                  <option key={u.uid} value={u.uid}>
+                    {u.displayName || u.uid} ({u.email || u.phone || u.uid})
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : audienceMode === 'all' ? (
+            <div className="rounded-xl bg-[#F8FAFF] dark:bg-slate-800/60 border border-[#E6ECFA] dark:border-slate-700 px-3.5 py-2.5 flex items-center justify-between">
+              <span className="font-bold text-[#172033] dark:text-slate-100">Broadcast to All Active Users</span>
+              <span className="font-mono-num font-extrabold text-[#FF8500]">
+                {users.filter((u) => u.status === 'active').length} users
+              </span>
+            </div>
+          ) : (
+            <div className="sm:col-span-2 rounded-xl bg-[#F8FAFF] dark:bg-slate-950 border border-[#E6ECFA] dark:border-slate-800 p-3 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <input
+                  type="text"
+                  value={userPickerSearch}
+                  onChange={(e) => setUserPickerSearch(e.target.value)}
+                  placeholder="Filter users by name, email, or phone..."
+                  className="flex-1 min-w-[180px] px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-700 text-xs"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUids(filteredPickerUsers.map((u) => u.uid))}
+                    className="px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 font-bold text-[11px] cursor-pointer"
+                  >
+                    Select Visible
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUids([])}
+                    className="px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 font-bold text-[11px] cursor-pointer"
+                  >
+                    Clear ({selectedUids.length})
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto pr-1">
+                {filteredPickerUsers.map((u) => {
+                  const checked = selectedUids.includes(u.uid);
+                  return (
+                    <label
+                      key={u.uid}
+                      className={`px-2.5 py-1.5 rounded-lg border flex items-center gap-2 cursor-pointer transition-colors ${
+                        checked
+                          ? 'bg-[#FFF3E5] dark:bg-orange-950/40 border-[#FF8500]/60'
+                          : 'bg-white dark:bg-slate-900 border-[#E6ECFA] dark:border-slate-800'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleSelectedUid(u.uid)}
+                        className="accent-[#FF8500] shrink-0"
+                      />
+                      <span className="truncate">
+                        <span className="font-bold block truncate">{u.displayName || u.uid}</span>
+                        <span className="text-[10px] font-mono-num text-[#777777] dark:text-slate-400 block truncate">
+                          {u.email || u.phone || u.uid}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block font-bold mb-1">Category</label>
             <select
               value={notifType}
               onChange={(e) =>
-                setNotifType(e.target.value as 'system' | 'wallet' | 'order' | 'payment' | 'referral')
+                setNotifType(e.target.value as 'system' | 'wallet' | 'order' | 'payment' | 'referral' | 'promo')
               }
               className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
             >
               <option value="system">System Alert</option>
+              <option value="promo">Special Offer / Promo</option>
               <option value="wallet">Wallet Update</option>
               <option value="payment">Payment Notice</option>
               <option value="order">Order Update</option>
@@ -235,10 +363,16 @@ export function AdminNotificationsPanel({
           <button
             type="submit"
             disabled={sending}
-            className="px-4 py-2 rounded-xl dh-orange-gradient text-white font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+            className="px-4 py-2 rounded-xl dh-orange-gradient text-white font-bold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
           >
             <Send className="w-3.5 h-3.5" />
-            {sending ? 'Sending...' : targetUid === 'ALL' ? 'Send Broadcast' : 'Send Direct Notification'}
+            {sending
+              ? 'Sending...'
+              : audienceMode === 'all'
+                ? 'Send Broadcast to All'
+                : audienceMode === 'selected'
+                  ? `Send to ${selectedUids.length} Selected User(s)`
+                  : 'Send Direct Notification'}
           </button>
         </div>
       </form>
@@ -838,6 +972,97 @@ export function AdminSecurityPanel({ lang, onSuccess, onError }: AdminSecurityPa
             ))}
           </div>
         )}
+      </div>
+
+      {/* Threat Intelligence Monitors: Suspicious Accounts, Repeated Payments, Abnormal Referrals */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5">
+          <h4 className="text-xs font-extrabold uppercase text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4 text-[#DC2626]" />
+            Suspicious Accounts ({data?.suspiciousAccounts?.length ?? 0})
+          </h4>
+          {(data?.suspiciousAccounts || []).length === 0 ? (
+            <p className="text-[#777777] py-3">No suspicious multi-IP or brute-force anomalies detected.</p>
+          ) : (
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {(data?.suspiciousAccounts || []).map((item, idx) => (
+                <div
+                  key={`${item.uid}_${idx}`}
+                  className={`p-2.5 rounded-xl border ${
+                    item.severity === 'high'
+                      ? 'bg-red-50/70 dark:bg-red-950/30 border-red-200 dark:border-red-900'
+                      : 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-bold text-[#172033] dark:text-slate-100 truncate">{item.userName}</p>
+                    <span className="text-[10px] font-extrabold uppercase text-[#DC2626]">{item.severity}</span>
+                  </div>
+                  <p className="text-[10px] font-mono-num text-[#777777] dark:text-slate-400 truncate">
+                    {item.identifier}
+                  </p>
+                  <p className="text-[11px] font-semibold text-[#DC2626] dark:text-rose-400 mt-0.5">{item.reason}</p>
+                  <p className="text-[10px] text-[#777777] dark:text-slate-400">{item.details}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5">
+          <h4 className="text-xs font-extrabold uppercase text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            Repeated / Rejected Payments ({data?.repeatedPaymentAttempts?.length ?? 0})
+          </h4>
+          {(data?.repeatedPaymentAttempts || []).length === 0 ? (
+            <p className="text-[#777777] py-3">No repeated or abusive payment attempts detected.</p>
+          ) : (
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {(data?.repeatedPaymentAttempts || []).map((item) => (
+                <div
+                  key={item.key}
+                  className="p-2.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-bold text-[#172033] dark:text-slate-100 truncate">{item.label}</p>
+                    <span className="font-mono-num font-extrabold text-[#FF8500] shrink-0">
+                      ৳{item.totalAmountBdt.toLocaleString()}
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 mt-0.5">{item.reason}</p>
+                  <p className="text-[10px] font-mono-num text-[#777777] dark:text-slate-400">
+                    Total: {item.totalCount} · Rejected: {item.rejectedCount} · 24h: {item.recent24hCount}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5">
+          <h4 className="text-xs font-extrabold uppercase text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4 text-violet-500" />
+            Abnormal Referral Activity ({data?.abnormalReferrals?.length ?? 0})
+          </h4>
+          {(data?.abnormalReferrals || []).length === 0 ? (
+            <p className="text-[#777777] py-3">No abnormal referral bursts or abuse alerts.</p>
+          ) : (
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {(data?.abnormalReferrals || []).map((item) => (
+                <div
+                  key={item.referrerId}
+                  className="p-2.5 rounded-xl bg-violet-50/60 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900"
+                >
+                  <p className="font-bold text-[#172033] dark:text-slate-100 truncate">{item.referrerLabel}</p>
+                  <p className="text-[11px] font-semibold text-violet-700 dark:text-violet-400 mt-0.5">{item.reason}</p>
+                  <p className="text-[10px] font-mono-num text-[#777777] dark:text-slate-400">
+                    Total: {item.totalReferrals} · 24h: {item.last24hCount} · Flagged: {item.flaggedCount}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Flagged Referrals & Deletion Requests */}

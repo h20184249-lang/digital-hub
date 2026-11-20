@@ -518,7 +518,7 @@ async function insertNotification(
   titleEn: string,
   messageBn: string,
   messageEn: string,
-  type: 'order' | 'payment' | 'wallet' | 'referral' | 'system'
+  type: 'order' | 'payment' | 'wallet' | 'referral' | 'system' | 'promo'
 ): Promise<void> {
   const now = Date.now();
   const id = generateSecureId('notif', 8);
@@ -4034,7 +4034,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
     }
   });
 
-  // Direct Targeted or Broadcast System Notifications
+  // Direct Targeted, Multi-User, or Broadcast System Notifications
   router.post('/admin/notifications/send', async (req, res) => {
     try {
       const admin = await requireAdminSession(req, res);
@@ -4042,19 +4042,27 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const { db, user } = admin;
       const body = (req.body || {}) as {
         targetUid?: string;
+        targetUids?: string[];
         titleBn?: string;
         titleEn?: string;
         messageBn?: string;
         messageEn?: string;
-        type?: 'order' | 'payment' | 'wallet' | 'referral' | 'system';
+        type?: 'order' | 'payment' | 'wallet' | 'referral' | 'system' | 'promo';
       };
       const targetUid = String(body.targetUid || 'ALL').trim();
+      const targetUidsRaw = Array.isArray(body.targetUids)
+        ? Array.from(new Set(body.targetUids.map((id) => String(id || '').trim()).filter(Boolean))).slice(0, 500)
+        : [];
       const titleBn = String(body.titleBn || body.titleEn || '').trim().slice(0, 160);
       const titleEn = String(body.titleEn || body.titleBn || '').trim().slice(0, 160);
       const messageBn = String(body.messageBn || body.messageEn || '').trim().slice(0, 1000);
       const messageEn = String(body.messageEn || body.messageBn || '').trim().slice(0, 1000);
       const type =
-        body.type === 'order' || body.type === 'payment' || body.type === 'wallet' || body.type === 'referral'
+        body.type === 'order' ||
+        body.type === 'payment' ||
+        body.type === 'wallet' ||
+        body.type === 'referral' ||
+        body.type === 'promo'
           ? body.type
           : 'system';
 
@@ -4064,7 +4072,21 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       }
 
       let recipientCount = 0;
-      if (targetUid === 'ALL') {
+      let targetLabel = targetUid;
+      if (targetUidsRaw.length > 0) {
+        for (const uidItem of targetUidsRaw) {
+          const exists = await db.first<{ uid: string }>('SELECT uid FROM users WHERE uid = ? LIMIT 1', [uidItem]);
+          if (exists) {
+            await insertNotification(db, uidItem, titleBn, titleEn, messageBn, messageEn, type);
+            recipientCount += 1;
+          }
+        }
+        if (recipientCount === 0) {
+          res.status(404).json({ ok: false, error: 'নির্বাচিত কোনো ব্যবহারকারী পাওয়া যায়নি।' });
+          return;
+        }
+        targetLabel = `SELECTED_${recipientCount}`;
+      } else if (targetUid === 'ALL') {
         const activeUsers = await db.all<{ uid: string }>(
           `SELECT uid FROM users WHERE status = 'active' LIMIT 1000`
         );
@@ -4088,10 +4110,10 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         getUserPrimaryIdentifier(user),
         'NOTIFICATION_SENT',
         'notifications',
-        targetUid,
-        `Sent notification "${titleEn}" to ${targetUid === 'ALL' ? `${recipientCount} users` : targetUid}`,
+        targetLabel,
+        `Sent notification "${titleEn}" to ${recipientCount} user(s)`,
         {
-          targetUserId: targetUid === 'ALL' ? '' : targetUid,
+          targetUserId: targetUidsRaw.length === 0 && targetUid !== 'ALL' ? targetUid : '',
           newValue: titleEn,
           reason: messageEn.slice(0, 140),
         }
@@ -4103,14 +4125,24 @@ export function createPhoneAuthAndAppRouter(): express.Router {
     }
   });
 
-  // Security Console Endpoints (Active Sessions, Rate-Limit Lockouts, Suspicious Referrals, Deletion Requests)
+  // Security Console Endpoints (Active Sessions, Rate-Limit Lockouts, Suspicious Accounts, Repeated Payments, Abnormal Referrals, Deletion Requests)
   router.get('/admin/security', async (req, res) => {
     try {
       const admin = await requireAdminSession(req, res);
       if (!admin) return;
       const { db } = admin;
       const now = Date.now();
-      const [sessionRows, attemptRows, deletionRows, flaggedRefRows] = await Promise.all([
+      const oneDayAgo = now - 24 * 60 * 60 * 1000;
+      const [
+        sessionRows,
+        attemptRows,
+        deletionRows,
+        flaggedRefRows,
+        allUserRows,
+        paymentRows,
+        walletTxRows,
+        allRefRows,
+      ] = await Promise.all([
         db.all<{
           id: string;
           user_id: string;
@@ -4142,7 +4174,207 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         db.all<{ payload_json: string }>(
           `SELECT payload_json FROM referrals WHERE status = 'flagged' ORDER BY created_at DESC LIMIT 100`
         ),
+        db.all<{
+          uid: string;
+          display_name: string;
+          email: string;
+          phone_e164: string | null;
+          status: string;
+          last_login_ip: string;
+          last_login_at: number;
+        }>(
+          `SELECT uid, display_name, email, phone_e164, status, last_login_ip, last_login_at FROM users ORDER BY created_at DESC LIMIT 1000`
+        ),
+        db.all<{
+          id: string;
+          customer_id: string;
+          status: string;
+          payload_json: string;
+          created_at: number;
+        }>(
+          `SELECT id, customer_id, status, payload_json, created_at FROM payments ORDER BY created_at DESC LIMIT 500`
+        ),
+        db.all<{
+          id: string;
+          user_id: string;
+          type: string;
+          amount_bdt: number;
+          status: string;
+          payload_json: string;
+          created_at: number;
+        }>(
+          `SELECT id, user_id, type, amount_bdt, status, payload_json, created_at FROM wallet_transactions WHERE type = 'deposit' ORDER BY created_at DESC LIMIT 500`
+        ),
+        db.all<{
+          id: string;
+          referrer_uid: string;
+          referred_uid: string;
+          status: string;
+          created_at: number;
+        }>(
+          `SELECT id, referrer_uid, referred_uid, status, created_at FROM referrals ORDER BY created_at DESC LIMIT 500`
+        ),
       ]);
+
+      const userLabelById = new Map<string, string>();
+      const usersByIp = new Map<string, typeof allUserRows>();
+      for (const u of allUserRows) {
+        const identifier = u.email || extractPublicPhone(u.phone_e164) || u.uid;
+        userLabelById.set(u.uid, `${u.display_name || 'User'} (${identifier})`);
+        const ip = String(u.last_login_ip || '').trim();
+        if (ip && ip !== 'unknown') {
+          const list = usersByIp.get(ip) || [];
+          list.push(u);
+          usersByIp.set(ip, list);
+        }
+      }
+
+      // 1. Suspicious Account Activity (shared login IP across multiple accounts or suspended accounts with repeated attempts)
+      const suspiciousAccounts: Array<{
+        uid: string;
+        userName: string;
+        identifier: string;
+        severity: 'high' | 'medium';
+        reason: string;
+        details: string;
+        lastSeenAt: number;
+      }> = [];
+      for (const [ip, list] of usersByIp.entries()) {
+        if (list.length >= 2) {
+          for (const u of list.slice(0, 6)) {
+            suspiciousAccounts.push({
+              uid: u.uid,
+              userName: u.display_name || 'User',
+              identifier: u.email || extractPublicPhone(u.phone_e164) || u.uid,
+              severity: list.length >= 3 ? 'high' : 'medium',
+              reason: `Shared Login IP (${list.length} accounts)`,
+              details: `IP ${ip} shared across ${list.length} distinct user accounts`,
+              lastSeenAt: Number(u.last_login_at || 0),
+            });
+          }
+        }
+      }
+      for (const a of attemptRows) {
+        if (Number(a.attempts || 0) >= 3 || Number(a.locked_until || 0) > now) {
+          suspiciousAccounts.push({
+            uid: a.attempt_key,
+            userName: 'Auth Target',
+            identifier: a.attempt_key,
+            severity: Number(a.locked_until || 0) > now ? 'high' : 'medium',
+            reason: Number(a.locked_until || 0) > now ? 'Rate-Limit Lockout Triggered' : 'Repeated Failed Auth Attempts',
+            details: `${Number(a.attempts || 0)} failed attempt(s) recorded in current window`,
+            lastSeenAt: Number(a.window_start || 0),
+          });
+        }
+      }
+
+      // 2. Repeated / Rejected Payment Attempts (by sender number or user)
+      const paymentBuckets = new Map<
+        string,
+        {
+          key: string;
+          label: string;
+          totalCount: number;
+          rejectedCount: number;
+          recent24hCount: number;
+          totalAmountBdt: number;
+          lastAttemptAt: number;
+        }
+      >();
+      const pushPaymentRecord = (
+        key: string,
+        label: string,
+        status: string,
+        amountBdt: number,
+        createdAt: number
+      ) => {
+        if (!key) return;
+        const cur = paymentBuckets.get(key) || {
+          key,
+          label,
+          totalCount: 0,
+          rejectedCount: 0,
+          recent24hCount: 0,
+          totalAmountBdt: 0,
+          lastAttemptAt: 0,
+        };
+        cur.totalCount += 1;
+        if (status === 'Rejected') cur.rejectedCount += 1;
+        if (createdAt >= oneDayAgo) cur.recent24hCount += 1;
+        cur.totalAmountBdt += Number(amountBdt || 0);
+        if (createdAt > cur.lastAttemptAt) cur.lastAttemptAt = createdAt;
+        paymentBuckets.set(key, cur);
+      };
+      for (const p of paymentRows) {
+        const parsedPay = parseJsonSafe<{ senderNumber?: string; amountBdt?: number }>(p.payload_json, {});
+        const sender = String(parsedPay.senderNumber || '').trim();
+        const payAmount = Number(parsedPay.amountBdt || 0);
+        if (sender) {
+          pushPaymentRecord(`sender:${sender}`, `Sender ${sender}`, p.status, payAmount, Number(p.created_at || 0));
+        }
+        pushPaymentRecord(
+          `user:${p.customer_id}`,
+          userLabelById.get(p.customer_id) || p.customer_id,
+          p.status,
+          payAmount,
+          Number(p.created_at || 0)
+        );
+      }
+      for (const tx of walletTxRows) {
+        const parsed = parseJsonSafe<{ senderNumber?: string }>(tx.payload_json, {});
+        const sender = String(parsed.senderNumber || '').trim();
+        if (sender) {
+          pushPaymentRecord(`sender:${sender}`, `Sender ${sender}`, tx.status, tx.amount_bdt, Number(tx.created_at || 0));
+        }
+        pushPaymentRecord(
+          `user:${tx.user_id}`,
+          userLabelById.get(tx.user_id) || tx.user_id,
+          tx.status,
+          tx.amount_bdt,
+          Number(tx.created_at || 0)
+        );
+      }
+      const repeatedPaymentAttempts = Array.from(paymentBuckets.values())
+        .filter((b) => b.rejectedCount >= 2 || b.recent24hCount >= 3)
+        .sort((a, b) => b.rejectedCount - a.rejectedCount || b.recent24hCount - a.recent24hCount)
+        .slice(0, 30)
+        .map((b) => ({
+          ...b,
+          reason:
+            b.rejectedCount >= 2
+              ? `${b.rejectedCount} rejected payment submissions`
+              : `${b.recent24hCount} payment attempts within 24h`,
+        }));
+
+      // 3. Abnormal Referral Activity (flagged referrals or high-velocity burst within 24h)
+      const refByReferrer = new Map<
+        string,
+        { total: number; last24h: number; flagged: number; lastAt: number }
+      >();
+      for (const r of allRefRows) {
+        const cur = refByReferrer.get(r.referrer_uid) || { total: 0, last24h: 0, flagged: 0, lastAt: 0 };
+        cur.total += 1;
+        if (Number(r.created_at || 0) >= oneDayAgo) cur.last24h += 1;
+        if (r.status === 'flagged') cur.flagged += 1;
+        if (Number(r.created_at || 0) > cur.lastAt) cur.lastAt = Number(r.created_at || 0);
+        refByReferrer.set(r.referrer_uid, cur);
+      }
+      const abnormalReferrals = Array.from(refByReferrer.entries())
+        .filter(([, stats]) => stats.flagged > 0 || stats.last24h >= 3)
+        .map(([referrerId, stats]) => ({
+          referrerId,
+          referrerLabel: userLabelById.get(referrerId) || referrerId,
+          totalReferrals: stats.total,
+          last24hCount: stats.last24h,
+          flaggedCount: stats.flagged,
+          lastReferralAt: stats.lastAt,
+          reason:
+            stats.flagged > 0
+              ? `${stats.flagged} flagged referral(s) detected`
+              : `High referral burst (${stats.last24h} in 24h)`,
+        }))
+        .sort((a, b) => b.flaggedCount - a.flaggedCount || b.last24hCount - a.last24hCount)
+        .slice(0, 30);
 
       res.json({
         ok: true,
@@ -4169,6 +4401,9 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         })),
         deletionRequests: deletionRows.map((r) => parseJsonSafe(r.payload_json, {})),
         flaggedReferrals: flaggedRefRows.map((r) => parseJsonSafe(r.payload_json, {})),
+        suspiciousAccounts: suspiciousAccounts.slice(0, 40),
+        repeatedPaymentAttempts,
+        abnormalReferrals,
       });
     } catch (err) {
       handleRouteError(res, err, 'Failed to load security telemetry.');
@@ -4709,6 +4944,297 @@ export function createPhoneAuthAndAppRouter(): express.Router {
     }
   });
 
+  // Public Persistent Media Serving (Package Logos & Artwork stored in D1 / SQLite)
+  router.get('/media/:id', async (req, res) => {
+    try {
+      const mediaId = String(req.params.id || '').trim();
+      if (!/^[a-zA-Z0-9_-]{6,96}$/.test(mediaId)) {
+        res.status(400).json({ ok: false, error: 'Invalid media ID.' });
+        return;
+      }
+      const db = await getAppDatabase();
+      const row = await db.first<{ mime_type: string; data_base64: string; byte_size: number }>(
+        'SELECT mime_type, data_base64, byte_size FROM media_assets WHERE id = ? LIMIT 1',
+        [mediaId]
+      );
+      if (!row || !row.data_base64) {
+        res.status(404).json({ ok: false, error: 'Media asset not found.' });
+        return;
+      }
+      const binary = Buffer.from(row.data_base64, 'base64');
+      res.setHeader('Content-Type', row.mime_type || 'application/octet-stream');
+      res.setHeader('Content-Length', String(binary.length));
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.status(200).send(binary);
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to serve media asset.');
+    }
+  });
+
+  // Super Admin Persistent Image/Logo Upload (PNG, JPG, JPEG, WebP with strict magic-byte & size validation)
+  router.post('/admin/media/upload', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const body = (req.body || {}) as { dataUrl?: string };
+      const rawDataUrl = String(body.dataUrl || '').trim();
+      const match = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/i.exec(rawDataUrl);
+      if (!match) {
+        res.status(400).json({
+          ok: false,
+          error: 'Only valid PNG, JPG, JPEG, or WebP images are allowed.',
+        });
+        return;
+      }
+      const normalizedMime = match[1].toLowerCase() === 'image/jpg' ? 'image/jpeg' : match[1].toLowerCase();
+      const base64Payload = match[2];
+      const binary = Buffer.from(base64Payload, 'base64');
+      if (binary.length < 16) {
+        res.status(400).json({ ok: false, error: 'Uploaded image file is empty or corrupted.' });
+        return;
+      }
+      if (binary.length > 2 * 1024 * 1024) {
+        res.status(413).json({ ok: false, error: 'Image file exceeds the maximum 2MB size limit.' });
+        return;
+      }
+
+      // Magic-byte signature validation prevents disguised HTML/SVG/script uploads
+      const isPng =
+        binary.length >= 8 &&
+        binary[0] === 0x89 &&
+        binary[1] === 0x50 &&
+        binary[2] === 0x4e &&
+        binary[3] === 0x47;
+      const isJpeg = binary.length >= 3 && binary[0] === 0xff && binary[1] === 0xd8 && binary[2] === 0xff;
+      const isWebp =
+        binary.length >= 12 &&
+        binary.subarray(0, 4).toString('ascii') === 'RIFF' &&
+        binary.subarray(8, 12).toString('ascii') === 'WEBP';
+
+      const validMagic =
+        (normalizedMime === 'image/png' && isPng) ||
+        (normalizedMime === 'image/jpeg' && isJpeg) ||
+        (normalizedMime === 'image/webp' && isWebp);
+
+      if (!validMagic) {
+        res.status(400).json({
+          ok: false,
+          error: 'Image binary signature does not match declared PNG/JPEG/WebP format.',
+        });
+        return;
+      }
+
+      const id = generateSecureId('media', 12);
+      const now = Date.now();
+      await admin.db.run(
+        `INSERT INTO media_assets (id, mime_type, byte_size, data_base64, uploaded_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [id, normalizedMime, binary.length, base64Payload, admin.user.uid, now]
+      );
+
+      await insertAuditLog(
+        admin.db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        'MEDIA_UPLOADED',
+        'media_assets',
+        id,
+        `Uploaded package logo/image (${normalizedMime}, ${Math.round(binary.length / 1024)} KB)`,
+        { newValue: `/api/media/${id}` }
+      );
+
+      res.status(201).json({
+        ok: true,
+        id,
+        url: `/api/media/${id}`,
+        mimeType: normalizedMime,
+        byteSize: binary.length,
+        createdAt: now,
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to upload media asset.');
+    }
+  });
+
+  router.delete('/admin/media/:id', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const mediaId = String(req.params.id || '').trim();
+      if (!/^[a-zA-Z0-9_-]{6,96}$/.test(mediaId)) {
+        res.status(400).json({ ok: false, error: 'Invalid media ID.' });
+        return;
+      }
+      await admin.db.run('DELETE FROM media_assets WHERE id = ?', [mediaId]);
+      await insertAuditLog(
+        admin.db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        'MEDIA_DELETED',
+        'media_assets',
+        mediaId,
+        `Deleted uploaded media asset ${mediaId}`
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to delete media asset.');
+    }
+  });
+
+  // Safe Sanitized Full Database Backup Export (Never includes password hashes, recovery hashes, or session token hashes)
+  router.get('/admin/backup/export', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db } = admin;
+      const [
+        userRows,
+        walletRows,
+        walletTxRows,
+        orderRows,
+        paymentRows,
+        withdrawalRows,
+        referralRows,
+        paymentMethodRows,
+        overrideRows,
+        announcementRows,
+        ticketRows,
+        reviewRows,
+        auditRows,
+        adStatRows,
+        mediaMetaRows,
+      ] = await Promise.all([
+        db.all<{
+          uid: string;
+          display_name: string;
+          email: string;
+          phone_e164: string | null;
+          auth_method: string;
+          role: string;
+          status: string;
+          referral_code: string;
+          referred_by: string;
+          promotional_credits: number;
+          last_login_at: number;
+          created_at: number;
+          updated_at: number;
+        }>(
+          `SELECT uid, display_name, email, phone_e164, auth_method, role, status, referral_code, referred_by,
+                  promotional_credits, last_login_at, created_at, updated_at
+           FROM users ORDER BY created_at DESC LIMIT 5000`
+        ),
+        db.all<Record<string, unknown>>('SELECT * FROM wallet_accounts ORDER BY updated_at DESC LIMIT 5000'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM wallet_transactions ORDER BY created_at DESC LIMIT 5000'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM orders ORDER BY created_at DESC LIMIT 5000'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM payments ORDER BY created_at DESC LIMIT 5000'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM withdrawals ORDER BY created_at DESC LIMIT 5000'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM referrals ORDER BY created_at DESC LIMIT 5000'),
+        db.all<Record<string, unknown>>('SELECT * FROM payment_methods ORDER BY sort_order ASC LIMIT 100'),
+        db.all<{ collection: string; doc_id: string; deleted: number; payload_json: string; updated_at: number }>(
+          'SELECT collection, doc_id, deleted, payload_json, updated_at FROM catalog_overrides ORDER BY collection ASC, updated_at DESC LIMIT 2000'
+        ),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM announcements ORDER BY created_at DESC LIMIT 500'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM support_tickets ORDER BY created_at DESC LIMIT 1000'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM reviews ORDER BY created_at DESC LIMIT 1000'),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM audit_logs ORDER BY created_at DESC LIMIT 2000'),
+        db.all<Record<string, unknown>>('SELECT * FROM ad_stats ORDER BY last_event_at DESC LIMIT 500'),
+        db.all<{ id: string; mime_type: string; byte_size: number; uploaded_by: string; created_at: number }>(
+          'SELECT id, mime_type, byte_size, uploaded_by, created_at FROM media_assets ORDER BY created_at DESC LIMIT 1000'
+        ),
+      ]);
+
+      const now = Date.now();
+      await insertAuditLog(
+        db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        'DATABASE_BACKUP_EXPORTED',
+        'system',
+        `backup_${now}`,
+        `Exported sanitized full database backup (${userRows.length} users, ${orderRows.length} orders, ${overrideRows.length} catalog overrides)`
+      );
+
+      res.json({
+        ok: true,
+        backup: {
+          platform: 'DIGITAL HUB BD',
+          schemaVersion: '4.0',
+          exportedAt: now,
+          exportedBy: getUserPrimaryIdentifier(admin.user),
+          counts: {
+            users: userRows.length,
+            wallets: walletRows.length,
+            walletTransactions: walletTxRows.length,
+            orders: orderRows.length,
+            payments: paymentRows.length,
+            withdrawals: withdrawalRows.length,
+            referrals: referralRows.length,
+            catalogOverrides: overrideRows.length,
+            auditLogs: auditRows.length,
+            mediaAssets: mediaMetaRows.length,
+          },
+          users: userRows.map((u) => ({
+            uid: u.uid,
+            displayName: u.display_name,
+            email: u.email,
+            phone: extractPublicPhone(u.phone_e164),
+            authMethod: u.auth_method || 'phone',
+            role: resolveUserRole(u.phone_e164, u.email, u.role),
+            status: u.status,
+            referralCode: u.referral_code,
+            referredBy: u.referred_by,
+            promotionalCredits: Number(u.promotional_credits || 0),
+            lastLoginAt: Number(u.last_login_at || 0),
+            createdAt: Number(u.created_at || 0),
+            updatedAt: Number(u.updated_at || 0),
+          })),
+          wallets: walletRows,
+          walletTransactions: walletTxRows.map((r) => parseJsonSafe(r.payload_json, {})),
+          orders: orderRows.map((r) => parseJsonSafe(r.payload_json, {})),
+          payments: paymentRows.map((r) => parseJsonSafe(r.payload_json, {})),
+          withdrawals: withdrawalRows.map((r) => parseJsonSafe(r.payload_json, {})),
+          referrals: referralRows.map((r) => parseJsonSafe(r.payload_json, {})),
+          paymentMethods: paymentMethodRows,
+          catalogOverrides: overrideRows.map((r) => ({
+            collection: r.collection,
+            docId: r.doc_id,
+            deleted: Boolean(r.deleted),
+            updatedAt: Number(r.updated_at || 0),
+            data: parseJsonSafe(r.payload_json, {}),
+          })),
+          announcements: announcementRows.map((r) => parseJsonSafe(r.payload_json, {})),
+          tickets: ticketRows.map((r) => parseJsonSafe(r.payload_json, {})),
+          reviews: reviewRows.map((r) => parseJsonSafe(r.payload_json, {})),
+          auditLogs: auditRows.map((r) => parseJsonSafe(r.payload_json, {})),
+          adStats: adStatRows,
+          mediaAssets: mediaMetaRows.map((m) => ({
+            id: m.id,
+            url: `/api/media/${m.id}`,
+            mimeType: m.mime_type,
+            byteSize: Number(m.byte_size || 0),
+            uploadedBy: m.uploaded_by,
+            createdAt: Number(m.created_at || 0),
+          })),
+        },
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to generate database backup.');
+    }
+  });
+
+  const isSafePackageAssetUrl = (val: unknown): boolean => {
+    if (val === undefined || val === null || val === '') return true;
+    const s = String(val).trim();
+    if (!s) return true;
+    return (
+      s.startsWith('/api/media/') ||
+      s.startsWith('/assets/') ||
+      s.startsWith('https://') ||
+      /^data:image\/(?:png|jpeg|jpg|webp);base64,/i.test(s)
+    );
+  };
+
   router.post('/admin/catalog/:collection', async (req, res) => {
     try {
       const admin = await requireAdminSession(req, res);
@@ -4729,20 +5255,169 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         res.status(400).json({ ok: false, error: 'Unsupported collection.' });
         return;
       }
-      const body = (req.body || {}) as { id?: string; data?: Record<string, unknown> };
+      const body = (req.body || {}) as {
+        id?: string;
+        data?: Record<string, unknown>;
+        auditAction?: string;
+        auditReason?: string;
+        previousSnapshot?: Record<string, unknown>;
+      };
       const docId = String(body.id || '').trim().slice(0, 128);
       if (!docId || !body.data) {
         res.status(400).json({ ok: false, error: 'Missing doc id or data.' });
         return;
       }
       const now = Date.now();
+      let payloadToSave: Record<string, unknown> = { ...body.data, id: docId, updatedAt: now };
+
+      if (col === 'products') {
+        const existingRow = await admin.db.first<{ payload_json: string; deleted: number }>(
+          'SELECT payload_json, deleted FROM catalog_overrides WHERE collection = ? AND doc_id = ? LIMIT 1',
+          ['products', docId]
+        );
+        const existingData =
+          existingRow && Number(existingRow.deleted) === 0
+            ? parseJsonSafe<Record<string, unknown>>(existingRow.payload_json, {})
+            : body.previousSnapshot && typeof body.previousSnapshot === 'object'
+              ? body.previousSnapshot
+              : null;
+
+        const titleEn = String(body.data.titleEn || body.data.titleBn || '').trim();
+        const titleBn = String(body.data.titleBn || body.data.titleEn || '').trim();
+        if (titleEn.length < 2) {
+          res.status(400).json({ ok: false, error: 'Package name must be at least 2 characters.' });
+          return;
+        }
+        const priceBdt = Number(body.data.priceBdt);
+        if (!Number.isFinite(priceBdt) || priceBdt < 1 || priceBdt > 10000000) {
+          res.status(400).json({ ok: false, error: 'Package price must be a valid amount of at least ৳1.' });
+          return;
+        }
+        const rawOrigPrice = Number(body.data.originalPriceBdt ?? body.data.regularPriceBdt ?? 0);
+        const originalPriceBdt = Number.isFinite(rawOrigPrice) && rawOrigPrice > 0 ? Math.round(rawOrigPrice) : 0;
+        const cleanPriceBdt = Math.round(priceBdt);
+        const computedDiscount =
+          originalPriceBdt > cleanPriceBdt
+            ? Math.min(95, Math.max(1, Math.round(((originalPriceBdt - cleanPriceBdt) / originalPriceBdt) * 100)))
+            : 0;
+
+        if (
+          !isSafePackageAssetUrl(body.data.customLogoUrl) ||
+          !isSafePackageAssetUrl(body.data.imageUrl) ||
+          !isSafePackageAssetUrl(body.data.bannerUrl)
+        ) {
+          res.status(400).json({
+            ok: false,
+            error: 'Invalid package logo or image URL. Upload a valid PNG, JPG, JPEG, or WebP image.',
+          });
+          return;
+        }
+
+        const existingCreatedAt =
+          typeof existingData?.createdAt === 'number' && existingData.createdAt > 0
+            ? existingData.createdAt
+            : typeof body.data.createdAt === 'number' && body.data.createdAt > 0
+              ? body.data.createdAt
+              : now;
+
+        const featuresList = Array.isArray(body.data.features)
+          ? body.data.features
+              .map((f) => String(f || '').trim().slice(0, 200))
+              .filter(Boolean)
+              .slice(0, 30)
+          : undefined;
+
+        payloadToSave = {
+          ...body.data,
+          id: docId,
+          titleEn: titleEn.slice(0, 160),
+          titleBn: titleBn.slice(0, 160),
+          priceBdt: cleanPriceBdt,
+          originalPriceBdt,
+          regularPriceBdt: originalPriceBdt || cleanPriceBdt,
+          discountPercent: computedDiscount,
+          currency: 'BDT',
+          ...(featuresList ? { features: featuresList } : {}),
+          createdAt: existingCreatedAt,
+          updatedAt: now,
+        };
+
+        await admin.db.run(
+          `INSERT INTO catalog_overrides (collection, doc_id, deleted, payload_json, updated_at)
+           VALUES (?, ?, 0, ?, ?)
+           ON CONFLICT(collection, doc_id) DO UPDATE SET deleted = 0, payload_json = excluded.payload_json, updated_at = excluded.updated_at`,
+          [col, docId, JSON.stringify(payloadToSave), now]
+        );
+
+        const prevPrice = existingData ? Number(existingData.priceBdt || 0) : 0;
+        const prevLogo = existingData ? String(existingData.customLogoUrl || existingData.imageUrl || '') : '';
+        const nextLogo = String(payloadToSave.customLogoUrl || payloadToSave.imageUrl || '');
+        const prevActive = existingData ? Boolean(existingData.active) : true;
+        const nextActive = Boolean(payloadToSave.active);
+
+        let auditType = 'PACKAGE_UPDATED';
+        let prevVal = existingData ? String(existingData.titleEn || docId) : '';
+        let newVal = `${titleEn} (৳${cleanPriceBdt})`;
+        let summary = `Updated package "${titleEn}" (ID: ${docId})`;
+
+        if (body.auditAction === 'create' || (!existingData && body.auditAction !== 'duplicate')) {
+          auditType = 'PACKAGE_CREATED';
+          prevVal = '';
+          summary = `Created new package "${titleEn}" at ৳${cleanPriceBdt}`;
+        } else if (body.auditAction === 'duplicate') {
+          auditType = 'PACKAGE_DUPLICATED';
+          summary = `Duplicated package into "${titleEn}" (${docId})`;
+        } else if (body.auditAction === 'price_change' || (existingData && prevPrice > 0 && prevPrice !== cleanPriceBdt)) {
+          auditType = 'PACKAGE_PRICE_CHANGED';
+          prevVal = `৳${prevPrice}`;
+          newVal = `৳${cleanPriceBdt}${originalPriceBdt > cleanPriceBdt ? ` (was ৳${originalPriceBdt}, -${computedDiscount}%)` : ''}`;
+          summary = `Changed price of "${titleEn}" from ৳${prevPrice} to ৳${cleanPriceBdt}`;
+        } else if (body.auditAction === 'logo_change' || (existingData && prevLogo !== nextLogo)) {
+          auditType = 'PACKAGE_LOGO_CHANGED';
+          prevVal = prevLogo.slice(0, 120);
+          newVal = nextLogo.slice(0, 120);
+          summary = `Updated package logo for "${titleEn}"`;
+        } else if (body.auditAction === 'status_change' || (existingData && prevActive !== nextActive)) {
+          auditType = 'PACKAGE_STATUS_CHANGED';
+          prevVal = prevActive ? 'active' : 'inactive';
+          newVal = nextActive ? 'active' : 'inactive';
+          summary = `${nextActive ? 'Activated' : 'Deactivated'} package "${titleEn}"`;
+        } else if (body.auditAction === 'duration_change') {
+          auditType = 'PACKAGE_DURATION_CHANGED';
+          newVal = String(payloadToSave.durationLabelEn || payloadToSave.validityEn || '');
+          summary = `Updated duration for "${titleEn}"`;
+        } else if (body.auditAction === 'features_change') {
+          auditType = 'PACKAGE_FEATURES_CHANGED';
+          newVal = `${featuresList?.length || 0} feature(s)`;
+          summary = `Updated features list for "${titleEn}"`;
+        }
+
+        await insertAuditLog(
+          admin.db,
+          admin.user.uid,
+          getUserPrimaryIdentifier(admin.user),
+          auditType,
+          'products',
+          docId,
+          summary,
+          {
+            previousValue: prevVal,
+            newValue: newVal,
+            reason: String(body.auditReason || '').trim().slice(0, 240),
+          }
+        );
+
+        res.json({ ok: true, id: docId, data: payloadToSave });
+        return;
+      }
+
       await admin.db.run(
         `INSERT INTO catalog_overrides (collection, doc_id, deleted, payload_json, updated_at)
          VALUES (?, ?, 0, ?, ?)
          ON CONFLICT(collection, doc_id) DO UPDATE SET deleted = 0, payload_json = excluded.payload_json, updated_at = excluded.updated_at`,
-        [col, docId, JSON.stringify({ ...body.data, id: docId, updatedAt: now }), now]
+        [col, docId, JSON.stringify(payloadToSave), now]
       );
-      if (col === 'settings' || col === 'advertisements' || col === 'banners' || col === 'managedAdUnits') {
+      if (col === 'settings' || col === 'advertisements' || col === 'banners' || col === 'managedAdUnits' || col === 'categories') {
         await insertAuditLog(
           admin.db,
           admin.user.uid,
@@ -4754,7 +5429,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           { newValue: String((body.data as { siteName?: string; titleEn?: string; titleBn?: string }).siteName || (body.data as { titleEn?: string }).titleEn || docId) }
         );
       }
-      res.json({ ok: true });
+      res.json({ ok: true, id: docId });
     } catch (err) {
       handleRouteError(res, err, 'Failed to save catalog item.');
     }
@@ -4767,6 +5442,12 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const col = String(req.params.collection || '').trim();
       const docId = String(req.params.docId || '').trim();
       const now = Date.now();
+      const existingRow = await admin.db.first<{ payload_json: string }>(
+        'SELECT payload_json FROM catalog_overrides WHERE collection = ? AND doc_id = ? LIMIT 1',
+        [col, docId]
+      );
+      const existingPayload = existingRow ? parseJsonSafe<Record<string, unknown>>(existingRow.payload_json, {}) : null;
+
       await admin.db.run(
         `INSERT INTO catalog_overrides (collection, doc_id, deleted, payload_json, updated_at)
          VALUES (?, ?, 1, '{}', ?)
@@ -4777,10 +5458,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         admin.db,
         admin.user.uid,
         getUserPrimaryIdentifier(admin.user),
-        `${col.toUpperCase()}_DELETED`,
+        col === 'products' ? 'PACKAGE_DELETED' : `${col.toUpperCase()}_DELETED`,
         col,
         docId,
-        `Deleted ${col}/${docId}`
+        col === 'products'
+          ? `Deleted package "${String(existingPayload?.titleEn || docId)}" (${docId})`
+          : `Deleted ${col}/${docId}`,
+        {
+          previousValue: existingPayload ? String(existingPayload.titleEn || docId) : docId,
+        }
       );
       res.json({ ok: true });
     } catch (err) {

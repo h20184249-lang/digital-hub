@@ -148,8 +148,12 @@ export function CapCutRechargeSection({
   onOrderPackage,
   onAddToCart,
 }: CapCutRechargeSectionProps) {
-  const catalogProduct =
-    products.find((p) => p.id === CAPCUT_RECHARGE_PRODUCT_ID && p.active) || FALLBACK_CAPCUT_PRODUCT;
+  const existingDbProduct = products.find((p) => p.id === CAPCUT_RECHARGE_PRODUCT_ID);
+  if (existingDbProduct && !existingDbProduct.active) {
+    return null;
+  }
+  const catalogProduct = existingDbProduct || FALLBACK_CAPCUT_PRODUCT;
+  const activeLogoSrc = catalogProduct.customLogoUrl || '/assets/capcut/capcut-logo.png';
 
   const resolvePackage = (plan: CapCutPlanCardMeta): ProductPackage => {
     const fromCatalog = (catalogProduct.packages || []).find((p) => p.id === plan.packageId);
@@ -179,7 +183,7 @@ export function CapCutRechargeSection({
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-11 h-11 rounded-2xl bg-white dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-700 shadow-sm p-1.5 flex items-center justify-center shrink-0">
             <img
-              src="/assets/capcut/capcut-logo.png"
+              src={activeLogoSrc}
               alt="CapCut Official Logo"
               className="w-full h-full object-contain rounded-lg"
             />
@@ -187,11 +191,11 @@ export function CapCutRechargeSection({
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-lg sm:text-xl font-extrabold text-[#172033] dark:text-slate-50 tracking-tight leading-snug">
-                CapCut Premium Recharge Package
+                {lang === 'bn' ? catalogProduct.titleBn : catalogProduct.titleEn}
               </h2>
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/70 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
                 <ShieldCheck className="w-3 h-3" />
-                {lang === 'bn' ? 'অফিশিয়াল প্যাক' : 'Official Pro'}
+                {catalogProduct.badge || (lang === 'bn' ? 'অফিশিয়াল প্যাক' : 'Official Pro')}
               </span>
             </div>
             <p className="text-xs sm:text-sm text-[#64748B] dark:text-slate-400 mt-0.5">
@@ -227,7 +231,7 @@ export function CapCutRechargeSection({
                 {/* Top-Left Official CapCut Logo Badge */}
                 <div className="absolute top-3 left-3 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-white/95 backdrop-blur-xs shadow-md border border-white/80">
                   <img
-                    src="/assets/capcut/capcut-logo.png"
+                    src={activeLogoSrc}
                     alt="CapCut"
                     className="w-5 h-5 object-contain rounded-xs"
                   />

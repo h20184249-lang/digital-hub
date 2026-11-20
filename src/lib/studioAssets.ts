@@ -104,7 +104,12 @@ const STUDIO_BUNDLE_SET = new Set<string>([
 export function isCustomUploadedProductImage(url?: string): boolean {
   if (!url) return false;
   if (STUDIO_BUNDLE_SET.has(url)) return false;
-  return url.startsWith('data:') || url.startsWith('https://') || url.startsWith('/assets/');
+  return (
+    url.startsWith('/api/media/') ||
+    url.startsWith('data:') ||
+    url.startsWith('https://') ||
+    url.startsWith('/assets/')
+  );
 }
 
 export function resolveStudioImage(

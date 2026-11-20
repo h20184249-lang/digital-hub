@@ -54,6 +54,7 @@ export type AppRoute =
   | 'telegram-stars'
   | 'ai-marketplace'
   | 'software-store'
+  | 'mobile-apps'
   | 'digital-products'
   | 'graphic-design'
   | 'social-media'
@@ -214,6 +215,14 @@ export interface Product {
   benefitsBn?: string;
   benefitsEn?: string;
   sectionTag?: ProductSectionTag;
+  badge?: string;
+  currency?: 'BDT';
+  regularPriceBdt?: number;
+  durationValue?: number;
+  durationUnit?: 'days' | 'months' | 'years' | 'lifetime';
+  durationLabelBn?: string;
+  durationLabelEn?: string;
+  features?: string[];
   imageUrl: string;
   bannerUrl?: string;
   customLogoUrl?: string;
@@ -736,6 +745,34 @@ export interface AdminSecurityPayload {
   }>;
   deletionRequests: AccountDeletionRequest[];
   flaggedReferrals: Referral[];
+  suspiciousAccounts?: Array<{
+    uid: string;
+    userName: string;
+    identifier: string;
+    severity: 'high' | 'medium';
+    reason: string;
+    details: string;
+    lastSeenAt: number;
+  }>;
+  repeatedPaymentAttempts?: Array<{
+    key: string;
+    label: string;
+    totalCount: number;
+    rejectedCount: number;
+    recent24hCount: number;
+    totalAmountBdt: number;
+    lastAttemptAt: number;
+    reason: string;
+  }>;
+  abnormalReferrals?: Array<{
+    referrerId: string;
+    referrerLabel: string;
+    totalReferrals: number;
+    last24hCount: number;
+    flaggedCount: number;
+    lastReferralAt: number;
+    reason: string;
+  }>;
 }
 
 export interface ServerAdAnalytics {

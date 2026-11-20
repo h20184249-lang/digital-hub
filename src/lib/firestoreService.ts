@@ -1653,12 +1653,13 @@ export async function adminDeletePaymentMethod(id: string): Promise<void> {
 }
 
 export async function adminSendNotification(params: {
-  targetUid: string;
+  targetUid?: string;
+  targetUids?: string[];
   titleBn: string;
   titleEn: string;
   messageBn: string;
   messageEn: string;
-  type?: 'order' | 'payment' | 'wallet' | 'referral' | 'system';
+  type?: 'order' | 'payment' | 'wallet' | 'referral' | 'system' | 'promo';
 }): Promise<{ recipientCount: number }> {
   const res = await apiJson<{ ok: true; recipientCount: number }>('/api/admin/notifications/send', {
     method: 'POST',
@@ -1666,6 +1667,128 @@ export async function adminSendNotification(params: {
   });
   notifyDashboardInvalidation();
   return { recipientCount: res.recipientCount || 0 };
+}
+
+export async function optimizePackageLogoFile(file: File, maxDim = 512): Promise<string> {
+  const allowedMimes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']);
+  const mime = (file.type || '').toLowerCase();
+  const extMatch = /\.(png|jpe?g|webp)$/i.test(file.name || '');
+  if (!allowedMimes.has(mime) && !extMatch) {
+    throw new Error('Only PNG, JPG, JPEG, or WebP images are supported.');
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    throw new Error('Selected image must be 5MB or smaller.');
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      const img = new Image();
+      img.onload = () => {
+        const ratio = Math.min(1, maxDim / Math.max(img.width || 1, img.height || 1));
+        const width = Math.max(1, Math.round((img.width || 1) * ratio));
+        const height = Math.max(1, Math.round((img.height || 1) * ratio));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        const outputMime =
+          mime === 'image/png' ? 'image/png' : mime === 'image/webp' ? 'image/webp' : 'image/jpeg';
+        const optimized =
+          outputMime === 'image/png'
+            ? canvas.toDataURL('image/png')
+            : canvas.toDataURL(outputMime, 0.88);
+        resolve(optimized);
+      };
+      img.onerror = () => reject(new Error('Failed to decode selected image file.'));
+      img.src = dataUrl;
+    };
+    reader.onerror = () => reject(new Error('Failed to read selected image file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export async function adminUploadMediaAsset(dataUrl: string): Promise<{
+  id: string;
+  url: string;
+  mimeType: string;
+  byteSize: number;
+}> {
+  const res = await apiJson<{
+    ok: true;
+    id: string;
+    url: string;
+    mimeType: string;
+    byteSize: number;
+  }>('/api/admin/media/upload', {
+    method: 'POST',
+    body: { dataUrl },
+  });
+  notifyDashboardInvalidation();
+  return {
+    id: res.id,
+    url: res.url,
+    mimeType: res.mimeType,
+    byteSize: res.byteSize,
+  };
+}
+
+export async function adminDeleteMediaAsset(mediaId: string): Promise<void> {
+  await apiJson(`/api/admin/media/${encodeURIComponent(mediaId)}`, {
+    method: 'DELETE',
+  });
+  notifyDashboardInvalidation();
+}
+
+export async function adminFetchDatabaseBackup(): Promise<Record<string, unknown>> {
+  const res = await apiJson<{ ok: true; backup: Record<string, unknown> }>('/api/admin/backup/export', {
+    method: 'GET',
+  });
+  notifyDashboardInvalidation();
+  return res.backup;
+}
+
+export function exportRecordsToCsv(
+  filename: string,
+  headers: string[],
+  rows: Array<Array<string | number | boolean | null | undefined>>
+): void {
+  const escapeCell = (val: string | number | boolean | null | undefined): string => {
+    const str = val === null || val === undefined ? '' : String(val);
+    if (/[",\n\r]/.test(str)) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+  const csvLines = [headers.map(escapeCell).join(','), ...rows.map((r) => r.map(escapeCell).join(','))];
+  const blob = new Blob(['\uFEFF' + csvLines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename.endsWith('.csv') ? filename : `${filename}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function downloadJsonFile(filename: string, payload: unknown): void {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename.endsWith('.json') ? filename : `${filename}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function adminFetchSecurityOverview(): Promise<AdminSecurityPayload> {
@@ -1864,12 +1987,24 @@ export async function adminDeleteReview(reviewId: string): Promise<void> {
   notifyCatalogInvalidation();
 }
 
-async function saveCatalogOverride(collectionName: string, id: string, data: Record<string, unknown>): Promise<void> {
+async function saveCatalogOverride(
+  collectionName: string,
+  id: string,
+  data: Record<string, unknown>,
+  extra?: { auditAction?: string; auditReason?: string; previousSnapshot?: Record<string, unknown> }
+): Promise<void> {
   await apiJson(`/api/admin/catalog/${encodeURIComponent(collectionName)}`, {
     method: 'POST',
-    body: { id, data },
+    body: {
+      id,
+      data,
+      ...(extra?.auditAction ? { auditAction: extra.auditAction } : {}),
+      ...(extra?.auditReason ? { auditReason: extra.auditReason } : {}),
+      ...(extra?.previousSnapshot ? { previousSnapshot: extra.previousSnapshot } : {}),
+    },
   });
   notifyCatalogInvalidation();
+  notifyDashboardInvalidation();
 }
 
 async function deleteCatalogOverride(collectionName: string, docId: string): Promise<void> {
@@ -1877,6 +2012,7 @@ async function deleteCatalogOverride(collectionName: string, docId: string): Pro
     method: 'DELETE',
   });
   notifyCatalogInvalidation();
+  notifyDashboardInvalidation();
 }
 
 export async function adminSaveCategory(cat: Category, _isNew: boolean): Promise<void> {
@@ -1887,7 +2023,23 @@ export async function adminDeleteCategory(categoryId: string): Promise<void> {
   await deleteCatalogOverride('categories', categoryId);
 }
 
-export async function adminSaveProduct(prod: Product, _isNew: boolean): Promise<void> {
+export async function adminSaveProduct(
+  prod: Product,
+  isNew: boolean,
+  options?: {
+    auditAction?:
+      | 'create'
+      | 'update'
+      | 'price_change'
+      | 'logo_change'
+      | 'status_change'
+      | 'duration_change'
+      | 'features_change'
+      | 'duplicate';
+    auditReason?: string;
+    previousSnapshot?: Product;
+  }
+): Promise<void> {
   const cleanPackages = (prod.packages || [])
     .filter((pk) => pk.nameEn.trim() && pk.priceBdt > 0)
     .slice(0, 200)
@@ -1911,52 +2063,129 @@ export async function adminSaveProduct(prod: Product, _isNew: boolean): Promise<
           ? 12
           : 100;
 
-  const payload = {
+  const cleanPrice = Math.max(1, Math.round(Number(prod.priceBdt) || 1));
+  const rawOrig = Math.round(Number(prod.originalPriceBdt ?? prod.regularPriceBdt ?? 0) || 0);
+  const cleanOrig = rawOrig > 0 ? rawOrig : 0;
+  const computedDiscount =
+    cleanOrig > cleanPrice
+      ? Math.min(95, Math.max(1, Math.round(((cleanOrig - cleanPrice) / cleanOrig) * 100)))
+      : 0;
+
+  const cleanFeatures = Array.isArray(prod.features)
+    ? prod.features
+        .map((f) => String(f || '').trim().slice(0, 200))
+        .filter(Boolean)
+        .slice(0, 30)
+    : undefined;
+
+  const durationUnit = prod.durationUnit;
+  const durationValue =
+    typeof prod.durationValue === 'number' && Number.isFinite(prod.durationValue) && prod.durationValue > 0
+      ? Math.round(prod.durationValue)
+      : undefined;
+
+  const payload: Record<string, unknown> = {
     id: prod.id,
     categoryId: prod.categoryId,
     subcategoryBn: (prod.subcategoryBn || '').trim().slice(0, 100),
     subcategoryEn: (prod.subcategoryEn || '').trim().slice(0, 100),
     brandKey: (prod.brandKey || '').trim().slice(0, 40),
-    titleBn: prod.titleBn.trim().slice(0, 160),
-    titleEn: prod.titleEn.trim().slice(0, 160),
-    descriptionBn: (prod.descriptionBn || prod.descriptionEn).trim().slice(0, 1500),
-    descriptionEn: (prod.descriptionEn || prod.descriptionBn).trim().slice(0, 1500),
-    priceBdt: Math.max(1, Number(prod.priceBdt) || 1),
-    originalPriceBdt: Number(prod.originalPriceBdt) || 0,
-    discountPercent: Math.min(95, Math.max(0, Number(prod.discountPercent) || 0)),
+    titleBn: (prod.titleBn || prod.titleEn).trim().slice(0, 160),
+    titleEn: (prod.titleEn || prod.titleBn).trim().slice(0, 160),
+    descriptionBn: (prod.descriptionBn || prod.descriptionEn || '').trim().slice(0, 1500),
+    descriptionEn: (prod.descriptionEn || prod.descriptionBn || '').trim().slice(0, 1500),
+    priceBdt: cleanPrice,
+    originalPriceBdt: cleanOrig,
+    regularPriceBdt: cleanOrig || cleanPrice,
+    discountPercent: computedDiscount,
+    currency: 'BDT',
     ...(cleanPackages.length > 0 ? { packages: cleanPackages } : {}),
-    availability: prod.availability,
+    availability: prod.availability || 'in_stock',
     stockCount: cleanStock,
     ...(prod.orderFormType ? { orderFormType: prod.orderFormType } : {}),
-    deliveryDurationBn: prod.deliveryDurationBn.trim().slice(0, 100),
-    deliveryDurationEn: prod.deliveryDurationEn.trim().slice(0, 100),
-    validityBn: (prod.validityBn || '').trim().slice(0, 200),
-    validityEn: (prod.validityEn || '').trim().slice(0, 200),
+    deliveryDurationBn: (prod.deliveryDurationBn || prod.deliveryDurationEn || '৫ - ১৫ মিনিট').trim().slice(0, 100),
+    deliveryDurationEn: (prod.deliveryDurationEn || prod.deliveryDurationBn || '5 - 15 mins').trim().slice(0, 100),
+    validityBn: (prod.durationLabelBn || prod.validityBn || '').trim().slice(0, 200),
+    validityEn: (prod.durationLabelEn || prod.validityEn || '').trim().slice(0, 200),
+    ...(durationUnit ? { durationUnit } : {}),
+    ...(durationValue ? { durationValue } : {}),
+    ...(prod.durationLabelBn ? { durationLabelBn: prod.durationLabelBn.trim().slice(0, 120) } : {}),
+    ...(prod.durationLabelEn ? { durationLabelEn: prod.durationLabelEn.trim().slice(0, 120) } : {}),
     instructionsBn: (prod.instructionsBn || '').trim().slice(0, 1000),
     instructionsEn: (prod.instructionsEn || '').trim().slice(0, 1000),
     termsBn: (prod.termsBn || '').trim().slice(0, 1000),
     termsEn: (prod.termsEn || '').trim().slice(0, 1000),
-    benefitsBn: (prod.benefitsBn || '').trim().slice(0, 1000),
-    benefitsEn: (prod.benefitsEn || '').trim().slice(0, 1000),
+    benefitsBn: (prod.benefitsBn || (cleanFeatures && cleanFeatures.length > 0 ? cleanFeatures.join(' • ') : ''))
+      .trim()
+      .slice(0, 1200),
+    benefitsEn: (prod.benefitsEn || (cleanFeatures && cleanFeatures.length > 0 ? cleanFeatures.join(' • ') : ''))
+      .trim()
+      .slice(0, 1200),
+    ...(cleanFeatures ? { features: cleanFeatures } : {}),
+    ...(prod.badge ? { badge: prod.badge.trim().slice(0, 40) } : { badge: '' }),
     sectionTag: prod.sectionTag || 'standard',
     imageUrl: (prod.imageUrl || '').trim().slice(0, 200000) || '/assets/products/prod_ff_bd_diamonds.jpg',
     ...(prod.bannerUrl ? { bannerUrl: prod.bannerUrl.trim().slice(0, 200000) } : {}),
-    ...(prod.customLogoUrl ? { customLogoUrl: prod.customLogoUrl.trim().slice(0, 200000) } : {}),
+    customLogoUrl: (prod.customLogoUrl || '').trim().slice(0, 200000),
     featured: Boolean(prod.featured),
     ...(typeof prod.sortOrder === 'number' && !Number.isNaN(prod.sortOrder)
       ? { sortOrder: Math.min(1000000, Math.max(0, Math.round(prod.sortOrder))) }
       : {}),
-    active: prod.active,
+    active: Boolean(prod.active),
+    ...(prod.createdAt ? { createdAt: prod.createdAt } : {}),
   };
 
-  await saveCatalogOverride('products', prod.id, payload);
+  await saveCatalogOverride('products', prod.id, payload, {
+    auditAction: options?.auditAction || (isNew ? 'create' : 'update'),
+    auditReason: options?.auditReason,
+    previousSnapshot: options?.previousSnapshot
+      ? (options.previousSnapshot as unknown as Record<string, unknown>)
+      : undefined,
+  });
 }
 
 export async function adminQuickUpdatePackage(
   prod: Product,
-  updates: Partial<Pick<Product, 'active' | 'featured' | 'sectionTag' | 'sortOrder' | 'availability'>>
+  updates: Partial<
+    Pick<
+      Product,
+      | 'active'
+      | 'featured'
+      | 'sectionTag'
+      | 'sortOrder'
+      | 'availability'
+      | 'priceBdt'
+      | 'originalPriceBdt'
+      | 'customLogoUrl'
+      | 'imageUrl'
+      | 'badge'
+      | 'durationValue'
+      | 'durationUnit'
+      | 'durationLabelBn'
+      | 'durationLabelEn'
+      | 'validityBn'
+      | 'validityEn'
+      | 'features'
+      | 'benefitsBn'
+      | 'benefitsEn'
+    >
+  >,
+  auditOptions?: {
+    auditAction?:
+      | 'update'
+      | 'price_change'
+      | 'logo_change'
+      | 'status_change'
+      | 'duration_change'
+      | 'features_change';
+    auditReason?: string;
+  }
 ): Promise<void> {
-  await adminSaveProduct({ ...prod, ...updates }, false);
+  await adminSaveProduct({ ...prod, ...updates }, false, {
+    auditAction: auditOptions?.auditAction || 'update',
+    auditReason: auditOptions?.auditReason,
+    previousSnapshot: prod,
+  });
 }
 
 export async function adminDeleteProduct(productId: string): Promise<void> {

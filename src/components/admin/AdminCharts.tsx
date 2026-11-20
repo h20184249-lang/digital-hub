@@ -28,6 +28,62 @@ export function AdminCharts({
   orders,
 }: AdminChartsProps) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [period, setPeriod] = useState<'today' | '7d' | '30d' | 'all'>('today');
+
+  const periodStats = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const cutoff =
+      period === 'today'
+        ? startOfToday
+        : period === '7d'
+          ? Date.now() - 7 * 24 * 60 * 60 * 1000
+          : period === '30d'
+            ? Date.now() - 30 * 24 * 60 * 60 * 1000
+            : 0;
+    const inRange = (ts: unknown) => {
+      if (cutoff === 0) return true;
+      const ms = getTimeMs(ts);
+      return ms >= cutoff;
+    };
+
+    const newUsers = users.filter((u) => inRange(u.createdAt)).length;
+    const activeUsers = users.filter(
+      (u) => u.status === 'active' && (cutoff === 0 || inRange(u.lastLoginAt || u.updatedAt || u.createdAt))
+    ).length;
+
+    const approvedDeposits = walletTxs.filter(
+      (tx) => tx.type === 'deposit' && tx.status === 'Approved' && inRange(tx.createdAt)
+    );
+    const depositsBdt = approvedDeposits.reduce((s, tx) => s + Math.abs(tx.amountBdt || 0), 0);
+
+    const paidWithdrawals = withdrawals.filter((w) => w.status === 'Paid' && inRange(w.paidAt || w.updatedAt || w.createdAt));
+    const withdrawalsBdt = paidWithdrawals.reduce((s, w) => s + Math.abs(w.amountBdt || 0), 0);
+
+    const revenueOrders = orders.filter(
+      (o) =>
+        (o.status === 'Completed' || o.status === 'Paid' || o.status === 'Payment Approved' || o.status === 'Processing') &&
+        inRange(o.createdAt)
+    );
+    const revenueBdt = revenueOrders.reduce((s, o) => s + Math.abs(o.totalPriceBdt || 0), 0);
+
+    const totalActivity =
+      walletTxs.filter((tx) => inRange(tx.createdAt)).length +
+      orders.filter((o) => inRange(o.createdAt)).length +
+      withdrawals.filter((w) => inRange(w.createdAt)).length;
+
+    return {
+      newUsers,
+      activeUsers,
+      depositsCount: approvedDeposits.length,
+      depositsBdt,
+      withdrawalsCount: paidWithdrawals.length,
+      withdrawalsBdt,
+      revenueOrdersCount: revenueOrders.length,
+      revenueBdt,
+      totalActivity,
+    };
+  }, [period, users, walletTxs, withdrawals, orders]);
 
   const dailySeries = useMemo(() => {
     const days: Array<{
@@ -128,7 +184,99 @@ export function AdminCharts({
   const activePoint = hoveredIdx !== null ? dailySeries[hoveredIdx] : dailySeries[dailySeries.length - 1];
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+    <div className="space-y-4">
+      {/* Live Timeframe Analytics (Today / Weekly / Monthly / All-Time) */}
+      <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 sm:p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100">
+              {lang === 'bn' ? 'লাইভ অ্যানালিটিক্স (দৈনিক / সাপ্তাহিক / মাসিক)' : 'Live Performance Analytics'}
+            </h3>
+            <p className="text-xs text-[#777777] dark:text-slate-400">
+              {lang === 'bn'
+                ? 'ডাটাবেস থেকে রিয়েল-টাইম ইউজার, ডিপোজিট, উইথড্রয়াল ও রেভিনিউ পরিসংখ্যান'
+                : 'Real-time database metrics across users, deposits, withdrawals, revenue, and activity'}
+            </p>
+          </div>
+          <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#F3F6FF] dark:bg-slate-950 border border-[#E6ECFA] dark:border-slate-800 text-[11px] font-bold">
+            {(
+              [
+                { id: 'today', label: lang === 'bn' ? 'আজ' : 'Today' },
+                { id: '7d', label: lang === 'bn' ? 'সাপ্তাহিক (৭ দিন)' : 'Weekly (7D)' },
+                { id: '30d', label: lang === 'bn' ? 'মাসিক (৩০ দিন)' : 'Monthly (30D)' },
+                { id: 'all', label: lang === 'bn' ? 'সব সময়' : 'All Time' },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setPeriod(tab.id)}
+                className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                  period === tab.id
+                    ? 'bg-[#FF8500] text-white'
+                    : 'text-[#5C6B84] dark:text-slate-400 hover:text-[#172033] dark:hover:text-white'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {[
+            {
+              label: lang === 'bn' ? 'নতুন ইউজার' : 'New Users',
+              val: periodStats.newUsers.toLocaleString(),
+              sub: `${periodStats.activeUsers} active`,
+              tone: 'text-sky-600 dark:text-sky-400',
+            },
+            {
+              label: lang === 'bn' ? 'সক্রিয় ইউজার' : 'Active Users',
+              val: periodStats.activeUsers.toLocaleString(),
+              sub: `${users.length} total accounts`,
+              tone: 'text-emerald-600 dark:text-emerald-400',
+            },
+            {
+              label: lang === 'bn' ? 'অনুমোদিত ডিপোজিট' : 'Deposits',
+              val: `৳${periodStats.depositsBdt.toLocaleString()}`,
+              sub: `${periodStats.depositsCount} approved`,
+              tone: 'text-[#FF8500]',
+            },
+            {
+              label: lang === 'bn' ? 'পেইড উইথড্রয়াল' : 'Withdrawals',
+              val: `৳${periodStats.withdrawalsBdt.toLocaleString()}`,
+              sub: `${periodStats.withdrawalsCount} paid`,
+              tone: 'text-amber-600 dark:text-amber-400',
+            },
+            {
+              label: lang === 'bn' ? 'অর্ডার রেভিনিউ' : 'Revenue',
+              val: `৳${periodStats.revenueBdt.toLocaleString()}`,
+              sub: `${periodStats.revenueOrdersCount} paid orders`,
+              tone: 'text-emerald-600 dark:text-emerald-400',
+            },
+            {
+              label: lang === 'bn' ? 'মোট অ্যাক্টিভিটি' : 'Activity',
+              val: periodStats.totalActivity.toLocaleString(),
+              sub: lang === 'bn' ? 'লেনদেন + অর্ডার' : 'tx + orders + payouts',
+              tone: 'text-[#172033] dark:text-slate-100',
+            },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className="rounded-xl bg-[#F8FAFF] dark:bg-slate-950/70 border border-[#E6ECFA] dark:border-slate-800 px-3.5 py-2.5"
+            >
+              <p className="text-[10px] font-bold uppercase tracking-wide text-[#777777] dark:text-slate-400">
+                {item.label}
+              </p>
+              <p className={`text-lg font-extrabold font-mono-num mt-0.5 ${item.tone}`}>{item.val}</p>
+              <p className="text-[10px] text-[#777777] dark:text-slate-500 truncate mt-0.5">{item.sub}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
       {/* 14-Day Activity & Volume SVG Chart */}
       <div className="xl:col-span-2 rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -331,6 +479,7 @@ export function AdminCharts({
             </p>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

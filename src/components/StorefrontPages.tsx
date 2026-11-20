@@ -53,7 +53,16 @@ export function ProductCard({
     pkgCount > 0
       ? Math.min(...(product.packages || []).map((pk) => pk.priceBdt))
       : product.priceBdt;
-  const displayPrice = Math.min(product.priceBdt, lowestPkgPrice);
+  const displayPrice = pkgCount > 1 ? Math.min(product.priceBdt, lowestPkgPrice) : product.priceBdt;
+  const autoDiscount =
+    product.originalPriceBdt && product.originalPriceBdt > displayPrice
+      ? Math.min(95, Math.max(1, Math.round(((product.originalPriceBdt - displayPrice) / product.originalPriceBdt) * 100)))
+      : product.discountPercent || 0;
+  const durationLabel =
+    lang === 'bn'
+      ? product.durationLabelBn || product.validityBn || ''
+      : product.durationLabelEn || product.validityEn || '';
+  const badgeText = product.badge?.trim() || (product.featured ? (lang === 'bn' ? 'জনপ্রিয়' : 'Popular') : '');
   const stockCount =
     typeof product.stockCount === 'number'
       ? product.stockCount
@@ -72,15 +81,19 @@ export function ProductCard({
       >
         <ProductVisualArtwork product={product} lang={lang} variant="card" />
 
-        {product.featured && (
-          <span className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-[#FF8500] text-white text-[10px] font-extrabold uppercase tracking-wide shadow-xs">
-            {lang === 'bn' ? 'জনপ্রিয়' : 'Popular'}
+        {badgeText && (
+          <span
+            className={`absolute ${
+              product.customLogoUrl ? 'bottom-2 left-2' : 'top-2 left-2'
+            } px-2 py-0.5 rounded-lg bg-[#FF8500] text-white text-[10px] font-extrabold uppercase tracking-wide shadow-xs`}
+          >
+            {badgeText}
           </span>
         )}
 
-        {product.discountPercent && product.discountPercent > 0 ? (
+        {autoDiscount > 0 ? (
           <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-[#DC2626] text-white text-[11px] font-extrabold font-mono-num shadow-xs">
-            -{product.discountPercent}%
+            -{autoDiscount}%
           </span>
         ) : product.availability === 'limited' ? (
           <span className="absolute top-2 right-2 px-2 py-0.5 rounded-lg bg-[#172033]/90 text-[#FF9B19] text-[10px] font-bold">
@@ -111,7 +124,7 @@ export function ProductCard({
             {title}
           </button>
           <p className="text-[11px] text-[#777777] mt-0.5 truncate">
-            {delivery}
+            {durationLabel || delivery}
             {' · '}
             <span
               className={`font-mono-num font-semibold ${
@@ -138,7 +151,7 @@ export function ProductCard({
                 {t(lang, 'startingFrom')}
               </span>
             )}
-            {product.originalPriceBdt && product.originalPriceBdt > displayPrice && pkgCount <= 1 && (
+            {product.originalPriceBdt && product.originalPriceBdt > displayPrice && (
               <span className="text-xs font-mono-num text-[#777777] line-through">
                 ৳{product.originalPriceBdt}
               </span>

@@ -466,6 +466,11 @@ export function ProductDetailPage({
                   {lang === 'bn' ? product.subcategoryBn || product.subcategoryEn : product.subcategoryEn}
                 </span>
               )}
+              {product.badge && (
+                <span className="px-2 py-0.5 rounded-md bg-[#FF8500] text-white text-[10px] font-extrabold uppercase tracking-wide">
+                  {product.badge}
+                </span>
+              )}
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-extrabold text-[#172033] leading-tight">
@@ -481,8 +486,13 @@ export function ProductDetailPage({
                 ৳{unitPrice}
               </span>
               {originalUnitPrice && originalUnitPrice > 0 && originalUnitPrice !== unitPrice && (
-                <span className="px-2 py-0.5 rounded-md bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-mono-num text-[#777777]">
-                  {t(lang, 'originalPriceLabel')}: ৳{originalUnitPrice}
+                <span className="px-2 py-0.5 rounded-md bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-mono-num text-[#777777] line-through">
+                  ৳{originalUnitPrice}
+                </span>
+              )}
+              {originalUnitPrice && originalUnitPrice > unitPrice && (
+                <span className="px-2 py-0.5 rounded-md bg-[#DC2626] text-white text-[11px] font-extrabold font-mono-num">
+                  -{Math.min(95, Math.max(1, Math.round(((originalUnitPrice - unitPrice) / originalUnitPrice) * 100)))}%
                 </span>
               )}
               {activePackage && (
@@ -492,14 +502,16 @@ export function ProductDetailPage({
               )}
             </div>
 
-            {(product.validityBn || product.validityEn) && (
+            {(product.durationLabelBn || product.durationLabelEn || product.validityBn || product.validityEn) && (
               <div className="p-3 rounded-2xl bg-[#FFF7EE] border border-[#FF8500]/20 flex flex-wrap items-center justify-between gap-2 text-xs">
                 <span className="font-bold text-[#172033] flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-[#FF8500]" />
                   {t(lang, 'validityLabel')}
                 </span>
                 <span className="font-semibold text-[#172033]">
-                  {lang === 'bn' ? product.validityBn || product.validityEn : product.validityEn || product.validityBn}
+                  {lang === 'bn'
+                    ? product.durationLabelBn || product.validityBn || product.durationLabelEn || product.validityEn
+                    : product.durationLabelEn || product.validityEn || product.durationLabelBn || product.validityBn}
                 </span>
               </div>
             )}
@@ -579,14 +591,25 @@ export function ProductDetailPage({
               </div>
             </div>
 
-            {(product.benefitsBn || product.benefitsEn || product.instructionsBn || product.instructionsEn) && (
+            {(Boolean(product.features?.length) || product.benefitsBn || product.benefitsEn || product.instructionsBn || product.instructionsEn) && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
-                {(product.benefitsBn || product.benefitsEn) && (
+                {(Boolean(product.features?.length) || product.benefitsBn || product.benefitsEn) && (
                   <div className="p-3.5 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA]">
-                    <p className="font-bold text-[#172033] mb-1">
-                      {lang === 'bn' ? 'সুবিধাসমূহ' : 'Key Benefits'}
+                    <p className="font-bold text-[#172033] mb-1.5">
+                      {lang === 'bn' ? 'প্যাকেজ ফিচার ও সুবিধাসমূহ' : 'Package Features & Benefits'}
                     </p>
-                    <p className="text-[#777777]">{lang === 'bn' ? product.benefitsBn : product.benefitsEn}</p>
+                    {product.features && product.features.length > 0 ? (
+                      <ul className="space-y-1 text-[#5C6B84]">
+                        {product.features.map((feat, i) => (
+                          <li key={i} className="flex items-start gap-1.5 leading-snug">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                            <span>{feat}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[#777777]">{lang === 'bn' ? product.benefitsBn : product.benefitsEn}</p>
+                    )}
                   </div>
                 )}
                 {(product.instructionsBn || product.instructionsEn) && (

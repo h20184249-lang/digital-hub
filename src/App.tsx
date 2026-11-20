@@ -100,6 +100,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { DigitalHubLogo } from './components/DigitalHubLogo';
 import { MobileAppDownloadCard } from './components/MobileAppDownloadCard';
 import { CapCutRechargeSection } from './components/CapCutRechargeSection';
+import { MobileAppStoreSection } from './components/MobileAppStoreSection';
 import {
   CategoryCatalogPage,
   OffersPage,
@@ -115,6 +116,7 @@ export default function App() {
   const [route, setRoute] = useState<AppRoute>(() => {
     if (new URLSearchParams(window.location.search).get('product')) return 'product-detail';
     if (window.location.pathname === '/watch-earn') return 'watch-earn';
+    if (window.location.pathname === '/mobile-apps') return 'mobile-apps';
     return 'home';
   });
   const [previousRoute, setPreviousRoute] = useState<AppRoute>('services');
@@ -434,6 +436,7 @@ export default function App() {
       'vip-groups': `Telegram VIP Groups — ${brand}`,
       'telegram-stars': `Telegram Stars — ${brand}`,
       'ai-marketplace': `AI Tools Marketplace — ${brand}`,
+      'mobile-apps': `Mobile App Store — ${brand}`,
       'software-store': `Software Store — ${brand}`,
       'digital-products': `Digital Products — ${brand}`,
       'graphic-design': `Graphic Design Services — ${brand}`,
@@ -881,6 +884,22 @@ export default function App() {
               onAddToCart={(prod, pkg) => handleAddToCart(prod, 1, pkg)}
             />
 
+            {/* Mobile App Store Section (Android / Mobile Apps Only) */}
+            <MobileAppStoreSection
+              mode="home"
+              lang={lang}
+              settings={settings}
+              user={user}
+              profile={profile}
+              wallet={wallet}
+              onOpenAuth={() => {
+                setAuthInitialMode('login');
+                setAuthModalOpen(true);
+              }}
+              onNavigateAll={() => setRoute('mobile-apps')}
+              onGoToOrders={() => setRoute('orders')}
+            />
+
             {/* 3. GAMING TOP-UPS & PASSES (MangoTopUp Core) */}
             {gamingAndGiftProducts.length > 0 && (
               <section className="space-y-3">
@@ -934,7 +953,7 @@ export default function App() {
                 </button>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
-                {(flashSaleProducts.length > 0 ? flashSaleProducts : products.slice(0, 4))
+                {(flashSaleProducts.length > 0 ? flashSaleProducts : products.filter((p) => p.active).slice(0, 4))
                   .slice(0, 4)
                   .map((p) => (
                     <ProductCard
@@ -1283,6 +1302,23 @@ export default function App() {
           </div>
         )}
 
+        {route === 'mobile-apps' && (
+          <MobileAppStoreSection
+            mode="page"
+            lang={lang}
+            settings={settings}
+            user={user}
+            profile={profile}
+            wallet={wallet}
+            onOpenAuth={() => {
+              setAuthInitialMode('login');
+              setAuthModalOpen(true);
+            }}
+            onBackHome={() => setRoute('home')}
+            onGoToOrders={() => setRoute('orders')}
+          />
+        )}
+
         {isCatalogRoute && (
           <CategoryCatalogPage
             route={route}
@@ -1575,6 +1611,7 @@ export default function App() {
             <p className="font-bold text-[#172033] mb-2">{lang === 'bn' ? 'মার্কেটপ্লেস' : 'Marketplace'}</p>
             {(
               [
+                ['mobile-apps', lang === 'bn' ? 'মোবাইল অ্যাপ স্টোর' : 'Mobile App Store'],
                 ['software-store', t(lang, 'navSoftware')],
                 ['digital-products', t(lang, 'navDigital')],
                 ['graphic-design', t(lang, 'navDesign')],

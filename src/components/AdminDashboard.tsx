@@ -6,6 +6,7 @@ import {
   Bell,
   CheckCircle2,
   CreditCard,
+  Database,
   FileText,
   Gift,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import {
   Megaphone,
   Menu,
   Moon,
+  Package,
   RefreshCw,
   Settings,
   Shield,
@@ -22,6 +24,7 @@ import {
   Sun,
   Users,
   Wallet,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -52,6 +55,7 @@ import {
   WithdrawalRequest,
 } from '../types/marketplace';
 import {
+  adminSaveSiteSettings,
   fetchAdminDashboardServer,
   fetchServerAdAnalytics,
   formatDateShort,
@@ -83,6 +87,9 @@ import {
   AdminSettingsPanel,
   AdminStorefrontPanel,
 } from './admin/AdminSystemPanels';
+import { AdminPackagesPanel } from './admin/AdminPackagesPanel';
+import { AdminGlobalSearch } from './admin/AdminGlobalSearch';
+import { AdminBackupPanel } from './admin/AdminBackupPanel';
 import { ConfirmDialog } from './admin/ConfirmDialog';
 
 interface AdminDashboardProps {
@@ -106,6 +113,7 @@ interface AdminDashboardProps {
 
 type AdminSection =
   | 'overview'
+  | 'packages'
   | 'users'
   | 'wallets'
   | 'transactions'
@@ -117,6 +125,7 @@ type AdminSection =
   | 'settings'
   | 'security'
   | 'activity_logs'
+  | 'backup'
   | 'storefront';
 
 export function AdminDashboard({
@@ -162,6 +171,9 @@ export function AdminDashboard({
   const [notice, setNotice] = useState('');
   const [errMsg, setErrMsg] = useState('');
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [maintenanceConfirmOpen, setMaintenanceConfirmOpen] = useState(false);
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
+  const [packageSearchSeed, setPackageSearchSeed] = useState('');
 
   const showSuccess = (msg: string) => {
     setErrMsg('');
@@ -322,7 +334,6 @@ export function AdminDashboard({
     );
   }
 
-  // Exact 12 primary navigation tabs (+ Logout as item #13, plus Storefront & Orders workspace)
   const navItems: Array<{
     id: AdminSection;
     label: string;
@@ -331,6 +342,13 @@ export function AdminDashboard({
     badge?: number;
   }> = [
     { id: 'overview', label: 'Overview', labelBn: 'ওভারভিউ', icon: LayoutDashboard },
+    {
+      id: 'packages',
+      label: 'Package Management',
+      labelBn: 'প্যাকেজ ম্যানেজমেন্ট',
+      icon: Package,
+      badge: products.length,
+    },
     { id: 'users', label: 'Users', labelBn: 'ইউজার ম্যানেজমেন্ট', icon: Users, badge: kpis.totalUsers },
     {
       id: 'wallets',
@@ -354,6 +372,7 @@ export function AdminDashboard({
     { id: 'settings', label: 'Website Settings', labelBn: 'ওয়েবসাইট সেটিংস', icon: Settings },
     { id: 'security', label: 'Security', labelBn: 'সিকিউরিটি', icon: Lock },
     { id: 'activity_logs', label: 'Activity Logs', labelBn: 'অ্যাক্টিভিটি লগ', icon: Activity },
+    { id: 'backup', label: 'Backup & Export', labelBn: 'ব্যাকআপ ও এক্সপোর্ট', icon: Database },
   ];
 
   const activeNavMeta =
@@ -512,7 +531,42 @@ export function AdminDashboard({
             </div>
           </div>
 
+          <AdminGlobalSearch
+            lang={lang}
+            users={users}
+            products={products}
+            orders={orders}
+            walletTxs={walletTxs}
+            payments={payments}
+            onJump={(target, queryStr) => {
+              if (target === 'packages' && queryStr) {
+                setPackageSearchSeed(queryStr);
+              }
+              setSection(target);
+            }}
+          />
+
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setMaintenanceConfirmOpen(true)}
+              title={
+                settings.maintenanceMode
+                  ? 'Maintenance Mode is ON — click to disable'
+                  : 'Maintenance Mode is OFF — click to enable'
+              }
+              className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer ${
+                settings.maintenanceMode
+                  ? 'bg-red-600 border-red-500 text-white'
+                  : 'bg-[#F3F6FF] dark:bg-slate-800 border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-200 hover:border-[#FF8500]'
+              }`}
+            >
+              <Wrench className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline">
+                {settings.maintenanceMode ? 'Maintenance ON' : 'Live'}
+              </span>
+            </button>
+
             <button
               type="button"
               onClick={() => void handleRefresh()}
@@ -739,6 +793,17 @@ export function AdminDashboard({
             </div>
           )}
 
+          {section === 'packages' && (
+            <AdminPackagesPanel
+              lang={lang}
+              products={products}
+              categories={categories}
+              initialSearchQuery={packageSearchSeed}
+              onSuccess={showSuccess}
+              onError={showError}
+            />
+          )}
+
           {section === 'users' && (
             <AdminUsersPanel
               lang={lang}
@@ -838,6 +903,21 @@ export function AdminDashboard({
             <AdminActivityLogsPanel lang={lang} auditLogs={auditLogs} />
           )}
 
+          {section === 'backup' && (
+            <AdminBackupPanel
+              lang={lang}
+              users={users}
+              wallets={wallets}
+              products={products}
+              orders={orders}
+              walletTxs={walletTxs}
+              withdrawals={withdrawals}
+              auditLogs={auditLogs}
+              onSuccess={showSuccess}
+              onError={showError}
+            />
+          )}
+
           {section === 'storefront' && (
             <AdminStorefrontPanel
               lang={lang}
@@ -854,6 +934,46 @@ export function AdminDashboard({
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={maintenanceConfirmOpen}
+        lang={lang}
+        title={
+          settings.maintenanceMode
+            ? lang === 'bn'
+              ? 'মেইনটেন্যান্স মোড বন্ধ করবেন?'
+              : 'Disable Maintenance Mode?'
+            : lang === 'bn'
+              ? 'মেইনটেন্যান্স মোড চালু করবেন?'
+              : 'Enable Maintenance Mode?'
+        }
+        description={
+          settings.maintenanceMode
+            ? 'Public visitors and customers will immediately regain full access to Digital Hub BD.'
+            : 'Public visitors and standard users will see the Maintenance Mode screen until you turn it off. Super Admin access remains active.'
+        }
+        tone={settings.maintenanceMode ? 'primary' : 'warning'}
+        confirmLabel={settings.maintenanceMode ? 'Go Live Now' : 'Enable Maintenance Mode'}
+        busy={maintenanceSaving}
+        onCancel={() => setMaintenanceConfirmOpen(false)}
+        onConfirm={async () => {
+          setMaintenanceSaving(true);
+          try {
+            const nextMode = !settings.maintenanceMode;
+            await adminSaveSiteSettings({ ...settings, maintenanceMode: nextMode });
+            setMaintenanceConfirmOpen(false);
+            showSuccess(
+              nextMode
+                ? 'Maintenance Mode enabled. Super Admin bypass remains active.'
+                : 'Maintenance Mode disabled. Website is now live.'
+            );
+          } catch (err) {
+            showError(err instanceof Error ? err.message : 'Failed to toggle Maintenance Mode.');
+          } finally {
+            setMaintenanceSaving(false);
+          }
+        }}
+      />
 
       <ConfirmDialog
         open={logoutConfirmOpen}
