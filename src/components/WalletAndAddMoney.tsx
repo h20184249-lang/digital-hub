@@ -36,6 +36,8 @@ import {
 } from '../lib/firestoreService';
 import { PaymentProviderLogo } from './BrandLogos';
 import {
+  getEnabledPaymentMethods,
+  getPaymentMethodDetails,
   PaymentMethodCardsGrid,
   ReceiptScreenshotUploadBox,
   SelectedPaymentInstructionCard,
@@ -182,17 +184,11 @@ export function WalletAndAddMoney({
   const [successMsg, setSuccessMsg] = useState('');
 
   useEffect(() => {
-    const enabledMethods = (['bkash', 'nagad', 'rocket'] as PaymentMethod[]).filter((m) =>
-      m === 'bkash'
-        ? settings.bkashEnabled !== false
-        : m === 'nagad'
-          ? settings.nagadEnabled !== false
-          : settings.rocketEnabled !== false
-    );
+    const enabledMethods = getEnabledPaymentMethods(settings, paymentMethods);
     if (enabledMethods.length > 0 && !enabledMethods.includes(method)) {
       setMethod(enabledMethods[0]);
     }
-  }, [settings.bkashEnabled, settings.nagadEnabled, settings.rocketEnabled, method]);
+  }, [settings, paymentMethods, method]);
 
   useEffect(() => {
     if (withdrawalMethods.length > 0 && !withdrawalMethods.some((m) => m.code === withdrawMethod)) {
@@ -235,12 +231,7 @@ export function WalletAndAddMoney({
     );
   }
 
-  const receiverNumber =
-    method === 'bkash'
-      ? settings.bkashNumber
-      : method === 'nagad'
-        ? settings.nagadNumber
-        : settings.rocketNumber;
+  const { number: receiverNumber } = getPaymentMethodDetails(method, settings, paymentMethods);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(receiverNumber).catch(() => {});
@@ -571,6 +562,7 @@ export function WalletAndAddMoney({
                 </label>
                 <PaymentMethodCardsGrid
                   settings={settings}
+                  paymentMethods={paymentMethods}
                   lang={lang}
                   selectedMethod={method}
                   onSelect={(m) => {
@@ -585,6 +577,7 @@ export function WalletAndAddMoney({
             <SelectedPaymentInstructionCard
               method={method}
               settings={settings}
+              paymentMethods={paymentMethods}
               amountBdt={Math.max(10, Math.round(Number(amount) || 0))}
               lang={lang}
               copied={copied}

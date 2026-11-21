@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  AdminAnalyticsPayload,
   Language,
   Order,
   UserProfile,
@@ -8,7 +9,7 @@ import {
   WithdrawalRequest,
   WithdrawalStatus,
 } from '../../types/marketplace';
-import { getTimeMs } from '../../lib/firestoreService';
+import { adminFetchAnalytics, getTimeMs } from '../../lib/firestoreService';
 
 interface AdminChartsProps {
   lang: Language;
@@ -28,11 +29,50 @@ export function AdminCharts({
   orders,
 }: AdminChartsProps) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
-  const [period, setPeriod] = useState<'today' | '7d' | '30d' | 'all'>('today');
+  const [period, setPeriod] = useState<'today' | '7d' | '30d' | 'month' | 'custom' | 'all'>('today');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [analytics, setAnalytics] = useState<AdminAnalyticsPayload | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const now = new Date();
+    let fromMs = 0;
+    let toMs = Date.now();
+    if (period === 'today') {
+      fromMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    } else if (period === '7d') {
+      fromMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    } else if (period === '30d') {
+      fromMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    } else if (period === 'month') {
+      fromMs = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    } else if (period === 'custom') {
+      fromMs = customFrom ? Date.parse(`${customFrom}T00:00:00`) : Date.now() - 7 * 24 * 60 * 60 * 1000;
+      toMs = customTo ? Date.parse(`${customTo}T23:59:59.999`) : Date.now();
+    } else {
+      fromMs = 0;
+    }
+
+    setAnalyticsLoading(true);
+    adminFetchAnalytics(fromMs, toMs)
+      .then((res) => {
+        if (active) setAnalytics(res);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setAnalyticsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [period, customFrom, customTo]);
 
   const periodStats = useMemo(() => {
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
     const cutoff =
       period === 'today'
         ? startOfToday
@@ -40,11 +80,20 @@ export function AdminCharts({
           ? Date.now() - 7 * 24 * 60 * 60 * 1000
           : period === '30d'
             ? Date.now() - 30 * 24 * 60 * 60 * 1000
-            : 0;
+            : period === 'month'
+              ? startOfMonth
+              : period === 'custom'
+                ? customFrom
+                  ? Date.parse(`${customFrom}T00:00:00`)
+                  : 0
+                : 0;
+    const endMs =
+      period === 'custom' && customTo ? Date.parse(`${customTo}T23:59:59.999`) : Number.MAX_SAFE_INTEGER;
     const inRange = (ts: unknown) => {
-      if (cutoff === 0) return true;
       const ms = getTimeMs(ts);
-      return ms >= cutoff;
+      if (cutoff > 0 && ms < cutoff) return false;
+      if (endMs < Number.MAX_SAFE_INTEGER && ms > endMs) return false;
+      return true;
     };
 
     const newUsers = users.filter((u) => inRange(u.createdAt)).length;
@@ -83,7 +132,7 @@ export function AdminCharts({
       revenueBdt,
       totalActivity,
     };
-  }, [period, users, walletTxs, withdrawals, orders]);
+  }, [period, customFrom, customTo, users, walletTxs, withdrawals, orders]);
 
   const dailySeries = useMemo(() => {
     const days: Array<{
@@ -198,28 +247,49 @@ export function AdminCharts({
                 : 'Real-time database metrics across users, deposits, withdrawals, revenue, and activity'}
             </p>
           </div>
-          <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#F3F6FF] dark:bg-slate-950 border border-[#E6ECFA] dark:border-slate-800 text-[11px] font-bold">
-            {(
-              [
-                { id: 'today', label: lang === 'bn' ? 'আজ' : 'Today' },
-                { id: '7d', label: lang === 'bn' ? 'সাপ্তাহিক (৭ দিন)' : 'Weekly (7D)' },
-                { id: '30d', label: lang === 'bn' ? 'মাসিক (৩০ দিন)' : 'Monthly (30D)' },
-                { id: 'all', label: lang === 'bn' ? 'সব সময়' : 'All Time' },
-              ] as const
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setPeriod(tab.id)}
-                className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
-                  period === tab.id
-                    ? 'bg-[#FF8500] text-white'
-                    : 'text-[#5C6B84] dark:text-slate-400 hover:text-[#172033] dark:hover:text-white'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex flex-wrap items-center gap-1 p-1 rounded-xl bg-[#F3F6FF] dark:bg-slate-950 border border-[#E6ECFA] dark:border-slate-800 text-[11px] font-bold">
+              {(
+                [
+                  { id: 'today', label: lang === 'bn' ? 'আজ' : 'Today' },
+                  { id: '7d', label: lang === 'bn' ? '৭ দিন' : '7D' },
+                  { id: '30d', label: lang === 'bn' ? '৩০ দিন' : '30D' },
+                  { id: 'month', label: lang === 'bn' ? 'এই মাস' : 'This Month' },
+                  { id: 'custom', label: lang === 'bn' ? 'কাস্টম' : 'Custom' },
+                  { id: 'all', label: lang === 'bn' ? 'সব' : 'All' },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setPeriod(tab.id)}
+                  className={`px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                    period === tab.id
+                      ? 'bg-[#FF8500] text-white'
+                      : 'text-[#5C6B84] dark:text-slate-400 hover:text-[#172033] dark:hover:text-white'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            {period === 'custom' && (
+              <div className="flex items-center gap-1.5 text-[11px]">
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={(e) => setCustomFrom(e.target.value)}
+                  className="px-2 py-1 rounded-lg bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
+                />
+                <span>→</span>
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={(e) => setCustomTo(e.target.value)}
+                  className="px-2 py-1 rounded-lg bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
+                />
+              </div>
+            )}
           </div>
         </div>
 
@@ -228,38 +298,40 @@ export function AdminCharts({
             {
               label: lang === 'bn' ? 'নতুন ইউজার' : 'New Users',
               val: periodStats.newUsers.toLocaleString(),
-              sub: `${periodStats.activeUsers} active`,
+              sub: `${analytics?.kpis.todayNewUsers ?? 0} today`,
               tone: 'text-sky-600 dark:text-sky-400',
             },
             {
-              label: lang === 'bn' ? 'সক্রিয় ইউজার' : 'Active Users',
-              val: periodStats.activeUsers.toLocaleString(),
-              sub: `${users.length} total accounts`,
+              label: lang === 'bn' ? 'সক্রিয় / অনলাইন' : 'Active / Online',
+              val: `${periodStats.activeUsers} / ${analytics?.kpis.onlineUsers ?? 0}`,
+              sub: `${analytics?.kpis.activeUsersToday ?? 0} today · ${analytics?.kpis.activeUsers7d ?? 0} (7d)`,
               tone: 'text-emerald-600 dark:text-emerald-400',
             },
             {
-              label: lang === 'bn' ? 'অনুমোদিত ডিপোজিট' : 'Deposits',
-              val: `৳${periodStats.depositsBdt.toLocaleString()}`,
-              sub: `${periodStats.depositsCount} approved`,
+              label: lang === 'bn' ? 'মোট / ইউনিক ভিজিটর' : 'Visitors / Unique',
+              val: analyticsLoading
+                ? '...'
+                : `${(analytics?.kpis.totalVisitors ?? 0).toLocaleString()} / ${(analytics?.kpis.uniqueVisitors ?? 0).toLocaleString()}`,
+              sub: `${analytics?.kpis.totalVisitors ?? 0} page views`,
+              tone: 'text-[#172033] dark:text-slate-100',
+            },
+            {
+              label: lang === 'bn' ? 'অ্যাপ ডাউনলোড' : 'App Downloads',
+              val: (analytics?.kpis.totalDownloads ?? 0).toLocaleString(),
+              sub: `${analytics?.kpis.todayDownloads ?? 0} today`,
+              tone: 'text-[#0EA5E9]',
+            },
+            {
+              label: lang === 'bn' ? 'বিতরণকৃত কয়েন' : 'Coins Distributed',
+              val: (analytics?.kpis.totalCoinsDistributed ?? 0).toLocaleString(),
+              sub: `${analytics?.kpis.totalRewardClaims ?? 0} claims`,
               tone: 'text-[#FF8500]',
             },
             {
-              label: lang === 'bn' ? 'পেইড উইথড্রয়াল' : 'Withdrawals',
-              val: `৳${periodStats.withdrawalsBdt.toLocaleString()}`,
-              sub: `${periodStats.withdrawalsCount} paid`,
-              tone: 'text-amber-600 dark:text-amber-400',
-            },
-            {
-              label: lang === 'bn' ? 'অর্ডার রেভিনিউ' : 'Revenue',
+              label: lang === 'bn' ? 'অর্ডার রেভিনিউ' : 'Revenue & Activity',
               val: `৳${periodStats.revenueBdt.toLocaleString()}`,
-              sub: `${periodStats.revenueOrdersCount} paid orders`,
+              sub: `${periodStats.revenueOrdersCount} orders · ৳${periodStats.depositsBdt} dep`,
               tone: 'text-emerald-600 dark:text-emerald-400',
-            },
-            {
-              label: lang === 'bn' ? 'মোট অ্যাক্টিভিটি' : 'Activity',
-              val: periodStats.totalActivity.toLocaleString(),
-              sub: lang === 'bn' ? 'লেনদেন + অর্ডার' : 'tx + orders + payouts',
-              tone: 'text-[#172033] dark:text-slate-100',
             },
           ].map((item) => (
             <div
@@ -481,6 +553,118 @@ export function AdminCharts({
         </div>
       </div>
       </div>
+
+      {/* Real DB Traffic Breakdown: Top Pages, Top Downloaded Apps, Devices & Traffic Sources */}
+      {analytics && (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 text-xs">
+          {/* Top Pages */}
+          <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5">
+            <h4 className="font-extrabold text-[#172033] dark:text-slate-100">
+              {lang === 'bn' ? 'সর্বাধিক ভিজিট করা পেজ' : 'Most Visited Pages'}
+            </h4>
+            {analytics.topPages.length === 0 ? (
+              <p className="text-[#777777] py-4 text-center">No page views recorded in range.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {analytics.topPages.slice(0, 6).map((pg) => (
+                  <div key={pg.path} className="flex items-center justify-between gap-2">
+                    <span className="font-mono-num text-[#172033] dark:text-slate-200 truncate">
+                      {pg.path || '/'}
+                    </span>
+                    <span className="font-mono-num font-bold text-[#FF8500] shrink-0">
+                      {pg.views.toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Most Downloaded Apps */}
+          <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5">
+            <h4 className="font-extrabold text-[#172033] dark:text-slate-100">
+              {lang === 'bn' ? 'সর্বাধিক ডাউনলোডকৃত অ্যাপস' : 'Most Downloaded Apps'}
+            </h4>
+            {analytics.topApps.length === 0 ? (
+              <p className="text-[#777777] py-4 text-center">No downloads recorded in range.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {analytics.topApps.slice(0, 6).map((ap) => (
+                  <div key={ap.appId} className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-[#172033] dark:text-slate-200 truncate">
+                      {ap.appId}
+                    </span>
+                    <span className="font-mono-num font-bold text-[#0EA5E9] shrink-0">
+                      {ap.downloads.toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Mobile vs Desktop Split */}
+          <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-3">
+            <h4 className="font-extrabold text-[#172033] dark:text-slate-100">
+              {lang === 'bn' ? 'ডিভাইস ধরন (মোবাইল বনাম ডেস্কটপ)' : 'Mobile vs Desktop Split'}
+            </h4>
+            {(() => {
+              const m = analytics.deviceSplit.mobile || 0;
+              const d = analytics.deviceSplit.desktop || 0;
+              const tot = m + d || 1;
+              const mPct = Math.round((m / tot) * 100);
+              const dPct = Math.round((d / tot) * 100);
+              return (
+                <div className="space-y-2">
+                  <div className="h-3 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex">
+                    <div style={{ width: `${mPct}%` }} className="bg-[#FF8500] h-full" />
+                    <div style={{ width: `${dPct}%` }} className="bg-[#0EA5E9] h-full" />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-[#FF8500]">Mobile: {m} ({mPct}%)</span>
+                    <span className="font-bold text-[#0EA5E9]">Desktop: {d} ({dPct}%)</span>
+                  </div>
+                </div>
+              );
+            })()}
+            <div className="pt-2 border-t border-[#E6ECFA] dark:border-slate-800 text-[11px] text-[#777777] flex justify-between">
+              <span>{lang === 'bn' ? 'পেন্ডিং উইথড্রয়াল' : 'Pending Withdrawals'}</span>
+              <strong className="font-mono-num text-[#172033] dark:text-slate-100">
+                {analytics.kpis.pendingWithdrawals}
+              </strong>
+            </div>
+            <div className="text-[11px] text-[#777777] flex justify-between">
+              <span>{lang === 'bn' ? 'ওপেন সাপোর্ট টিকেট' : 'Open Support Tickets'}</span>
+              <strong className="font-mono-num text-[#172033] dark:text-slate-100">
+                {analytics.kpis.pendingTickets}
+              </strong>
+            </div>
+          </div>
+
+          {/* Traffic Sources */}
+          <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5">
+            <h4 className="font-extrabold text-[#172033] dark:text-slate-100">
+              {lang === 'bn' ? 'ট্রাফিক সোর্স' : 'Traffic Sources'}
+            </h4>
+            {analytics.trafficSources.length === 0 ? (
+              <p className="text-[#777777] py-4 text-center">No referrer sources logged yet.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {analytics.trafficSources.slice(0, 6).map((src) => (
+                  <div key={src.source} className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-[#172033] dark:text-slate-200 truncate">
+                      {src.source || 'direct'}
+                    </span>
+                    <span className="font-mono-num font-bold text-emerald-600 shrink-0">
+                      {src.visits.toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

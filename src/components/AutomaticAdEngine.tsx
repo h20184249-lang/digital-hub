@@ -6,6 +6,8 @@ import { resolveStudioImage, STUDIO_IMAGES } from '../lib/studioAssets';
 import { isValidExternalAdUrl, resolveAdBrowserUrl, tryAcquireAdLaunchLock } from '../lib/adNavigation';
 
 const FORBIDDEN_DIRECT_AD_HOSTS = /(asiafilm\.org\/4\/|auctionr\.org\/4\/|arwf\.org\/4\/|bicea\.org\/22\/)/i;
+const EMPTY_AD_NETWORKS: AdNetworkConfig[] = [];
+const EMPTY_EXCLUDE_CODES: string[] = [];
 
 function isSafeOfficialScriptSrc(url?: string): boolean {
   if (!url) return false;
@@ -135,11 +137,11 @@ interface NativeAdRowProps {
 export function NativeAdRow({
   placement,
   advertisements,
-  adNetworks = [],
+  adNetworks = EMPTY_AD_NETWORKS,
   adsEnabled,
   lang,
   maxCards = 3,
-  excludeAdCodes = [],
+  excludeAdCodes = EMPTY_EXCLUDE_CODES,
 }: NativeAdRowProps) {
   const today = new Date().toISOString().slice(0, 10);
 

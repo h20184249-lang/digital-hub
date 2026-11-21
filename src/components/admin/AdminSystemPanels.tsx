@@ -89,7 +89,9 @@ export function AdminNotificationsPanel({
   const [targetUid, setTargetUid] = useState(users[0]?.uid || '');
   const [selectedUids, setSelectedUids] = useState<string[]>([]);
   const [userPickerSearch, setUserPickerSearch] = useState('');
-  const [notifType, setNotifType] = useState<'system' | 'wallet' | 'order' | 'payment' | 'referral' | 'promo'>('system');
+  const [notifType, setNotifType] = useState<
+    'system' | 'wallet' | 'order' | 'payment' | 'referral' | 'promo' | 'new_app' | 'app_update' | 'reward' | 'support'
+  >('system');
   const [titleEn, setTitleEn] = useState('');
   const [titleBn, setTitleBn] = useState('');
   const [messageEn, setMessageEn] = useState('');
@@ -316,15 +318,31 @@ export function AdminNotificationsPanel({
             <select
               value={notifType}
               onChange={(e) =>
-                setNotifType(e.target.value as 'system' | 'wallet' | 'order' | 'payment' | 'referral' | 'promo')
+                setNotifType(
+                  e.target.value as
+                    | 'system'
+                    | 'wallet'
+                    | 'order'
+                    | 'payment'
+                    | 'referral'
+                    | 'promo'
+                    | 'new_app'
+                    | 'app_update'
+                    | 'reward'
+                    | 'support'
+                )
               }
               className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
             >
               <option value="system">System Alert</option>
               <option value="promo">Special Offer / Promo</option>
+              <option value="new_app">New App Release</option>
+              <option value="app_update">App Update</option>
+              <option value="reward">Reward / Coin Bonus</option>
               <option value="wallet">Wallet Update</option>
               <option value="payment">Payment Notice</option>
               <option value="order">Order Update</option>
+              <option value="support">Support Reply</option>
               <option value="referral">Referral Bonus</option>
             </select>
           </div>
@@ -1862,16 +1880,42 @@ export function AdminStorefrontPanel({
                 key={tk.id}
                 className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-bold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
-                    <MessageSquare className="w-3.5 h-3.5 text-[#FF8500]" />
-                    {tk.subject}
-                  </p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-bold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+                      <MessageSquare className="w-3.5 h-3.5 text-[#FF8500]" />
+                      {tk.subject}
+                    </p>
+                    {tk.category && (
+                      <span className="px-2 py-0.5 rounded-md bg-[#FFF3E5] dark:bg-orange-950/40 text-[#FF8500] font-bold uppercase text-[10px]">
+                        {tk.category}
+                      </span>
+                    )}
+                    {tk.orderNumber && (
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 font-mono-num text-[10px]">
+                        #{tk.orderNumber}
+                      </span>
+                    )}
+                  </div>
                   <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 font-bold uppercase text-[10px]">
                     {tk.status}
                   </span>
                 </div>
                 <p className="text-[#777777] dark:text-slate-300">{tk.message}</p>
+                {tk.screenshotDataUrl && (
+                  <a
+                    href={tk.screenshotDataUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block rounded-xl overflow-hidden border border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500]"
+                  >
+                    <img
+                      src={tk.screenshotDataUrl}
+                      alt="Ticket screenshot"
+                      className="max-h-40 w-auto object-contain bg-slate-50 dark:bg-slate-950"
+                    />
+                  </a>
+                )}
                 <div className="flex gap-2">
                   <input
                     type="text"

@@ -19,6 +19,7 @@ import {
   Coupon,
   Language,
   PaymentMethod,
+  PaymentMethodConfig,
   SiteSettings,
   UserProfile,
   WalletAccount,
@@ -26,6 +27,8 @@ import {
 import { t } from '../lib/i18n';
 import { PaymentProviderLogo, ProductVisualArtwork } from './BrandLogos';
 import {
+  getEnabledPaymentMethods,
+  getPaymentMethodDetails,
   PaymentMethodCardsGrid,
   ReceiptScreenshotUploadBox,
   SelectedPaymentInstructionCard,
@@ -51,6 +54,7 @@ interface CartDrawerProps {
   onClearCart: () => void;
   coupons: Coupon[];
   settings: SiteSettings;
+  paymentMethods?: PaymentMethodConfig[];
   lang: Language;
   user: AuthUser | null;
   profile: UserProfile | null;
@@ -68,6 +72,7 @@ export function CartDrawer({
   onClearCart,
   coupons,
   settings,
+  paymentMethods = [],
   lang,
   user,
   profile,
@@ -93,23 +98,11 @@ export function CartDrawer({
 
   useEffect(() => {
     if (method === 'wallet') return;
-    const isEnabled =
-      method === 'bkash'
-        ? settings.bkashEnabled !== false
-        : method === 'nagad'
-          ? settings.nagadEnabled !== false
-          : settings.rocketEnabled !== false;
-    if (!isEnabled) {
-      const next = (['bkash', 'nagad', 'rocket'] as PaymentMethod[]).find((m) =>
-        m === 'bkash'
-          ? settings.bkashEnabled !== false
-          : m === 'nagad'
-            ? settings.nagadEnabled !== false
-            : settings.rocketEnabled !== false
-      );
-      setMethod(next || 'wallet');
+    const enabled = getEnabledPaymentMethods(settings, paymentMethods);
+    if (!enabled.includes(method)) {
+      setMethod(enabled[0] || 'wallet');
     }
-  }, [settings.bkashEnabled, settings.nagadEnabled, settings.rocketEnabled, method]);
+  }, [settings, paymentMethods, method]);
 
   const hasDesignItem = useMemo(
     () => items.some((it) => getProductOrderFormType(it.product) === 'design'),
@@ -194,11 +187,7 @@ export function CartDrawer({
   const finalTotal = Math.max(1, subtotal - discountBdt);
 
   const receiverNumber =
-    method === 'bkash'
-      ? settings.bkashNumber
-      : method === 'nagad'
-        ? settings.nagadNumber
-        : settings.rocketNumber;
+    method === 'wallet' ? '' : getPaymentMethodDetails(method, settings, paymentMethods).number;
 
   if (!open) return null;
 
@@ -559,6 +548,7 @@ export function CartDrawer({
                     </p>
                     <PaymentMethodCardsGrid
                       settings={settings}
+                      paymentMethods={paymentMethods}
                       lang={lang}
                       selectedMethod={method}
                       onSelect={(m) => setMethod(m)}
@@ -572,6 +562,7 @@ export function CartDrawer({
                     <SelectedPaymentInstructionCard
                       method={method}
                       settings={settings}
+                      paymentMethods={paymentMethods}
                       amountBdt={finalTotal}
                       lang={lang}
                       copied={copiedNum}

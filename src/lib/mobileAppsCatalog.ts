@@ -37,6 +37,18 @@ export interface MobileAppItem {
   officialStoreUrl: string;
   officialStoreLabel: 'Google Play' | 'Official Website';
   playPackageId?: string;
+  version?: string;
+  sizeLabel?: string;
+  downloadUrl?: string;
+  bannerImageUrl?: string;
+  screenshots?: string[];
+  featured?: boolean;
+  popular?: boolean;
+  trending?: boolean;
+  visible?: boolean;
+  updatedAt?: number;
+  price1DeviceBdt?: number;
+  price2DevicesBdt?: number;
 }
 
 export const MOBILE_APP_DEVICE_PLANS: readonly MobileAppDevicePlan[] = [
@@ -1097,11 +1109,18 @@ export function buildMobileAppProductForOrder(
   app: MobileAppItem,
   plan: MobileAppDevicePlan
 ): { product: Product; pkg: ProductPackage } {
+  const customPrice =
+    plan.devices === 1 && app.price1DeviceBdt && app.price1DeviceBdt > 0
+      ? app.price1DeviceBdt
+      : plan.devices === 2 && app.price2DevicesBdt && app.price2DevicesBdt > 0
+        ? app.price2DevicesBdt
+        : plan.priceBdt;
+
   const pkg: ProductPackage = {
     id: `${app.id}_${plan.id}`,
     nameBn: `${app.name} — ${plan.labelBn}`,
     nameEn: `${app.name} — ${plan.labelEn}`,
-    priceBdt: plan.priceBdt,
+    priceBdt: customPrice,
   };
 
   const product: Product = {
@@ -1113,20 +1132,119 @@ export function buildMobileAppProductForOrder(
     titleEn: `${app.name} (Mobile App)`,
     descriptionBn: app.shortDescBn,
     descriptionEn: app.shortDescEn,
-    priceBdt: plan.priceBdt,
-    packages: MOBILE_APP_DEVICE_PLANS.map((p) => ({
-      id: `${app.id}_${p.id}`,
-      nameBn: `${app.name} — ${p.labelBn}`,
-      nameEn: `${app.name} — ${p.labelEn}`,
-      priceBdt: p.priceBdt,
-    })),
+    priceBdt: customPrice,
+    packages: MOBILE_APP_DEVICE_PLANS.map((p) => {
+      const pPrice =
+        p.devices === 1 && app.price1DeviceBdt && app.price1DeviceBdt > 0
+          ? app.price1DeviceBdt
+          : p.devices === 2 && app.price2DevicesBdt && app.price2DevicesBdt > 0
+            ? app.price2DevicesBdt
+            : p.priceBdt;
+      return {
+        id: `${app.id}_${p.id}`,
+        nameBn: `${app.name} — ${p.labelBn}`,
+        nameEn: `${app.name} — ${p.labelEn}`,
+        priceBdt: pPrice,
+      };
+    }),
     availability: 'in_stock',
     deliveryDurationBn: '১০ - ৩০ মিনিট',
     deliveryDurationEn: '10 - 30 mins',
-    imageUrl: app.screenUrl,
+    imageUrl: app.bannerImageUrl || app.screenUrl,
     customLogoUrl: app.iconUrl,
-    active: true,
+    active: app.visible !== false,
   };
 
   return { product, pkg };
 }
+
+const DEFAULT_POPULAR_APP_IDS = new Set([
+  'mapp_capcut',
+  'mapp_inshot',
+  'mapp_alight_motion',
+  'mapp_remini',
+  'mapp_chatgpt',
+  'mapp_truecaller',
+  'mapp_mx_player',
+  'mapp_picsart',
+]);
+
+const DEFAULT_TRENDING_APP_IDS = new Set([
+  'mapp_capcut',
+  'mapp_chatgpt',
+  'mapp_gemini',
+  'mapp_wink',
+  'mapp_snapseed',
+  'mapp_telegram_x',
+]);
+
+export function mergeMobileAppsCatalog(
+  overrideRows?: Array<{ id: string; deleted: boolean; data: Record<string, unknown> }>,
+  includeHidden = false
+): MobileAppItem[] {
+  const map = new Map<string, MobileAppItem>();
+  MOBILE_APPS_CATALOG.forEach((app, idx) => {
+    map.set(app.id, {
+      ...app,
+      version: 'Latest',
+      sizeLabel: `${18 + ((idx * 7) % 68)} MB`,
+      downloadUrl: app.officialStoreUrl,
+      screenshots: [app.screenUrl],
+      featured: idx < 6,
+      popular: DEFAULT_POPULAR_APP_IDS.has(app.id),
+      trending: DEFAULT_TRENDING_APP_IDS.has(app.id),
+      visible: true,
+      updatedAt: 1735689600000 + idx * 86400000,
+    });
+  });
+
+  if (Array.isArray(overrideRows)) {
+    for (const row of overrideRows) {
+      if (row.deleted) {
+        map.delete(row.id);
+        continue;
+      }
+      const d = row.data || {};
+      const prev = map.get(row.id);
+      const merged: MobileAppItem = {
+        id: row.id,
+        slug: String(d.slug || prev?.slug || row.id),
+        name: String(d.name || prev?.name || 'App'),
+        category: (String(d.category || prev?.category || 'other_apps') as MobileAppCategoryId),
+        developer: String(d.developer || prev?.developer || 'Verified Developer'),
+        shortDescBn: String(d.shortDescBn || d.shortDescEn || prev?.shortDescBn || ''),
+        shortDescEn: String(d.shortDescEn || d.shortDescBn || prev?.shortDescEn || ''),
+        featuresBn: Array.isArray(d.featuresBn) ? d.featuresBn.map(String) : prev?.featuresBn || [],
+        featuresEn: Array.isArray(d.featuresEn) ? d.featuresEn.map(String) : prev?.featuresEn || [],
+        iconUrl: String(d.logoUrl || d.iconUrl || prev?.iconUrl || '/assets/mobile-apps/icons/capcut.png'),
+        screenUrl: String(d.bannerImageUrl || d.screenUrl || prev?.screenUrl || '/assets/mobile-apps/screens/capcut.jpg'),
+        bannerImageUrl: String(d.bannerImageUrl || prev?.bannerImageUrl || ''),
+        officialStoreUrl: String(d.downloadUrl || d.playStoreUrl || d.officialStoreUrl || prev?.officialStoreUrl || '#'),
+        downloadUrl: String(d.downloadUrl || d.playStoreUrl || prev?.downloadUrl || prev?.officialStoreUrl || '#'),
+        officialStoreLabel:
+          d.officialStoreLabel === 'Official Website'
+            ? 'Official Website'
+            : prev?.officialStoreLabel || 'Google Play',
+        playPackageId: String(d.playPackageId || prev?.playPackageId || ''),
+        version: String(d.version || prev?.version || 'Latest'),
+        sizeLabel: String(d.sizeLabel || prev?.sizeLabel || '25 MB'),
+        screenshots:
+          Array.isArray(d.screenshots) && d.screenshots.length > 0
+            ? d.screenshots.map(String)
+            : prev?.screenshots || [String(d.bannerImageUrl || d.screenUrl || prev?.screenUrl || '')].filter(Boolean),
+        featured: d.featured !== undefined ? Boolean(d.featured) : prev?.featured,
+        popular: d.popular !== undefined ? Boolean(d.popular) : prev?.popular,
+        trending: d.trending !== undefined ? Boolean(d.trending) : prev?.trending,
+        visible: d.visible !== undefined ? Boolean(d.visible) : prev?.visible !== false,
+        updatedAt: Number(d.updatedAt || prev?.updatedAt || Date.now()),
+        price1DeviceBdt: typeof d.price1DeviceBdt === 'number' ? d.price1DeviceBdt : prev?.price1DeviceBdt,
+        price2DevicesBdt: typeof d.price2DevicesBdt === 'number' ? d.price2DevicesBdt : prev?.price2DevicesBdt,
+      };
+      map.set(row.id, merged);
+    }
+  }
+
+  const list = Array.from(map.values());
+  return includeHidden ? list : list.filter((a) => a.visible !== false);
+}
+

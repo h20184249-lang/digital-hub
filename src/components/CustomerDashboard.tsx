@@ -4,18 +4,24 @@ import {
   ArrowDownToLine,
   ArrowUpRight,
   Bell,
+  CheckCheck,
   CheckCircle2,
   Clock,
+  Coins,
   Copy,
   CreditCard,
+  Download,
   Eye,
   FileText,
   Film,
   Gift,
+  Heart,
+  Image as ImageIcon,
   KeyRound,
   LayoutDashboard,
   LogOut,
   Mail,
+  MessageCircle,
   MessageSquare,
   Package,
   Phone,
@@ -25,8 +31,10 @@ import {
   Shield,
   Star,
   Tag,
+  Trash2,
   Upload,
   User as UserIcon,
+  Users,
   Wallet,
   X,
   XCircle,
@@ -37,6 +45,7 @@ import {
 } from '../lib/authClient';
 import {
   AdNetworkConfig,
+  AdRewardTransaction,
   Advertisement,
   Announcement,
   AppNotification,
@@ -57,6 +66,7 @@ import {
   WalletTransaction,
   WithdrawalRequest,
 } from '../types/marketplace';
+import type { MobileAppItem } from '../lib/mobileAppsCatalog';
 import { t } from '../lib/i18n';
 import {
   cancelCustomerOrder,
@@ -64,11 +74,13 @@ import {
   createSupportTicket,
   formatDateShort,
   getTimeMs,
+  markAllNotificationsRead,
   markNotificationRead,
   normalizeBangladeshPhoneClient,
   submitAccountDeletionRequestServer,
   submitCustomerReview,
   submitRewardedAdClaimServer,
+  toggleAppFavorite,
   triggerLogoutAllDevicesServer,
   updateUserProfileFields,
 } from '../lib/firestoreService';
@@ -78,13 +90,27 @@ import { ManagedPlacementSlot } from './AdUnitFrame';
 import { PaymentProviderLogo } from './BrandLogos';
 
 interface CustomerDashboardProps {
-  initialTab?: 'overview' | 'orders' | 'payments' | 'referrals' | 'rewards' | 'coupons' | 'notifications' | 'support' | 'profile';
+  initialTab?:
+    | 'overview'
+    | 'orders'
+    | 'payments'
+    | 'referrals'
+    | 'rewards'
+    | 'favorites'
+    | 'coupons'
+    | 'notifications'
+    | 'support'
+    | 'profile';
   lang: Language;
   setLang: (l: Language) => void;
   user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
   walletTxs?: WalletTransaction[];
+  adRewardTransactions?: AdRewardTransaction[];
+  favoriteAppIds?: string[];
+  totalDownloads?: number;
+  mobileApps?: MobileAppItem[];
   orders: Order[];
   payments: Payment[];
   referrals: Referral[];
@@ -113,6 +139,10 @@ export function CustomerDashboard({
   profile,
   wallet,
   walletTxs = [],
+  adRewardTransactions = [],
+  favoriteAppIds = [],
+  totalDownloads = 0,
+  mobileApps = [],
   orders,
   payments,
   referrals,
@@ -135,11 +165,16 @@ export function CustomerDashboard({
   const [tab, setTab] = useState(initialTab);
   const [copiedRef, setCopiedRef] = useState(false);
   const [copiedUid, setCopiedUid] = useState(false);
+  const [notifFilter, setNotifFilter] = useState<'all' | 'new_app' | 'app_update' | 'announcement' | 'download' | 'payment' | 'support' | 'reward'>('all');
+  const [markingAllRead, setMarkingAllRead] = useState(false);
+  const [unfavoritingId, setUnfavoritingId] = useState('');
 
   // Support ticket state
+  const [ticketCategory, setTicketCategory] = useState('general');
   const [subject, setSubject] = useState('');
   const [orderNumber, setOrderNumber] = useState('');
   const [message, setMessage] = useState('');
+  const [ticketScreenshot, setTicketScreenshot] = useState('');
   const [ticketSubmitting, setTicketSubmitting] = useState(false);
 
   // Review & Order details modal state
@@ -210,6 +245,23 @@ export function CustomerDashboard({
     const pendingWithdrawal = withdrawals
       .filter((w) => w.status === 'Pending' || w.status === 'Processing')
       .reduce((s, w) => s + (w.amountBdt || 0), 0);
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayStartMs = todayStart.getTime();
+
+    const todaysBdtEarnings = walletTxs
+      .filter(
+        (tx) =>
+          tx.status === 'Approved' &&
+          ['cashback', 'referral', 'rewarded_ad', 'watch_earn_coin_redeem', 'promo_credit'].includes(tx.type) &&
+          getTimeMs(tx.createdAt) >= todayStartMs
+      )
+      .reduce((s, tx) => s + (tx.amountBdt || 0), 0);
+
+    const todaysCoinsEarned = adRewardTransactions
+      .filter((tx) => tx.coins > 0 && tx.type !== 'coin_redemption' && getTimeMs(tx.createdAt) >= todayStartMs)
+      .reduce((s, tx) => s + (tx.coins || 0), 0);
+
     return {
       totalEarnings,
       cashbackEarned,
@@ -217,13 +269,29 @@ export function CustomerDashboard({
       adRewardsEarned,
       totalWithdrawn,
       pendingWithdrawal,
+      todaysBdtEarnings,
+      todaysCoinsEarned,
     };
-  }, [walletTxs, withdrawals]);
+  }, [walletTxs, withdrawals, adRewardTransactions]);
+
+  const favoriteApps = useMemo(() => {
+    const idSet = new Set(favoriteAppIds);
+    return mobileApps.filter((a) => idSet.has(a.id));
+  }, [favoriteAppIds, mobileApps]);
+
+  const filteredNotifications = useMemo(() => {
+    if (notifFilter === 'all') return notifications;
+    return notifications.filter((n) => {
+      if (notifFilter === 'reward') return n.type === 'reward' || n.type === 'wallet' || n.type === 'referral';
+      if (notifFilter === 'payment') return n.type === 'payment' || n.type === 'order';
+      return n.type === notifFilter;
+    });
+  }, [notifications, notifFilter]);
 
   const recentActivity = useMemo(() => {
     type ActivityItem = {
       id: string;
-      kind: 'wallet' | 'withdrawal' | 'order' | 'alert';
+      kind: 'wallet' | 'withdrawal' | 'order' | 'coin';
       title: string;
       subtitle: string;
       amountLabel?: string;
@@ -247,6 +315,20 @@ export function CustomerDashboard({
         amountTone: isCredit ? 'credit' : 'debit',
         status: tx.status,
         ts: getTimeMs(tx.createdAt),
+      });
+    });
+
+    adRewardTransactions.slice(0, 4).forEach((ct) => {
+      const isRedeem = ct.type === 'coin_redemption' || ct.coins < 0;
+      items.push({
+        id: `coin_${ct.id}`,
+        kind: 'coin',
+        title: ct.note || ct.type.replace(/_/g, ' '),
+        subtitle: `${ct.provider.toUpperCase()} · ${ct.bdtEquivalent ? `৳${ct.bdtEquivalent}` : 'Coins'}`,
+        amountLabel: `${isRedeem ? '-' : '+'}${Math.abs(ct.coins)} Coins`,
+        amountTone: isRedeem ? 'debit' : 'credit',
+        status: ct.status,
+        ts: getTimeMs(ct.createdAt),
       });
     });
 
@@ -279,8 +361,8 @@ export function CustomerDashboard({
       });
     });
 
-    return items.sort((a, b) => b.ts - a.ts).slice(0, 8);
-  }, [walletTxs, withdrawals, orders, lang]);
+    return items.sort((a, b) => b.ts - a.ts).slice(0, 10);
+  }, [walletTxs, adRewardTransactions, withdrawals, orders, lang]);
 
   const incentivizedNetworks = useMemo(
     () =>
@@ -353,6 +435,17 @@ export function CustomerDashboard({
     handleCopyRef();
   };
 
+  const handleTicketScreenshotUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await compressImageToDataUrl(file, 900, 0.78);
+      setTicketScreenshot(dataUrl);
+    } catch {
+      setFeedback(lang === 'bn' ? 'স্ক্রিনশট আপলোড ব্যর্থ হয়েছে।' : 'Failed to process screenshot.');
+    }
+  };
+
   const handleTicketSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setTicketSubmitting(true);
@@ -364,13 +457,44 @@ export function CustomerDashboard({
         subject,
         message,
         orderNumber,
+        category: ticketCategory,
+        screenshotDataUrl: ticketScreenshot || undefined,
       });
       setSubject('');
       setOrderNumber('');
       setMessage('');
-      setFeedback(lang === 'bn' ? 'সাপোর্ট টিকেট জমা হয়েছে।' : 'Support ticket submitted.');
+      setTicketScreenshot('');
+      setTicketCategory('general');
+      setFeedback(lang === 'bn' ? 'সাপোর্ট টিকেট সফলভাবে জমা হয়েছে।' : 'Support ticket submitted successfully.');
+    } catch (err) {
+      setFeedback(err instanceof Error ? err.message : 'Ticket submission failed.');
     } finally {
       setTicketSubmitting(false);
+    }
+  };
+
+  const handleMarkAllRead = async () => {
+    if (markingAllRead || unreadCount === 0) return;
+    setMarkingAllRead(true);
+    try {
+      await markAllNotificationsRead();
+      setFeedback(lang === 'bn' ? 'সব নোটিফিকেশন পঠিত হিসেবে চিহ্নিত হয়েছে।' : 'All notifications marked as read.');
+    } catch (err) {
+      setFeedback(err instanceof Error ? err.message : 'Failed to mark notifications read.');
+    } finally {
+      setMarkingAllRead(false);
+    }
+  };
+
+  const handleUnfavoriteApp = async (appId: string) => {
+    if (unfavoritingId) return;
+    setUnfavoritingId(appId);
+    try {
+      await toggleAppFavorite(appId);
+    } catch {
+      // Ignore transient error
+    } finally {
+      setUnfavoritingId('');
     }
   };
 
@@ -504,7 +628,12 @@ export function CustomerDashboard({
     { id: 'overview', label: lang === 'bn' ? 'ড্যাশবোর্ড' : 'Overview', icon: LayoutDashboard },
     { id: 'orders', label: t(lang, 'navOrders'), icon: Package },
     { id: 'payments', label: lang === 'bn' ? 'পেমেন্ট' : 'Payments', icon: CreditCard },
-    { id: 'rewards', label: lang === 'bn' ? 'ক্যাশব্যাক ও রিওয়ার্ড' : 'Rewards & Cashback', icon: Star },
+    { id: 'rewards', label: lang === 'bn' ? 'কয়েন ও রিওয়ার্ড' : 'Coins & Rewards', icon: Star },
+    {
+      id: 'favorites',
+      label: `${lang === 'bn' ? 'পছন্দের অ্যাপস' : 'Favorites'}${favoriteApps.length ? ` (${favoriteApps.length})` : ''}`,
+      icon: Heart,
+    },
     { id: 'referrals', label: lang === 'bn' ? 'রেফারেল' : 'Referrals', icon: Gift },
     { id: 'coupons', label: lang === 'bn' ? 'কুপন' : 'Coupons', icon: Tag },
     {
@@ -669,50 +798,89 @@ export function CustomerDashboard({
 
       {tab === 'overview' && (
         <div className="space-y-6">
-          {/* Primary Financial & Account KPI Strip */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          {/* Primary Financial, Coins, Downloads & Account KPI Strip */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-3">
             {[
+              {
+                label: lang === 'bn' ? 'মোট কয়েন' : 'Total Coins',
+                val: `${wallet?.coinsAvailable || 0}`,
+                sub: `${lang === 'bn' ? 'আজীবন:' : 'Lifetime:'} ${wallet?.coinsLifetimeEarned || 0}`,
+                color: 'text-[#FF8500]',
+                icon: Coins,
+              },
+              {
+                label: lang === 'bn' ? 'আজকের আয়' : "Today's Earnings",
+                val: `৳${earningStats.todaysBdtEarnings.toFixed(0)}`,
+                sub: `+${earningStats.todaysCoinsEarned} ${lang === 'bn' ? 'কয়েন আজ' : 'Coins today'}`,
+                color: 'text-[#16A34A]',
+                icon: Star,
+              },
+              {
+                label: lang === 'bn' ? 'মোট ডাউনলোড' : 'Total Downloads',
+                val: `${totalDownloads}`,
+                sub: `${favoriteApps.length} ${lang === 'bn' ? 'পছন্দের অ্যাপ' : 'Favorite apps'}`,
+                color: 'text-[#0EA5E9]',
+                icon: Download,
+              },
+              {
+                label: lang === 'bn' ? 'রেফারেল সংখ্যা' : 'Referral Count',
+                val: `${referrals.length}`,
+                sub: `৳${earningStats.referralEarned.toFixed(0)} ${lang === 'bn' ? 'আয়' : 'earned'}`,
+                color: 'text-[#172033] dark:text-slate-100',
+                icon: Users,
+              },
               {
                 label: t(lang, 'walletBalanceLabel'),
                 val: `৳${(wallet?.availableBalanceBdt || 0).toFixed(2)}`,
+                sub: `${lang === 'bn' ? 'মোট আয়:' : 'Total:'} ৳${earningStats.totalEarnings.toFixed(0)}`,
                 color: 'text-[#FF8500]',
-              },
-              {
-                label: lang === 'bn' ? 'মোট আয়' : 'Total Earnings',
-                val: `৳${earningStats.totalEarnings.toFixed(0)}`,
-                color: 'text-[#16A34A]',
+                icon: Wallet,
               },
               {
                 label: lang === 'bn' ? 'মোট উইথড্র' : 'Total Withdrawn',
                 val: `৳${earningStats.totalWithdrawn.toFixed(0)}`,
+                sub: `${lang === 'bn' ? 'পেন্ডিং:' : 'Pending:'} ৳${earningStats.pendingWithdrawal.toFixed(0)}`,
                 color: 'text-[#172033] dark:text-slate-100',
-              },
-              {
-                label: lang === 'bn' ? 'পেন্ডিং উইথড্র' : 'Pending Withdrawal',
-                val: `৳${earningStats.pendingWithdrawal.toFixed(0)}`,
-                color: 'text-amber-600 dark:text-amber-400',
-              },
-              {
-                label: lang === 'bn' ? 'রেফারেল আয়' : 'Referral Earnings',
-                val: `৳${earningStats.referralEarned.toFixed(0)}`,
-                color: 'text-[#FF8500]',
+                icon: ArrowDownToLine,
               },
               {
                 label: lang === 'bn' ? 'মোট অর্ডার' : 'Total Orders',
                 val: `${orderStats.total}`,
+                sub: `${orderStats.completed} ${lang === 'bn' ? 'সম্পন্ন' : 'completed'}`,
                 color: 'text-[#172033] dark:text-slate-100',
+                icon: Package,
               },
-            ].map((kpi) => (
-              <div
-                key={kpi.label}
-                className="dh-card rounded-2xl p-4 dark:bg-slate-900 dark:border-slate-800"
-              >
-                <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">{kpi.label}</p>
-                <p className={`text-xl sm:text-2xl font-extrabold font-mono-num mt-1 ${kpi.color}`}>
-                  {kpi.val}
-                </p>
-              </div>
-            ))}
+              {
+                label: lang === 'bn' ? 'অপঠিত বার্তা' : 'Unread Alerts',
+                val: `${unreadCount}`,
+                sub: `${tickets.filter((tk) => tk.status !== 'closed').length} ${lang === 'bn' ? 'সক্রিয় টিকেট' : 'active tickets'}`,
+                color: unreadCount > 0 ? 'text-[#DC2626]' : 'text-[#172033] dark:text-slate-100',
+                icon: Bell,
+              },
+            ].map((kpi) => {
+              const KpiIcon = kpi.icon;
+              return (
+                <div
+                  key={kpi.label}
+                  className="dh-card rounded-2xl p-4 dark:bg-slate-900 dark:border-slate-800 flex items-start justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400 truncate">
+                      {kpi.label}
+                    </p>
+                    <p className={`text-xl sm:text-2xl font-extrabold font-mono-num mt-1 ${kpi.color}`}>
+                      {kpi.val}
+                    </p>
+                    <p className="text-[10px] font-semibold text-[#64748B] dark:text-slate-400 mt-0.5 truncate">
+                      {kpi.sub}
+                    </p>
+                  </div>
+                  <div className="w-8 h-8 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 flex items-center justify-center shrink-0">
+                    <KpiIcon className="w-4 h-4 text-[#FF8500]" />
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {/* Quick Referral Invite & Wallet Actions Bar */}
@@ -873,6 +1041,137 @@ export function CustomerDashboard({
                           {lang === 'bn' ? 'বিস্তারিত' : 'Details'}
                         </button>
                       </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Account Information + Favorite Apps Quick Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div className="dh-card rounded-3xl p-5 dark:bg-slate-900 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-bold text-[#172033] dark:text-slate-100 flex items-center gap-2">
+                  <UserIcon className="w-4 h-4 text-[#FF8500]" />
+                  {lang === 'bn' ? 'অ্যাকাউন্ট তথ্য' : 'Account Information'}
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setTab('profile')}
+                  className="text-xs font-bold text-[#FF8500] hover:underline"
+                >
+                  {lang === 'bn' ? 'সম্পাদনা' : 'Manage'} →
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2.5 text-xs">
+                <div className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70">
+                  <span className="text-[11px] text-[#777777] dark:text-slate-400 block">
+                    {lang === 'bn' ? 'নাম' : 'Account Name'}
+                  </span>
+                  <strong className="text-[#172033] dark:text-slate-100 truncate block">
+                    {profile?.displayName || user.displayName || 'Customer'}
+                  </strong>
+                </div>
+                <div className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70">
+                  <span className="text-[11px] text-[#777777] dark:text-slate-400 block">
+                    {lang === 'bn' ? 'লগইন মাধ্যম' : 'Sign-in Method'}
+                  </span>
+                  <strong className="text-[#172033] dark:text-slate-100 uppercase">
+                    {profile?.authMethod || user.authMethod || 'phone'}
+                  </strong>
+                </div>
+                <div className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70">
+                  <span className="text-[11px] text-[#777777] dark:text-slate-400 block">
+                    {lang === 'bn' ? 'যোগদানের তারিখ' : 'Member Since'}
+                  </span>
+                  <strong className="text-[#172033] dark:text-slate-100 font-mono-num">
+                    {formatDateShort(profile?.createdAt, lang)}
+                  </strong>
+                </div>
+                <div className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70">
+                  <span className="text-[11px] text-[#777777] dark:text-slate-400 block">
+                    {lang === 'bn' ? 'ফোন / ইমেইল' : 'Contact'}
+                  </span>
+                  <strong className="text-[#172033] dark:text-slate-100 font-mono-num truncate block">
+                    {profile?.phone || user.phone || profile?.email || user.email || '-'}
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="dh-card rounded-3xl p-5 dark:bg-slate-900 dark:border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-bold text-[#172033] dark:text-slate-100 flex items-center gap-2">
+                  <Heart className="w-4 h-4 text-[#FF8500]" />
+                  {lang === 'bn' ? 'পছন্দের অ্যাপস' : 'Favorite Apps'} ({favoriteApps.length})
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => (favoriteApps.length > 0 ? setTab('favorites') : onNavigate('mobile-apps'))}
+                  className="text-xs font-bold text-[#FF8500] hover:underline"
+                >
+                  {favoriteApps.length > 0
+                    ? lang === 'bn'
+                      ? 'সব দেখুন →'
+                      : 'View All →'
+                    : lang === 'bn'
+                      ? 'অ্যাপ স্টোর →'
+                      : 'Browse Apps →'}
+                </button>
+              </div>
+              {favoriteApps.length === 0 ? (
+                <div className="p-4 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70 text-center space-y-2">
+                  <p className="text-xs text-[#777777] dark:text-slate-400">
+                    {lang === 'bn'
+                      ? 'আপনি এখনো কোনো মোবাইল অ্যাপ ফেভারিট করেননি।'
+                      : 'You have not saved any favorite mobile apps yet.'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('mobile-apps')}
+                    className="px-3.5 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold"
+                  >
+                    {lang === 'bn' ? 'Mobile App Store দেখুন' : 'Explore Mobile App Store'}
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {favoriteApps.slice(0, 4).map((app) => (
+                    <div
+                      key={app.id}
+                      className="p-2.5 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70 border border-[#E6ECFA] dark:border-slate-700 flex items-center justify-between gap-2"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('mobile-apps')}
+                        className="flex items-center gap-2.5 min-w-0 text-left"
+                      >
+                        <img
+                          src={app.iconUrl}
+                          alt={app.name}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          className="w-9 h-9 rounded-xl object-cover shrink-0 border border-[#E6ECFA]"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-[#172033] dark:text-slate-100 truncate">
+                            {app.name}
+                          </p>
+                          <p className="text-[10px] text-[#64748B] dark:text-slate-400 truncate">
+                            {app.version ? `v${app.version}` : app.developer}
+                          </p>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={unfavoritingId === app.id}
+                        onClick={() => handleUnfavoriteApp(app.id)}
+                        title={lang === 'bn' ? 'সরিয়ে ফেলুন' : 'Remove favorite'}
+                        className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 shrink-0"
+                      >
+                        <Heart className="w-4 h-4 fill-current" />
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -1209,6 +1508,156 @@ export function CustomerDashboard({
               </div>
             )}
           </div>
+
+          {/* Complete Coin & Reward History Ledger */}
+          <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-bold text-[#172033] flex items-center gap-2">
+                  <Coins className="w-5 h-5 text-[#FF8500]" />
+                  {lang === 'bn' ? 'সম্পূর্ণ কয়েন ও রিওয়ার্ড হিস্টোরি' : 'Reward History & Coin Ledger'}
+                </h2>
+                <p className="text-xs text-[#777777]">
+                  {lang === 'bn'
+                    ? 'ওয়াচ অ্যান্ড আর্ন, অ্যাডমিন বোনাস এবং কয়েন রিডেম্পশন ইতিহাস'
+                    : 'Verified coin earnings, admin adjustments, and wallet redemptions'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1.5 rounded-xl bg-[#FFF7EE] border border-[#FF8500]/30 text-xs font-extrabold font-mono-num text-[#FF8500]">
+                  {wallet?.coinsAvailable || 0} Coins
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('watch-earn')}
+                  className="px-3.5 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold"
+                >
+                  {lang === 'bn' ? 'আরও কয়েন আয়' : 'Earn More'}
+                </button>
+              </div>
+            </div>
+
+            {adRewardTransactions.length === 0 ? (
+              <p className="text-xs text-[#777777] py-4 text-center">
+                {lang === 'bn' ? 'এখনো কোনো কয়েন লেনদেন রেকর্ড হয়নি।' : 'No coin transactions recorded yet.'}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {adRewardTransactions.slice(0, 20).map((ct) => {
+                  const isDebit = ct.type === 'coin_redemption' || ct.coins < 0;
+                  return (
+                    <div
+                      key={ct.id}
+                      className="p-3 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex items-center justify-between gap-3 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-bold text-[#172033] truncate">{ct.note || ct.type.replace(/_/g, ' ')}</p>
+                        <p className="text-[11px] text-[#777777] font-mono-num">
+                          {ct.provider.toUpperCase()} · {formatDateShort(ct.createdAt, lang)}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span
+                          className={`font-mono-num font-extrabold ${
+                            isDebit ? 'text-[#DC2626]' : 'text-[#16A34A]'
+                          }`}
+                        >
+                          {isDebit ? '-' : '+'}
+                          {Math.abs(ct.coins)} Coins
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-white border border-[#E6ECFA] text-[10px] font-bold">
+                          {ct.status}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === 'favorites' && (
+        <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-[#172033] flex items-center gap-2">
+                <Heart className="w-5 h-5 text-rose-500 fill-current" />
+                {lang === 'bn' ? 'আপনার পছন্দের মোবাইল অ্যাপস' : 'Favorite Mobile Apps'}
+              </h2>
+              <p className="text-xs text-[#777777]">
+                {lang === 'bn'
+                  ? 'Mobile App Store থেকে সেভ করা আপনার প্রিয় অ্যাপগুলো এখানে দ্রুত পাবেন।'
+                  : 'Quick access to Android apps you bookmarked in Mobile App Store.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('mobile-apps')}
+              className="px-4 py-2 rounded-xl dh-orange-gradient text-white text-xs font-bold"
+            >
+              {lang === 'bn' ? 'Mobile App Store খুলুন →' : 'Open App Store →'}
+            </button>
+          </div>
+
+          {favoriteApps.length === 0 ? (
+            <div className="py-10 text-center space-y-3">
+              <Heart className="w-10 h-10 text-[#CBD5E1] mx-auto" />
+              <p className="text-sm text-[#777777]">
+                {lang === 'bn'
+                  ? 'কোনো অ্যাপ এখনো ফেভারিট তালিকায় যোগ করা হয়নি।'
+                  : 'No favorite apps saved yet. Tap the heart icon on any app in the Mobile App Store.'}
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {favoriteApps.map((app) => (
+                <div
+                  key={app.id}
+                  className="p-4 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex flex-col justify-between gap-3"
+                >
+                  <div className="flex items-start gap-3">
+                    <img
+                      src={app.iconUrl}
+                      alt={app.name}
+                      loading="lazy"
+                      referrerPolicy="no-referrer"
+                      className="w-12 h-12 rounded-xl object-cover border border-[#E6ECFA] shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-extrabold text-[#172033] truncate">{app.name}</p>
+                      <p className="text-[11px] text-[#777777] truncate">
+                        {app.developer}
+                        {app.version ? ` · v${app.version}` : ''}
+                      </p>
+                      <p className="text-xs text-[#475569] line-clamp-2 mt-1">
+                        {lang === 'bn' ? app.shortDescBn : app.shortDescEn}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#E6ECFA]">
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('mobile-apps')}
+                      className="px-3 py-1.5 rounded-xl bg-[#172033] text-white text-xs font-bold hover:bg-[#FF8500] transition-colors"
+                    >
+                      {lang === 'bn' ? 'অ্যাপ দেখুন' : 'View in Store'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={unfavoritingId === app.id}
+                      onClick={() => handleUnfavoriteApp(app.id)}
+                      className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-600 text-xs font-bold inline-flex items-center gap-1 hover:bg-rose-100"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      {lang === 'bn' ? 'সরান' : 'Remove'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1398,16 +1847,58 @@ export function CustomerDashboard({
             </div>
           )}
 
-          <div className="dh-card rounded-3xl p-5 space-y-3">
-            <h2 className="text-lg font-bold text-[#172033]">
-              {lang === 'bn' ? 'নোটিফিকেশন ও পেমেন্ট স্ট্যাটাস' : 'Notifications & Alerts'}
-            </h2>
-            {notifications.length === 0 ? (
+          <div className="dh-card rounded-3xl p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-bold text-[#172033]">
+                {lang === 'bn' ? 'নোটিফিকেশন ও পেমেন্ট স্ট্যাটাস' : 'Notifications & Alerts'}
+              </h2>
+              {unreadCount > 0 && (
+                <button
+                  type="button"
+                  disabled={markingAllRead}
+                  onClick={handleMarkAllRead}
+                  className="px-3.5 py-1.5 rounded-xl bg-[#172033] text-white text-xs font-bold inline-flex items-center gap-1.5 hover:bg-[#FF8500] transition-colors disabled:opacity-60"
+                >
+                  <CheckCheck className="w-3.5 h-3.5" />
+                  <span>{lang === 'bn' ? 'সব পঠিত করুন' : 'Mark All Read'}</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              {(
+                [
+                  { id: 'all', bn: 'সব', en: 'All' },
+                  { id: 'new_app', bn: 'নতুন অ্যাপ', en: 'New App' },
+                  { id: 'app_update', bn: 'আপডেট', en: 'Updates' },
+                  { id: 'announcement', bn: 'ঘোষণা', en: 'Announcements' },
+                  { id: 'download', bn: 'ডাউনলোড', en: 'Downloads' },
+                  { id: 'payment', bn: 'পেমেন্ট ও অর্ডার', en: 'Payments' },
+                  { id: 'support', bn: 'সাপোর্ট', en: 'Support' },
+                  { id: 'reward', bn: 'রিওয়ার্ড', en: 'Rewards' },
+                ] as const
+              ).map((cat) => (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setNotifFilter(cat.id)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 transition-colors ${
+                    notifFilter === cat.id
+                      ? 'bg-[#FF8500] text-white'
+                      : 'bg-[#F3F6FF] border border-[#E6ECFA] text-[#475569] hover:border-[#FF8500]'
+                  }`}
+                >
+                  {lang === 'bn' ? cat.bn : cat.en}
+                </button>
+              ))}
+            </div>
+
+            {filteredNotifications.length === 0 ? (
               <p className="text-sm text-[#777777] py-6 text-center">
-                {lang === 'bn' ? 'কোনো নতুন বার্তা নেই।' : 'No notifications yet.'}
+                {lang === 'bn' ? 'এই ক্যাটাগরিতে কোনো বার্তা নেই।' : 'No notifications in this category.'}
               </p>
             ) : (
-              notifications.map((n) => (
+              filteredNotifications.map((n) => (
                 <div
                   key={n.id}
                   onClick={() => !n.read && markNotificationRead(n.id)}
@@ -1416,10 +1907,15 @@ export function CustomerDashboard({
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-bold text-[#172033]">
-                      {lang === 'bn' ? n.titleBn : n.titleEn}
-                    </p>
-                    <span className="text-[11px] text-[#777777]">{formatDateShort(n.createdAt, lang)}</span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="px-2 py-0.5 rounded-md bg-[#F3F6FF] border border-[#E6ECFA] text-[10px] font-bold uppercase text-[#FF8500] shrink-0">
+                        {n.type.replace(/_/g, ' ')}
+                      </span>
+                      <p className="text-sm font-bold text-[#172033] truncate">
+                        {lang === 'bn' ? n.titleBn : n.titleEn}
+                      </p>
+                    </div>
+                    <span className="text-[11px] text-[#777777] shrink-0">{formatDateShort(n.createdAt, lang)}</span>
                   </div>
                   <p className="text-xs text-[#777777] mt-1">{lang === 'bn' ? n.messageBn : n.messageEn}</p>
                 </div>
@@ -1430,69 +1926,157 @@ export function CustomerDashboard({
       )}
 
       {tab === 'support' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <form onSubmit={handleTicketSubmit} className="dh-card rounded-3xl p-5 space-y-3">
-            <h2 className="text-lg font-bold text-[#172033]">
-              {lang === 'bn' ? 'নতুন সাপোর্ট টিকেট' : 'Submit Support Ticket'}
-            </h2>
-            <input
-              type="text"
-              required
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder={lang === 'bn' ? 'বিষয় লিখুন' : 'Subject'}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs focus:outline-none focus:border-[#FF8500]"
-            />
-            <input
-              type="text"
-              value={orderNumber}
-              onChange={(e) => setOrderNumber(e.target.value)}
-              placeholder={lang === 'bn' ? 'অর্ডার নম্বর (ঐচ্ছিক, যেমন DH-123456)' : 'Order # (Optional)'}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-mono-num focus:outline-none focus:border-[#FF8500]"
-            />
-            <textarea
-              rows={3}
-              required
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder={lang === 'bn' ? 'সমস্যার বিস্তারিত লিখুন...' : 'Describe your issue...'}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs focus:outline-none focus:border-[#FF8500]"
-            />
-            <button
-              type="submit"
-              disabled={ticketSubmitting}
-              className="w-full py-2.5 rounded-xl dh-orange-gradient text-white font-bold text-xs"
-            >
-              {ticketSubmitting ? '...' : lang === 'bn' ? 'টিকেট পাঠান' : 'Send Ticket'}
-            </button>
-          </form>
-
-          <div className="dh-card rounded-3xl p-5 space-y-3">
-            <h2 className="text-lg font-bold text-[#172033]">
-              {lang === 'bn' ? 'পূর্ববর্তী সাপোর্ট টিকেট' : 'Your Tickets'}
-            </h2>
-            {tickets.length === 0 ? (
-              <p className="text-xs text-[#777777] py-6 text-center">
-                {lang === 'bn' ? 'কোনো টিকেট নেই।' : 'No support tickets yet.'}
+        <div className="space-y-5">
+          {/* Quick WhatsApp Support Banner */}
+          <div className="p-4 rounded-3xl bg-[#16A34A]/10 border border-[#16A34A]/25 flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <p className="text-xs font-extrabold uppercase text-[#16A34A] flex items-center gap-1.5">
+                <MessageCircle className="w-4 h-4" />
+                {lang === 'bn' ? 'তাৎক্ষণিক WhatsApp সাপোর্ট' : 'Instant WhatsApp Support'}
               </p>
-            ) : (
-              tickets.map((tk) => (
-                <div key={tk.id} className="p-3.5 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-1">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs font-bold text-[#172033]">{tk.subject}</span>
-                    <span className="px-2 py-0.5 rounded-md bg-white text-[10px] font-bold uppercase text-[#FF8500]">
-                      {tk.status}
-                    </span>
+              <p className="text-xs text-[#172033]">
+                {lang === 'bn'
+                  ? 'জরুরি অর্ডার বা পেমেন্ট যাচাইয়ের জন্য সরাসরি WhatsApp-এ মেসেজ দিন।'
+                  : 'Need urgent help with an order or payment? Reach our support desk directly on WhatsApp.'}
+              </p>
+            </div>
+            <a
+              href={settings.whatsappLink || 'https://wa.me/8801352838945'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2 rounded-xl bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-bold inline-flex items-center gap-1.5"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>{lang === 'bn' ? 'WhatsApp চ্যাট খুলুন' : 'Chat on WhatsApp'}</span>
+            </a>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <form onSubmit={handleTicketSubmit} className="dh-card rounded-3xl p-5 space-y-3">
+              <h2 className="text-lg font-bold text-[#172033]">
+                {lang === 'bn' ? 'নতুন সাপোর্ট টিকেট' : 'Submit Support Ticket'}
+              </h2>
+              <div>
+                <label className="block text-[11px] font-bold text-[#172033] mb-1">
+                  {lang === 'bn' ? 'সমস্যার ধরন (Category)' : 'Issue Category'}
+                </label>
+                <select
+                  value={ticketCategory}
+                  onChange={(e) => setTicketCategory(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-semibold text-[#172033] focus:outline-none focus:border-[#FF8500]"
+                >
+                  <option value="general">{lang === 'bn' ? 'সাধারণ সহায়তা (General)' : 'General Support'}</option>
+                  <option value="order">{lang === 'bn' ? 'অর্ডার ও ডেলিভারি (Order)' : 'Order & Delivery'}</option>
+                  <option value="payment">{lang === 'bn' ? 'পেমেন্ট ও TrxID (Payment)' : 'Payment & TrxID'}</option>
+                  <option value="withdrawal">{lang === 'bn' ? 'উইথড্র সমস্যা (Withdrawal)' : 'Withdrawal Issue'}</option>
+                  <option value="app_bug">{lang === 'bn' ? 'মোবাইল অ্যাপ / লিংক (App Bug)' : 'App Store / Broken Link'}</option>
+                  <option value="reward">{lang === 'bn' ? 'কয়েন ও রিওয়ার্ড (Rewards)' : 'Coins & Watch/Earn'}</option>
+                  <option value="account">{lang === 'bn' ? 'অ্যাকাউন্ট নিরাপত্তা (Account)' : 'Account & Security'}</option>
+                </select>
+              </div>
+              <input
+                type="text"
+                required
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder={lang === 'bn' ? 'বিষয় লিখুন' : 'Subject'}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs focus:outline-none focus:border-[#FF8500]"
+              />
+              <input
+                type="text"
+                value={orderNumber}
+                onChange={(e) => setOrderNumber(e.target.value)}
+                placeholder={lang === 'bn' ? 'অর্ডার নম্বর (ঐচ্ছিক, যেমন DH-123456)' : 'Order # (Optional)'}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs font-mono-num focus:outline-none focus:border-[#FF8500]"
+              />
+              <textarea
+                rows={3}
+                required
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder={lang === 'bn' ? 'সমস্যার বিস্তারিত লিখুন...' : 'Describe your issue...'}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#F3F6FF] border border-[#E6ECFA] text-xs focus:outline-none focus:border-[#FF8500]"
+              />
+              <div className="space-y-2">
+                <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#FFF7EE] border border-[#FF8500]/35 text-xs font-bold text-[#172033] cursor-pointer hover:border-[#FF8500]">
+                  <ImageIcon className="w-4 h-4 text-[#FF8500]" />
+                  <span>{lang === 'bn' ? 'স্ক্রিনশট সংযুক্ত করুন (ঐচ্ছিক)' : 'Attach Screenshot (Optional)'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleTicketScreenshotUpload}
+                    className="hidden"
+                  />
+                </label>
+                {ticketScreenshot && (
+                  <div className="relative inline-block">
+                    <img
+                      src={ticketScreenshot}
+                      alt="Ticket screenshot preview"
+                      className="max-h-32 rounded-xl border border-[#E6ECFA] object-contain bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setTicketScreenshot('')}
+                      aria-label="Remove screenshot"
+                      className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-[#DC2626] text-white flex items-center justify-center shadow"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
-                  <p className="text-xs text-[#777777]">{tk.message}</p>
-                  {tk.adminReply && (
-                    <p className="text-xs text-[#16A34A] font-semibold pt-1 border-t border-[#E6ECFA]">
-                      Admin: {tk.adminReply}
-                    </p>
-                  )}
-                </div>
-              ))
-            )}
+                )}
+              </div>
+              <button
+                type="submit"
+                disabled={ticketSubmitting}
+                className="w-full py-2.5 rounded-xl dh-orange-gradient text-white font-bold text-xs"
+              >
+                {ticketSubmitting ? '...' : lang === 'bn' ? 'টিকেট পাঠান' : 'Send Ticket'}
+              </button>
+            </form>
+
+            <div className="dh-card rounded-3xl p-5 space-y-3">
+              <h2 className="text-lg font-bold text-[#172033]">
+                {lang === 'bn' ? 'পূর্ববর্তী সাপোর্ট টিকেট' : 'Your Tickets'}
+              </h2>
+              {tickets.length === 0 ? (
+                <p className="text-xs text-[#777777] py-6 text-center">
+                  {lang === 'bn' ? 'কোনো টিকেট নেই।' : 'No support tickets yet.'}
+                </p>
+              ) : (
+                tickets.map((tk) => (
+                  <div key={tk.id} className="p-3.5 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-1.5">
+                    <div className="flex flex-wrap justify-between items-center gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {tk.category && (
+                          <span className="px-2 py-0.5 rounded-md bg-white border border-[#E6ECFA] text-[10px] font-bold uppercase text-[#475569] shrink-0">
+                            {tk.category.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                        <span className="text-xs font-bold text-[#172033] truncate">{tk.subject}</span>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-md bg-white text-[10px] font-bold uppercase text-[#FF8500] shrink-0">
+                        {tk.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#777777]">{tk.message}</p>
+                    {tk.screenshotDataUrl && (
+                      <img
+                        src={tk.screenshotDataUrl}
+                        alt="Ticket attachment"
+                        loading="lazy"
+                        className="max-h-28 rounded-xl border border-[#E6ECFA] bg-white object-contain"
+                      />
+                    )}
+                    {tk.adminReply && (
+                      <p className="text-xs text-[#16A34A] font-semibold pt-1.5 border-t border-[#E6ECFA]">
+                        Admin: {tk.adminReply}
+                      </p>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}

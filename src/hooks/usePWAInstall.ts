@@ -168,3 +168,69 @@ export function useOnlineStatus(): boolean {
 
   return isOnline;
 }
+
+let capturedSwUpdateAvailable = false;
+let capturedUpdateSwRunner: ((reloadPage?: boolean) => Promise<void>) | null = null;
+const swListeners = new Set<() => void>();
+
+export function reportSwUpdateAvailable(updateFn: (reloadPage?: boolean) => Promise<void>): void {
+  capturedSwUpdateAvailable = true;
+  capturedUpdateSwRunner = updateFn;
+  swListeners.forEach((fn) => fn());
+}
+
+export function useSwUpdatePrompt() {
+  const [swUpdateAvailable, setSwUpdateAvailable] = useState<boolean>(() => capturedSwUpdateAvailable);
+
+  useEffect(() => {
+    const sync = () => setSwUpdateAvailable(capturedSwUpdateAvailable);
+    swListeners.add(sync);
+    sync();
+
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .getRegistration()
+        .then((reg) => {
+          if (reg?.waiting) {
+            capturedSwUpdateAvailable = true;
+            sync();
+          }
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      swListeners.delete(sync);
+    };
+  }, []);
+
+  const applySwUpdate = useCallback(async () => {
+    capturedSwUpdateAvailable = false;
+    swListeners.forEach((fn) => fn());
+    if (capturedUpdateSwRunner) {
+      await capturedUpdateSwRunner(true).catch(() => window.location.reload());
+      return;
+    }
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg?.waiting) {
+          navigator.serviceWorker.addEventListener(
+            'controllerchange',
+            () => {
+              window.location.reload();
+            },
+            { once: true }
+          );
+          reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+          return;
+        }
+      } catch {
+        // fallback reload below
+      }
+    }
+    window.location.reload();
+  }, []);
+
+  return { swUpdateAvailable, applySwUpdate };
+}

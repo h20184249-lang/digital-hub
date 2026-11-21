@@ -14,19 +14,18 @@ interface PaymentLogoProps {
   settings?: SiteSettings;
 }
 
-export const PAYMENT_BRAND_META: Record<
-  PaymentMethod,
-  {
-    nameEn: string;
-    nameBn: string;
-    primaryColor: string;
-    secondaryColor: string;
-    gradient: string;
-    softBg: string;
-    borderColor: string;
-    defaultLogoPath: string;
-  }
-> = {
+export interface PaymentBrandMetaEntry {
+  nameEn: string;
+  nameBn: string;
+  primaryColor: string;
+  secondaryColor: string;
+  gradient: string;
+  softBg: string;
+  borderColor: string;
+  defaultLogoPath: string;
+}
+
+export const PAYMENT_BRAND_META: Record<string, PaymentBrandMetaEntry> = {
   bkash: {
     nameEn: 'bKash',
     nameBn: 'বিকাশ',
@@ -57,7 +56,33 @@ export const PAYMENT_BRAND_META: Record<
     borderColor: 'rgba(140, 52, 148, 0.35)',
     defaultLogoPath: '/assets/payments/rocket.svg',
   },
+  bank_transfer: {
+    nameEn: 'Bank Transfer',
+    nameBn: 'ব্যাংক ট্রান্সফার',
+    primaryColor: '#0F4C81',
+    secondaryColor: '#1D4ED8',
+    gradient: 'linear-gradient(135deg, #0F4C81 0%, #1D4ED8 100%)',
+    softBg: '#EFF6FF',
+    borderColor: 'rgba(29, 78, 216, 0.35)',
+    defaultLogoPath: '/assets/payments/bkash.svg',
+  },
 };
+
+export function getPaymentBrandMeta(method: PaymentMethod, customName?: string): PaymentBrandMetaEntry {
+  const key = String(method || '').trim().toLowerCase();
+  if (PAYMENT_BRAND_META[key]) return PAYMENT_BRAND_META[key];
+  const label = customName || method || 'Payment';
+  return {
+    nameEn: label,
+    nameBn: label,
+    primaryColor: '#FF8500',
+    secondaryColor: '#E56D00',
+    gradient: 'linear-gradient(135deg, #FF9B19 0%, #E56D00 100%)',
+    softBg: '#FFF8F0',
+    borderColor: 'rgba(255, 133, 0, 0.35)',
+    defaultLogoPath: '/assets/payments/bkash.svg',
+  };
+}
 
 export function resolvePaymentLogoUrl(method: PaymentMethod, settings?: SiteSettings, customOverride?: string): string {
   if (customOverride && customOverride.trim()) return customOverride.trim();
@@ -66,9 +91,11 @@ export function resolvePaymentLogoUrl(method: PaymentMethod, settings?: SiteSett
       ? settings?.bkashLogoUrl
       : method === 'nagad'
         ? settings?.nagadLogoUrl
-        : settings?.rocketLogoUrl;
+        : method === 'rocket'
+          ? settings?.rocketLogoUrl
+          : undefined;
   if (fromSettings && fromSettings.trim()) return fromSettings.trim();
-  return PAYMENT_BRAND_META[method].defaultLogoPath;
+  return getPaymentBrandMeta(method).defaultLogoPath;
 }
 
 export function PaymentProviderLogo({ method, compact = false, customLogoUrl, settings }: PaymentLogoProps) {
@@ -99,7 +126,7 @@ export function PaymentProviderLogo({ method, compact = false, customLogoUrl, se
     );
   }
 
-  const meta = PAYMENT_BRAND_META[method];
+  const meta = getPaymentBrandMeta(method);
   const logoSrc = resolvePaymentLogoUrl(method, settings, customLogoUrl);
   const effectiveSrc = failedUrl === logoSrc ? meta.defaultLogoPath : logoSrc;
   const accountType =

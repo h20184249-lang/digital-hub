@@ -220,6 +220,79 @@ function mapPaymentMethodRow(row: PaymentMethodRow) {
   };
 }
 
+async function syncPaymentMethodToSettings(
+  db: AppDatabase,
+  pmCode: string,
+  accountNumber: string,
+  accountName: string,
+  enabled: boolean
+): Promise<void> {
+  const normalizedCode = pmCode.trim().toLowerCase();
+  if (normalizedCode !== 'bkash' && normalizedCode !== 'nagad' && normalizedCode !== 'rocket') {
+    return;
+  }
+  const now = Date.now();
+  const row = await db.first<{ payload_json: string }>(
+    `SELECT payload_json FROM catalog_overrides WHERE collection = 'settings' AND doc_id = 'global' AND deleted = 0 LIMIT 1`
+  );
+  const current = row ? parseJsonSafe<Record<string, unknown>>(row.payload_json, {}) : { id: 'global' };
+  const next: Record<string, unknown> = { ...current, id: 'global', updatedAt: now };
+  if (normalizedCode === 'bkash') {
+    next.bkashNumber = accountNumber;
+    if (accountName) next.bkashType = accountName;
+    next.bkashEnabled = enabled;
+  } else if (normalizedCode === 'nagad') {
+    next.nagadNumber = accountNumber;
+    if (accountName) next.nagadType = accountName;
+    next.nagadEnabled = enabled;
+  } else if (normalizedCode === 'rocket') {
+    next.rocketNumber = accountNumber;
+    if (accountName) next.rocketType = accountName;
+    next.rocketEnabled = enabled;
+  }
+  await db.run(
+    `INSERT INTO catalog_overrides (collection, doc_id, deleted, payload_json, updated_at)
+     VALUES ('settings', 'global', 0, ?, ?)
+     ON CONFLICT(collection, doc_id) DO UPDATE SET deleted = 0, payload_json = excluded.payload_json, updated_at = excluded.updated_at`,
+    [JSON.stringify(next), now]
+  );
+}
+
+async function syncSettingsToPaymentMethods(
+  db: AppDatabase,
+  settingsData: Record<string, unknown>
+): Promise<void> {
+  const now = Date.now();
+  const mappings: Array<{ code: 'bkash' | 'nagad' | 'rocket'; numberKey: string; typeKey: string; enabledKey: string }> = [
+    { code: 'bkash', numberKey: 'bkashNumber', typeKey: 'bkashType', enabledKey: 'bkashEnabled' },
+    { code: 'nagad', numberKey: 'nagadNumber', typeKey: 'nagadType', enabledKey: 'nagadEnabled' },
+    { code: 'rocket', numberKey: 'rocketNumber', typeKey: 'rocketType', enabledKey: 'rocketEnabled' },
+  ];
+  for (const m of mappings) {
+    const rawNumber = typeof settingsData[m.numberKey] === 'string' ? settingsData[m.numberKey] as string : '';
+    const rawType = typeof settingsData[m.typeKey] === 'string' ? settingsData[m.typeKey] as string : '';
+    const hasEnabledFlag = typeof settingsData[m.enabledKey] === 'boolean';
+    if (!rawNumber.trim() && !rawType.trim() && !hasEnabledFlag) continue;
+    const existing = await db.first<PaymentMethodRow>(
+      'SELECT * FROM payment_methods WHERE code = ? LIMIT 1',
+      [m.code]
+    );
+    if (!existing) continue;
+    await db.run(
+      `UPDATE payment_methods
+       SET account_number = ?, account_name = ?, enabled = ?, updated_at = ?
+       WHERE id = ?`,
+      [
+        rawNumber.trim() ? rawNumber.trim().slice(0, 120) : existing.account_number,
+        rawType.trim() ? rawType.trim().slice(0, 120) : existing.account_name,
+        hasEnabledFlag ? (settingsData[m.enabledKey] ? 1 : 0) : existing.enabled,
+        now,
+        existing.id,
+      ]
+    );
+  }
+}
+
 async function getGlobalSiteSettings(db: AppDatabase): Promise<EffectiveSiteSettings> {
   const row = await db.first<{ payload_json: string }>(
     `SELECT payload_json FROM catalog_overrides WHERE collection = 'settings' AND doc_id = 'global' AND deleted = 0 LIMIT 1`
@@ -556,7 +629,19 @@ async function insertNotification(
   titleEn: string,
   messageBn: string,
   messageEn: string,
-  type: 'order' | 'payment' | 'wallet' | 'referral' | 'system' | 'promo'
+  type:
+    | 'order'
+    | 'payment'
+    | 'wallet'
+    | 'referral'
+    | 'system'
+    | 'promo'
+    | 'new_app'
+    | 'app_update'
+    | 'announcement'
+    | 'download'
+    | 'support'
+    | 'reward'
 ): Promise<void> {
   const now = Date.now();
   const id = generateSecureId('notif', 8);
@@ -1581,6 +1666,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         viewingSessionRows,
         adRewardTxRows,
         announcementRows,
+        favoriteRows,
+        downloadCountRow,
       ] = await Promise.all([
         db.all<{ payload_json: string }>(
           'SELECT payload_json FROM wallet_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 200',
@@ -1625,6 +1712,14 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         db.all<{ payload_json: string }>(
           'SELECT payload_json FROM announcements WHERE active = 1 ORDER BY created_at DESC LIMIT 50'
         ),
+        db.all<{ app_id: string }>(
+          'SELECT app_id FROM app_favorites WHERE user_id = ? ORDER BY created_at DESC LIMIT 200',
+          [user.uid]
+        ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ? AND event_type = 'app_download'`,
+          [user.uid]
+        ),
       ]);
 
       res.json({
@@ -1643,6 +1738,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         viewingSessions: viewingSessionRows.map((r) => parseJsonSafe(r.payload_json, {})),
         adRewardTransactions: adRewardTxRows.map((r) => parseJsonSafe(r.payload_json, {})),
         announcements: announcementRows.map((r) => parseJsonSafe(r.payload_json, {})),
+        favoriteAppIds: favoriteRows.map((r) => r.app_id),
+        totalDownloads: Number(downloadCountRow?.cnt || 0),
       });
     } catch (err) {
       handleRouteError(res, err, 'ড্যাশবোর্ড তথ্য লোড করা যায়নি।');
@@ -1781,7 +1878,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         couponCode?: string;
         discountBdt?: number;
         totalPriceBdt?: number;
-        paymentMethod?: 'bkash' | 'nagad' | 'rocket';
+        paymentMethod?: string;
         receiverNumber?: string;
         senderNumber?: string;
         transactionId?: string;
@@ -1792,11 +1889,21 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       const totalPriceBdt = Number(body.totalPriceBdt || 0);
       const quantity = Math.max(1, Math.min(100, Math.round(Number(body.quantity || 1))));
-      const method =
-        body.paymentMethod === 'nagad' || body.paymentMethod === 'rocket'
-          ? body.paymentMethod
+      const rawMethod = String(body.paymentMethod || 'bkash').trim().toLowerCase().slice(0, 40);
+      const pmRow = await db.first<PaymentMethodRow>(
+        'SELECT * FROM payment_methods WHERE code = ? LIMIT 1',
+        [rawMethod]
+      );
+      if (pmRow && pmRow.enabled !== 1) {
+        res.status(400).json({ ok: false, error: `${pmRow.name} পেমেন্ট মাধ্যমটি বর্তমানে বন্ধ আছে।` });
+        return;
+      }
+      const method = pmRow
+        ? pmRow.code
+        : rawMethod === 'nagad' || rawMethod === 'rocket'
+          ? rawMethod
           : 'bkash';
-      const senderNumber = String(body.senderNumber || '').trim().slice(0, 30);
+      const senderNumber = String(body.senderNumber || '').trim().slice(0, 60);
       const transactionId = String(body.transactionId || '').trim().slice(0, 80);
       const txKey = normalizeTxIdKey(transactionId);
 
@@ -2084,10 +2191,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       };
       const amountBdt = Number(body.amountBdt || 0);
       const rawMethod = String(body.method || 'bkash').trim().toLowerCase().slice(0, 40);
-      const pmRow = await db.first<PaymentMethodRow>(
-        'SELECT * FROM payment_methods WHERE code = ? AND enabled = 1 AND supports_deposit = 1 LIMIT 1',
+      const existingPm = await db.first<PaymentMethodRow>(
+        'SELECT * FROM payment_methods WHERE code = ? LIMIT 1',
         [rawMethod]
       );
+      if (existingPm && (existingPm.enabled !== 1 || existingPm.supports_deposit !== 1)) {
+        res.status(400).json({ ok: false, error: `${existingPm.name} অ্যাড মানি সুবিধাটি বর্তমানে বন্ধ আছে।` });
+        return;
+      }
+      const pmRow = existingPm && existingPm.enabled === 1 && existingPm.supports_deposit === 1 ? existingPm : null;
       const method = pmRow
         ? pmRow.code
         : rawMethod === 'nagad' || rawMethod === 'rocket'
@@ -2355,10 +2467,33 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       const { db, user } = resolved;
-      const body = (req.body || {}) as { subject?: string; message?: string; orderNumber?: string };
+      const body = (req.body || {}) as {
+        subject?: string;
+        message?: string;
+        orderNumber?: string;
+        category?: string;
+        screenshotDataUrl?: string;
+      };
       const subject = String(body.subject || '').trim().slice(0, 160);
       const message = String(body.message || '').trim().slice(0, 2000);
       const orderNumber = String(body.orderNumber || '').trim().slice(0, 60);
+      const allowedCategories = new Set(['general', 'order', 'payment', 'withdrawal', 'app_bug', 'reward', 'account']);
+      const category = allowedCategories.has(String(body.category || '')) ? String(body.category) : 'general';
+      const rawShot = String(body.screenshotDataUrl || '').trim();
+      let screenshotDataUrl = '';
+      if (rawShot) {
+        if (
+          rawShot.length <= 450_000 &&
+          (/^data:image\/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(rawShot) ||
+            rawShot.startsWith('/api/media/') ||
+            rawShot.startsWith('https://'))
+        ) {
+          screenshotDataUrl = rawShot;
+        } else {
+          res.status(400).json({ ok: false, error: 'স্ক্রিনশটটি বৈধ PNG/JPG/WebP ইমেজ (৪০০ কেবি-র কম) হতে হবে।' });
+          return;
+        }
+      }
       if (subject.length < 2 || message.length < 3) {
         res.status(400).json({ ok: false, error: 'বিষয় এবং বিস্তারিত বার্তা লিখুন।' });
         return;
@@ -2369,9 +2504,11 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         id,
         userId: user.uid,
         userEmail: getUserPrimaryIdentifier(user),
+        category,
         subject,
         message,
         orderNumber,
+        ...(screenshotDataUrl ? { screenshotDataUrl } : {}),
         status: 'open',
         createdAt: now,
         updatedAt: now,
@@ -2454,6 +2591,31 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       res.json({ ok: true });
     } catch (err) {
       handleRouteError(res, err, 'Failed to update notification.');
+    }
+  });
+
+  router.post('/notifications/mark-all-read', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'লগইন প্রয়োজন।' });
+        return;
+      }
+      const { db, user } = resolved;
+      const rows = await db.all<{ id: string; payload_json: string }>(
+        'SELECT id, payload_json FROM notifications WHERE user_id = ? AND is_read = 0 LIMIT 200',
+        [user.uid]
+      );
+      for (const r of rows) {
+        const updated = { ...parseJsonSafe<Record<string, unknown>>(r.payload_json, {}), read: true };
+        await db.run('UPDATE notifications SET is_read = 1, payload_json = ? WHERE id = ?', [
+          JSON.stringify(updated),
+          r.id,
+        ]);
+      }
+      res.json({ ok: true, updatedCount: rows.length });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to mark notifications as read.');
     }
   });
 
@@ -2728,8 +2890,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       }
 
       // Authorize reward units:
-      // 1) First-party DIGITAL HUB Reward Ads (DH_REWARD_*) use 5s server-enforced viewing timer.
-      // 2) Third-party ad units/networks ONLY if explicitly authorized for incentivized rewards in catalog_overrides (require S2S callback).
+      // External ad units/networks may only start a reward session if explicitly approved under network policy
+      // (supportsRewardedVerification === true or supportsIncentivizedRewards === true).
       const FIRST_PARTY_REWARD_UNITS = new Set([
         'DH_REWARD_01',
         'DH_REWARD_02',
@@ -2740,22 +2902,50 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const isFirstPartyReward = FIRST_PARTY_REWARD_UNITS.has(unitId.toUpperCase());
       let requiresS2SCallback = false;
       if (!isFirstPartyReward) {
-        const unitOv = await db.first<{ payload_json: string }>(
-          `SELECT payload_json FROM catalog_overrides WHERE collection IN ('advertisingUnits', 'adNetworks') AND doc_id = ? AND deleted = 0 LIMIT 1`,
-          [unitId]
+        const unitOv = await db.first<{ collection: string; payload_json: string }>(
+          `SELECT collection, payload_json FROM catalog_overrides
+           WHERE collection IN ('managedAdUnits', 'advertisingUnits', 'adNetworks', 'advertisements')
+             AND (doc_id = ? OR json_extract(payload_json, '$.code') = ?)
+             AND deleted = 0
+           ORDER BY CASE collection WHEN 'managedAdUnits' THEN 1 WHEN 'advertisingUnits' THEN 2 WHEN 'adNetworks' THEN 3 ELSE 4 END
+           LIMIT 1`,
+          [unitId, unitId]
         );
         const ovObj = unitOv ? parseJsonSafe<Record<string, unknown>>(unitOv.payload_json, {}) : {};
-        const s2sApproved =
-          ovObj.supportsRewardedVerification === true || ovObj.supportsIncentivizedRewards === true;
-        if (!s2sApproved) {
+        let policyApproved =
+          ovObj.supportsRewardedVerification === true ||
+          ovObj.supportsIncentivizedRewards === true ||
+          ovObj.incentivizedApproved === true;
+
+        if (!policyApproved) {
+          const networkHint = String(ovObj.networkName || provider || '').trim().toLowerCase();
+          if (networkHint) {
+            const netRows = await db.all<{ payload_json: string }>(
+              `SELECT payload_json FROM catalog_overrides WHERE collection = 'adNetworks' AND deleted = 0 LIMIT 40`
+            );
+            policyApproved = netRows.some((r) => {
+              const net = parseJsonSafe<Record<string, unknown>>(r.payload_json, {});
+              return (
+                net.enabled === true &&
+                net.approvalStatus === 'active' &&
+                net.supportsIncentivizedRewards === true &&
+                (String(net.name || '').trim().toLowerCase() === networkHint ||
+                  String(net.provider || '').trim().toLowerCase() === networkHint ||
+                  String(net.id || '').trim().toLowerCase() === networkHint)
+              );
+            });
+          }
+        }
+
+        if (!policyApproved) {
           res.status(403).json({
             ok: false,
             error:
-              'এই থার্ড-পার্টি অ্যাড নেটওয়ার্কটি ইনসেন্টিভাইজড রিওয়ার্ড অনুমোদন করে না। শুধুমাত্র অনুমোদিত Reward Ad দেখুন।',
+              'এই বিজ্ঞাপন নেটওয়ার্কটি এখনো রিওয়ার্ড (Incentivized Traffic) অনুমোদন করেনি। শুধুমাত্র অনুমোদিত নেটওয়ার্কে কয়েন যোগ হয়।',
           });
           return;
         }
-        requiresS2SCallback = true;
+        requiresS2SCallback = ovObj.requiresS2SCallback === true;
       }
 
       const stats = await computeWatchEarnUserStats(db, user.uid, siteSettings);
@@ -3226,7 +3416,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           'SELECT payload_json FROM announcements WHERE active = 1 ORDER BY created_at DESC LIMIT 30'
         ),
         db.all<PaymentMethodRow>(
-          'SELECT * FROM payment_methods WHERE enabled = 1 ORDER BY sort_order ASC, name ASC'
+          'SELECT * FROM payment_methods ORDER BY sort_order ASC, name ASC'
         ),
       ]);
 
@@ -3272,15 +3462,17 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         });
       }
 
+      const mappedPaymentMethods = pmRows.map(mapPaymentMethodRow);
       res.json({
         ok: true,
         overrides,
         reviews: reviewRows.map((r) => parseJsonSafe(r.payload_json, {})),
         announcements: announcementRows.map((r) => parseJsonSafe(r.payload_json, {})),
-        paymentMethods: pmRows.map(mapPaymentMethodRow),
+        paymentMethods: mappedPaymentMethods.filter((m) => m.enabled),
+        allPaymentMethods: mappedPaymentMethods,
       });
     } catch {
-      res.json({ ok: true, overrides: {}, reviews: [], announcements: [], paymentMethods: [] });
+      res.json({ ok: true, overrides: {}, reviews: [], announcements: [], paymentMethods: [], allPaymentMethods: [] });
     }
   });
 
@@ -4463,6 +4655,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       );
 
       const saved = await db.first<PaymentMethodRow>('SELECT * FROM payment_methods WHERE id = ?', [id]);
+      if (saved) {
+        await syncPaymentMethodToSettings(
+          db,
+          saved.code,
+          saved.account_number,
+          saved.account_name,
+          saved.enabled === 1
+        );
+      }
       res.status(existing ? 200 : 201).json({
         ok: true,
         paymentMethod: saved ? mapPaymentMethodRow(saved) : null,
@@ -4483,6 +4684,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       await admin.db.run('DELETE FROM payment_methods WHERE id = ?', [id]);
+      await syncPaymentMethodToSettings(admin.db, existing.code, '', existing.account_name, false);
       await insertAuditLog(
         admin.db,
         admin.user.uid,
@@ -4512,7 +4714,18 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         titleEn?: string;
         messageBn?: string;
         messageEn?: string;
-        type?: 'order' | 'payment' | 'wallet' | 'referral' | 'system' | 'promo';
+        type?:
+          | 'order'
+          | 'payment'
+          | 'wallet'
+          | 'referral'
+          | 'system'
+          | 'promo'
+          | 'new_app'
+          | 'app_update'
+          | 'announcement'
+          | 'support'
+          | 'reward';
       };
       const targetUid = String(body.targetUid || 'ALL').trim();
       const targetUidsRaw = Array.isArray(body.targetUids)
@@ -4527,7 +4740,12 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         body.type === 'payment' ||
         body.type === 'wallet' ||
         body.type === 'referral' ||
-        body.type === 'promo'
+        body.type === 'promo' ||
+        body.type === 'new_app' ||
+        body.type === 'app_update' ||
+        body.type === 'announcement' ||
+        body.type === 'support' ||
+        body.type === 'reward'
           ? body.type
           : 'system';
 
@@ -5093,7 +5311,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         'Support Ticket Updated',
         `আপনার টিকেট "${String(existing.subject || id)}"-এ অ্যাডমিন উত্তর দিয়েছেন।`,
         `Admin replied to your support ticket "${String(existing.subject || id)}".`,
-        'system'
+        'support'
       );
       res.json({ ok: true });
     } catch (err) {
@@ -5254,6 +5472,19 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           [row.coins, row.coins, now, row.user_id]
         );
       }
+      await insertNotification(
+        admin.db,
+        row.user_id,
+        isCredit ? 'কয়েন রিডিম সম্পন্ন হয়েছে' : 'কয়েন রিডিম বাতিল হয়েছে',
+        isCredit ? 'Coin Redemption Credited' : 'Coin Redemption Rejected',
+        isCredit
+          ? `আপনার ${row.coins} কয়েন রিডিম অনুমোদিত হয়ে ওয়ালেটে ব্যালেন্স যুক্ত হয়েছে।`
+          : `আপনার ${row.coins} কয়েন রিডিম অনুরোধ বাতিল করে কয়েন ফেরত দেওয়া হয়েছে।`,
+        isCredit
+          ? `Your ${row.coins} coins redemption was credited to your wallet.`
+          : `Your ${row.coins} coins redemption was rejected and coins were refunded.`,
+        'reward'
+      );
       res.json({ ok: true, status });
     } catch (err) {
       handleRouteError(res, err, 'Failed to settle coin redemption.');
@@ -5708,6 +5939,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       const allowed = new Set([
         'categories',
         'products',
+        'mobileApps',
         'advertisements',
         'adNetworks',
         'managedAdUnits',
@@ -5910,13 +6142,82 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
 
+      if (col === 'mobileApps') {
+        const appName = String(body.data.name || '').trim().slice(0, 120);
+        if (appName.length < 2) {
+          res.status(400).json({ ok: false, error: 'App name must be at least 2 characters.' });
+          return;
+        }
+        if (
+          !isSafePackageAssetUrl(body.data.logoUrl) ||
+          !isSafePackageAssetUrl(body.data.bannerImageUrl)
+        ) {
+          res.status(400).json({ ok: false, error: 'Invalid app logo or banner image URL.' });
+          return;
+        }
+        const screenshots = Array.isArray(body.data.screenshots)
+          ? body.data.screenshots
+              .map((s) => String(s || '').trim())
+              .filter((s) => s && isSafePackageAssetUrl(s))
+              .slice(0, 8)
+          : [];
+        const rawUrl = String(body.data.downloadUrl || body.data.playStoreUrl || '').trim();
+        const safeDownloadUrl =
+          rawUrl && (rawUrl.startsWith('https://') || rawUrl.startsWith('http://') || rawUrl.startsWith('/'))
+            ? rawUrl.slice(0, 500)
+            : '';
+        payloadToSave = {
+          ...body.data,
+          id: docId,
+          name: appName,
+          version: String(body.data.version || 'v1.0.0').trim().slice(0, 40),
+          sizeLabel: String(body.data.sizeLabel || '25 MB').trim().slice(0, 40),
+          downloadUrl: safeDownloadUrl,
+          playStoreUrl: safeDownloadUrl || String(body.data.playStoreUrl || '').trim().slice(0, 500),
+          screenshots,
+          featured: Boolean(body.data.featured),
+          popular: Boolean(body.data.popular),
+          trending: Boolean(body.data.trending),
+          visible: body.data.visible !== false,
+          updatedAt: Number(body.data.updatedAt || now),
+        };
+      }
+
       await admin.db.run(
         `INSERT INTO catalog_overrides (collection, doc_id, deleted, payload_json, updated_at)
          VALUES (?, ?, 0, ?, ?)
          ON CONFLICT(collection, doc_id) DO UPDATE SET deleted = 0, payload_json = excluded.payload_json, updated_at = excluded.updated_at`,
         [col, docId, JSON.stringify(payloadToSave), now]
       );
-      if (col === 'settings' || col === 'advertisements' || col === 'banners' || col === 'managedAdUnits' || col === 'categories') {
+      if (col === 'settings' && docId === 'global') {
+        await syncSettingsToPaymentMethods(admin.db, payloadToSave);
+      }
+      if (col === 'mobileApps' && body.data.notifyUsers === true && payloadToSave.visible !== false) {
+        const isUpdate = body.auditAction === 'update';
+        const appName = String(payloadToSave.name || docId);
+        const activeUsers = await admin.db.all<{ uid: string }>(
+          `SELECT uid FROM users WHERE status = 'active' LIMIT 1000`
+        );
+        for (const u of activeUsers) {
+          await insertNotification(
+            admin.db,
+            u.uid,
+            isUpdate ? `অ্যাপ আপডেট: ${appName}` : `নতুন অ্যাপ যুক্ত হয়েছে: ${appName}`,
+            isUpdate ? `App Updated: ${appName}` : `New App Added: ${appName}`,
+            `${appName} (${String(payloadToSave.version || 'Latest')}) এখন স্মার্ট অ্যাপ স্টোরে উপলব্ধ।`,
+            `${appName} (${String(payloadToSave.version || 'Latest')}) is now available in the Smart App Store.`,
+            isUpdate ? 'app_update' : 'new_app'
+          );
+        }
+      }
+      if (
+        col === 'settings' ||
+        col === 'advertisements' ||
+        col === 'banners' ||
+        col === 'managedAdUnits' ||
+        col === 'categories' ||
+        col === 'mobileApps'
+      ) {
         await insertAuditLog(
           admin.db,
           admin.user.uid,
@@ -5925,10 +6226,17 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           col,
           docId,
           `Saved ${col}/${docId}`,
-          { newValue: String((body.data as { siteName?: string; titleEn?: string; titleBn?: string }).siteName || (body.data as { titleEn?: string }).titleEn || docId) }
+          {
+            newValue: String(
+              (body.data as { siteName?: string; titleEn?: string; titleBn?: string; name?: string }).siteName ||
+                (body.data as { titleEn?: string; name?: string }).titleEn ||
+                (body.data as { name?: string }).name ||
+                docId
+            ),
+          }
         );
       }
-      res.json({ ok: true, id: docId });
+      res.json({ ok: true, id: docId, data: payloadToSave });
     } catch (err) {
       handleRouteError(res, err, 'Failed to save catalog item.');
     }
@@ -5970,6 +6278,668 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       res.json({ ok: true });
     } catch (err) {
       handleRouteError(res, err, 'Failed to delete catalog item.');
+    }
+  });
+
+  // =========================================================================
+  // 11. REAL DATABASE ANALYTICS, SMART APP STORE & COIN MANAGEMENT ENDPOINTS
+  // =========================================================================
+  const recentAnalyticsBucket = new Map<string, number>();
+
+  router.post('/analytics/track', async (req, res) => {
+    try {
+      const body = (req.body || {}) as {
+        visitorId?: string;
+        sessionId?: string;
+        eventType?: string;
+        pagePath?: string;
+        appId?: string;
+        deviceType?: string;
+        referrerHost?: string;
+      };
+      const eventType =
+        body.eventType === 'heartbeat' || body.eventType === 'app_download'
+          ? body.eventType
+          : 'page_view';
+      const visitorId = String(body.visitorId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+      if (visitorId.length < 6) {
+        res.status(400).json({ ok: false, error: 'Invalid visitor identifier.' });
+        return;
+      }
+      const sessionId = String(body.sessionId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+      const pagePath = String(body.pagePath || '/').trim().slice(0, 120) || '/';
+      const appId = String(body.appId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+      const deviceType = body.deviceType === 'mobile' ? 'mobile' : 'desktop';
+      const referrerHost = String(body.referrerHost || 'direct').trim().slice(0, 80) || 'direct';
+
+      const now = Date.now();
+      const throttleKey = `${visitorId}:${eventType}:${pagePath}:${appId}`;
+      const prevTs = recentAnalyticsBucket.get(throttleKey) || 0;
+      const minGapMs = eventType === 'heartbeat' ? 20_000 : eventType === 'page_view' ? 4_000 : 1_500;
+      if (now - prevTs < minGapMs) {
+        res.json({ ok: true, throttled: true });
+        return;
+      }
+      recentAnalyticsBucket.set(throttleKey, now);
+      if (recentAnalyticsBucket.size > 5000) {
+        const cutoff = now - 120_000;
+        for (const [k, ts] of recentAnalyticsBucket.entries()) {
+          if (ts < cutoff) recentAnalyticsBucket.delete(k);
+        }
+      }
+
+      const session = await resolveSessionFromRequest(req).catch(() => null);
+      const db = session ? session.db : await getAppDatabase();
+      const id = generateSecureId('evt', 10);
+      await db.run(
+        `INSERT INTO analytics_events (id, visitor_id, session_id, user_id, event_type, page_path, app_id, device_type, referrer_host, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, visitorId, sessionId, session?.user.uid || '', eventType, pagePath, appId, deviceType, referrerHost, now]
+      );
+      res.status(201).json({ ok: true, id });
+    } catch {
+      res.json({ ok: false });
+    }
+  });
+
+  router.get('/admin/analytics', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db } = admin;
+      const now = Date.now();
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const todayMs = startOfToday.getTime();
+      const onlineCutoffMs = now - 5 * 60 * 1000;
+      const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+      const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+
+      const rawFrom = Number(req.query.from || 0);
+      const rawTo = Number(req.query.to || 0);
+      const rangeFrom = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : thirtyDaysAgo;
+      const rangeTo = Number.isFinite(rawTo) && rawTo > rangeFrom ? rawTo : now;
+
+      const [
+        totalUsersRow,
+        todayNewUsersRow,
+        activeTodayRow,
+        active7dRow,
+        active30dRow,
+        totalVisitorsRow,
+        uniqueVisitorsRow,
+        onlineVisitorsRow,
+        totalDownloadsRow,
+        todayDownloadsRow,
+        rewardClaimsRow,
+        coinsTotalRow,
+        pendingWithdrawalsRow,
+        pendingTicketsRow,
+        rangeEvents,
+        rangeNewUsers,
+        rangeRewardRows,
+      ] = await Promise.all([
+        db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM users'),
+        db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM users WHERE created_at >= ?', [todayMs]),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(DISTINCT uid) AS cnt FROM (
+             SELECT user_id AS uid FROM sessions WHERE last_seen_at >= ?
+             UNION ALL
+             SELECT user_id AS uid FROM analytics_events WHERE user_id != '' AND created_at >= ?
+           )`,
+          [todayMs, todayMs]
+        ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(DISTINCT uid) AS cnt FROM (
+             SELECT user_id AS uid FROM sessions WHERE last_seen_at >= ?
+             UNION ALL
+             SELECT user_id AS uid FROM analytics_events WHERE user_id != '' AND created_at >= ?
+           )`,
+          [sevenDaysAgo, sevenDaysAgo]
+        ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(DISTINCT uid) AS cnt FROM (
+             SELECT user_id AS uid FROM sessions WHERE last_seen_at >= ?
+             UNION ALL
+             SELECT user_id AS uid FROM analytics_events WHERE user_id != '' AND created_at >= ?
+           )`,
+          [thirtyDaysAgo, thirtyDaysAgo]
+        ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'page_view' AND created_at BETWEEN ? AND ?`,
+          [rangeFrom, rangeTo]
+        ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(DISTINCT visitor_id) AS cnt FROM analytics_events WHERE created_at BETWEEN ? AND ?`,
+          [rangeFrom, rangeTo]
+        ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(DISTINCT visitor_id) AS cnt FROM analytics_events WHERE created_at >= ?`,
+          [onlineCutoffMs]
+        ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'app_download' AND created_at BETWEEN ? AND ?`,
+          [rangeFrom, rangeTo]
+        ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'app_download' AND created_at >= ?`,
+          [todayMs]
+        ),
+        db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM rewarded_claims'),
+        db.first<{ totalCoins: number }>(
+          'SELECT COALESCE(SUM(coins_lifetime_earned), 0) AS totalCoins FROM watch_earn_balances'
+        ),
+        db.first<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM withdrawals WHERE status = 'Pending'`),
+        db.first<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM support_tickets WHERE status = 'open'`),
+        db.all<{
+          visitor_id: string;
+          event_type: string;
+          page_path: string;
+          app_id: string;
+          device_type: string;
+          referrer_host: string;
+          created_at: number;
+        }>(
+          `SELECT visitor_id, event_type, page_path, app_id, device_type, referrer_host, created_at
+           FROM analytics_events WHERE created_at BETWEEN ? AND ? ORDER BY created_at ASC LIMIT 25000`,
+          [rangeFrom, rangeTo]
+        ),
+        db.all<{ created_at: number }>(
+          `SELECT created_at FROM users WHERE created_at BETWEEN ? AND ? ORDER BY created_at ASC LIMIT 10000`,
+          [rangeFrom, rangeTo]
+        ),
+        db.all<{ coins: number; created_at: number }>(
+          `SELECT coins, created_at FROM ad_reward_transactions WHERE coins > 0 AND created_at BETWEEN ? AND ? LIMIT 10000`,
+          [rangeFrom, rangeTo]
+        ),
+      ]);
+
+      const dayBuckets = new Map<
+        string,
+        { date: string; visitors: Set<string>; pageViews: number; downloads: number; registrations: number; coins: number }
+      >();
+      const ensureDay = (ms: number) => {
+        const d = new Date(ms);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        let entry = dayBuckets.get(key);
+        if (!entry) {
+          entry = { date: key, visitors: new Set(), pageViews: 0, downloads: 0, registrations: 0, coins: 0 };
+          dayBuckets.set(key, entry);
+        }
+        return entry;
+      };
+
+      const pageCounts = new Map<string, number>();
+      const appDownloadCounts = new Map<string, number>();
+      const sourceCounts = new Map<string, number>();
+      const mobileVisitors = new Set<string>();
+      const desktopVisitors = new Set<string>();
+
+      for (const ev of rangeEvents) {
+        const day = ensureDay(ev.created_at);
+        day.visitors.add(ev.visitor_id);
+        if (ev.device_type === 'mobile') mobileVisitors.add(ev.visitor_id);
+        else desktopVisitors.add(ev.visitor_id);
+
+        if (ev.event_type === 'page_view') {
+          day.pageViews += 1;
+          const p = ev.page_path || '/';
+          pageCounts.set(p, (pageCounts.get(p) || 0) + 1);
+          const src = ev.referrer_host || 'direct';
+          sourceCounts.set(src, (sourceCounts.get(src) || 0) + 1);
+        } else if (ev.event_type === 'app_download') {
+          day.downloads += 1;
+          if (ev.app_id) appDownloadCounts.set(ev.app_id, (appDownloadCounts.get(ev.app_id) || 0) + 1);
+        }
+      }
+      for (const u of rangeNewUsers) {
+        ensureDay(u.created_at).registrations += 1;
+      }
+      for (const rc of rangeRewardRows) {
+        ensureDay(rc.created_at).coins += Number(rc.coins || 0);
+      }
+
+      const dailySeries = Array.from(dayBuckets.values())
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map((d) => ({
+          date: d.date,
+          uniqueVisitors: d.visitors.size,
+          pageViews: d.pageViews,
+          downloads: d.downloads,
+          registrations: d.registrations,
+          coinsDistributed: d.coins,
+        }));
+
+      const topPages = Array.from(pageCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([path, views]) => ({ path, views }));
+
+      const topApps = Array.from(appDownloadCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([appId, downloads]) => ({ appId, downloads }));
+
+      const trafficSources = Array.from(sourceCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([source, visits]) => ({ source, visits }));
+
+      res.json({
+        ok: true,
+        range: { from: rangeFrom, to: rangeTo },
+        kpis: {
+          totalUsers: Number(totalUsersRow?.cnt || 0),
+          todayNewUsers: Number(todayNewUsersRow?.cnt || 0),
+          activeUsersToday: Number(activeTodayRow?.cnt || 0),
+          activeUsers7d: Number(active7dRow?.cnt || 0),
+          activeUsers30d: Number(active30dRow?.cnt || 0),
+          totalVisitors: Number(totalVisitorsRow?.cnt || 0),
+          uniqueVisitors: Number(uniqueVisitorsRow?.cnt || 0),
+          onlineUsers: Number(onlineVisitorsRow?.cnt || 0),
+          totalDownloads: Number(totalDownloadsRow?.cnt || 0),
+          todayDownloads: Number(todayDownloadsRow?.cnt || 0),
+          totalRewardClaims: Number(rewardClaimsRow?.cnt || 0),
+          totalCoinsDistributed: Number(coinsTotalRow?.totalCoins || 0),
+          pendingWithdrawals: Number(pendingWithdrawalsRow?.cnt || 0),
+          pendingTickets: Number(pendingTicketsRow?.cnt || 0),
+        },
+        deviceSplit: {
+          mobile: mobileVisitors.size,
+          desktop: desktopVisitors.size,
+        },
+        dailySeries,
+        topPages,
+        topApps,
+        trafficSources,
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load analytics.');
+    }
+  });
+
+  router.get('/apps/meta', async (req, res) => {
+    try {
+      const session = await resolveSessionFromRequest(req).catch(() => null);
+      const db = session ? session.db : await getAppDatabase();
+      const [downloadRows, ratingRows, reviewRows, favRows] = await Promise.all([
+        db.all<{ app_id: string; cnt: number }>(
+          `SELECT app_id, COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'app_download' AND app_id != '' GROUP BY app_id`
+        ),
+        db.all<{ app_id: string; rating_sum: number; cnt: number }>(
+          `SELECT app_id, SUM(rating) AS rating_sum, COUNT(*) AS cnt FROM app_reviews GROUP BY app_id`
+        ),
+        db.all<{ id: string; app_id: string; user_id: string; author_name: string; rating: number; comment: string; created_at: number }>(
+          `SELECT id, app_id, user_id, author_name, rating, comment, created_at FROM app_reviews ORDER BY created_at DESC LIMIT 200`
+        ),
+        session
+          ? db.all<{ app_id: string }>('SELECT app_id FROM app_favorites WHERE user_id = ?', [session.user.uid])
+          : Promise.resolve([]),
+      ]);
+
+      const statsByApp: Record<string, { downloads: number; ratingAvg: number; ratingCount: number }> = {};
+      for (const d of downloadRows) {
+        statsByApp[d.app_id] = { downloads: Number(d.cnt || 0), ratingAvg: 0, ratingCount: 0 };
+      }
+      for (const r of ratingRows) {
+        const cur = statsByApp[r.app_id] || { downloads: 0, ratingAvg: 0, ratingCount: 0 };
+        const cnt = Number(r.cnt || 0);
+        cur.ratingCount = cnt;
+        cur.ratingAvg = cnt > 0 ? Math.round((Number(r.rating_sum || 0) / cnt) * 10) / 10 : 0;
+        statsByApp[r.app_id] = cur;
+      }
+
+      res.json({
+        ok: true,
+        statsByApp,
+        reviews: reviewRows.map((r) => ({
+          id: r.id,
+          appId: r.app_id,
+          userId: r.user_id,
+          authorName: r.author_name,
+          rating: Number(r.rating || 5),
+          comment: r.comment,
+          createdAt: Number(r.created_at || 0),
+        })),
+        favoriteAppIds: favRows.map((f) => f.app_id),
+      });
+    } catch {
+      res.json({ ok: true, statsByApp: {}, reviews: [], favoriteAppIds: [] });
+    }
+  });
+
+  router.post('/apps/:id/download', async (req, res) => {
+    try {
+      const appId = String(req.params.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+      if (!appId) {
+        res.status(400).json({ ok: false, error: 'Invalid app ID.' });
+        return;
+      }
+      const body = (req.body || {}) as { appName?: string; visitorId?: string; deviceType?: string };
+      const session = await resolveSessionFromRequest(req).catch(() => null);
+      const db = session ? session.db : await getAppDatabase();
+      const now = Date.now();
+      const visitorId =
+        String(body.visitorId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) ||
+        session?.user.uid ||
+        `anon_${now}`;
+      const deviceType = body.deviceType === 'mobile' ? 'mobile' : 'desktop';
+      await db.run(
+        `INSERT INTO analytics_events (id, visitor_id, session_id, user_id, event_type, page_path, app_id, device_type, referrer_host, created_at)
+         VALUES (?, ?, '', ?, 'app_download', '/apps', ?, ?, 'app_store', ?)`,
+        [generateSecureId('dl', 10), visitorId, session?.user.uid || '', appId, deviceType, now]
+      );
+      if (session?.user.uid && body.appName) {
+        const cleanName = String(body.appName).trim().slice(0, 100);
+        await insertNotification(
+          db,
+          session.user.uid,
+          `ডাউনলোড শুরু হয়েছে: ${cleanName}`,
+          `Download Started: ${cleanName}`,
+          `আপনি "${cleanName}" অ্যাপটি ডাউনলোড করেছেন।`,
+          `You downloaded "${cleanName}" from Digital Hub Smart App Store.`,
+          'download'
+        );
+      }
+      const countRow = await db.first<{ cnt: number }>(
+        `SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'app_download' AND app_id = ?`,
+        [appId]
+      );
+      res.json({ ok: true, downloads: Number(countRow?.cnt || 0) });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to record app download.');
+    }
+  });
+
+  router.post('/apps/:id/favorite', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'পছন্দের অ্যাপ সেভ করতে আগে লগইন করুন।' });
+        return;
+      }
+      const appId = String(req.params.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+      if (!appId) {
+        res.status(400).json({ ok: false, error: 'Invalid app ID.' });
+        return;
+      }
+      const { db, user } = resolved;
+      const existing = await db.first<{ app_id: string }>(
+        'SELECT app_id FROM app_favorites WHERE user_id = ? AND app_id = ?',
+        [user.uid, appId]
+      );
+      let favorited = false;
+      if (existing) {
+        await db.run('DELETE FROM app_favorites WHERE user_id = ? AND app_id = ?', [user.uid, appId]);
+        favorited = false;
+      } else {
+        await db.run('INSERT INTO app_favorites (user_id, app_id, created_at) VALUES (?, ?, ?)', [
+          user.uid,
+          appId,
+          Date.now(),
+        ]);
+        favorited = true;
+      }
+      const rows = await db.all<{ app_id: string }>('SELECT app_id FROM app_favorites WHERE user_id = ?', [user.uid]);
+      res.json({ ok: true, favorited, favoriteAppIds: rows.map((r) => r.app_id) });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to toggle favorite.');
+    }
+  });
+
+  router.post('/apps/:id/review', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'রিভিউ দিতে আগে লগইন করুন।' });
+        return;
+      }
+      const appId = String(req.params.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+      const body = (req.body || {}) as { rating?: number; comment?: string };
+      const rating = Math.max(1, Math.min(5, Math.round(Number(body.rating || 5))));
+      const comment = String(body.comment || '').trim().slice(0, 800);
+      if (!appId || comment.length < 2) {
+        res.status(400).json({ ok: false, error: 'অনুগ্রহ করে আপনার মতামত লিখুন।' });
+        return;
+      }
+      const { db, user } = resolved;
+      const id = generateSecureId('arev', 8);
+      const now = Date.now();
+      await db.run(
+        `INSERT INTO app_reviews (id, app_id, user_id, author_name, rating, comment, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id, appId, user.uid, user.displayName, rating, comment, now]
+      );
+      res.status(201).json({
+        ok: true,
+        review: { id, appId, userId: user.uid, authorName: user.displayName, rating, comment, createdAt: now },
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to submit app review.');
+    }
+  });
+
+  router.post('/apps/:id/report-link', async (req, res) => {
+    try {
+      const appId = String(req.params.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+      const body = (req.body || {}) as { appName?: string; reason?: string };
+      const reason = String(body.reason || '').trim().slice(0, 500);
+      if (!appId || reason.length < 3) {
+        res.status(400).json({ ok: false, error: 'সমস্যার বিবরণ লিখুন।' });
+        return;
+      }
+      const session = await resolveSessionFromRequest(req).catch(() => null);
+      const db = session ? session.db : await getAppDatabase();
+      const id = generateSecureId('rep', 8);
+      await db.run(
+        `INSERT INTO app_broken_reports (id, app_id, app_name, user_id, reason, status, created_at)
+         VALUES (?, ?, ?, ?, ?, 'open', ?)`,
+        [id, appId, String(body.appName || appId).slice(0, 120), session?.user.uid || '', reason, Date.now()]
+      );
+      res.status(201).json({ ok: true, id });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to submit link report.');
+    }
+  });
+
+  router.get('/admin/app-reports', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const rows = await admin.db.all<{
+        id: string;
+        app_id: string;
+        app_name: string;
+        user_id: string;
+        reason: string;
+        status: string;
+        created_at: number;
+      }>('SELECT * FROM app_broken_reports ORDER BY created_at DESC LIMIT 200');
+      res.json({
+        ok: true,
+        reports: rows.map((r) => ({
+          id: r.id,
+          appId: r.app_id,
+          appName: r.app_name,
+          userId: r.user_id,
+          reason: r.reason,
+          status: r.status,
+          createdAt: Number(r.created_at || 0),
+        })),
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to fetch app reports.');
+    }
+  });
+
+  router.post('/admin/app-reports/:id/resolve', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const id = String(req.params.id || '').trim();
+      await admin.db.run(`UPDATE app_broken_reports SET status = 'resolved' WHERE id = ?`, [id]);
+      res.json({ ok: true });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to resolve app report.');
+    }
+  });
+
+  router.get('/admin/coins/overview', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db } = admin;
+      const [balRows, txRows, claimRows] = await Promise.all([
+        db.all<{
+          user_id: string;
+          coins_available: number;
+          coins_lifetime_earned: number;
+          coins_redeemed: number;
+          updated_at: number;
+          display_name: string | null;
+          email: string | null;
+          phone_e164: string | null;
+        }>(
+          `SELECT w.user_id, w.coins_available, w.coins_lifetime_earned, w.coins_redeemed, w.updated_at,
+                  u.display_name, u.email, u.phone_e164
+           FROM watch_earn_balances w
+           LEFT JOIN users u ON u.uid = w.user_id
+           ORDER BY w.coins_available DESC, w.updated_at DESC
+           LIMIT 500`
+        ),
+        db.all<{ payload_json: string }>(
+          'SELECT payload_json FROM ad_reward_transactions ORDER BY created_at DESC LIMIT 300'
+        ),
+        db.all<{ payload_json: string }>(
+          'SELECT payload_json FROM rewarded_claims ORDER BY created_at DESC LIMIT 200'
+        ),
+      ]);
+      res.json({
+        ok: true,
+        balances: balRows.map((b) => ({
+          userId: b.user_id,
+          displayName: b.display_name || b.user_id,
+          contact: b.email || extractPublicPhone(b.phone_e164) || b.user_id,
+          coinsAvailable: Number(b.coins_available || 0),
+          coinsLifetimeEarned: Number(b.coins_lifetime_earned || 0),
+          coinsRedeemed: Number(b.coins_redeemed || 0),
+          updatedAt: Number(b.updated_at || 0),
+        })),
+        transactions: txRows.map((r) => parseJsonSafe(r.payload_json, {})),
+        rewardClaims: claimRows.map((r) => parseJsonSafe(r.payload_json, {})),
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load coin overview.');
+    }
+  });
+
+  router.post('/admin/coins/adjust', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db, user } = admin;
+      const body = (req.body || {}) as {
+        targetUid?: string;
+        mode?: 'add' | 'deduct' | 'set';
+        coins?: number;
+        reason?: string;
+      };
+      const targetUid = String(body.targetUid || '').trim();
+      const mode = body.mode === 'deduct' || body.mode === 'set' ? body.mode : 'add';
+      const coinsInput = Math.floor(Number(body.coins || 0));
+      const reason = String(body.reason || '').trim().slice(0, 300);
+
+      if (!targetUid || !Number.isFinite(coinsInput) || coinsInput < 0 || (mode !== 'set' && coinsInput < 1)) {
+        res.status(400).json({ ok: false, error: 'Valid user ID and positive coin amount required.' });
+        return;
+      }
+      if (reason.length < 3) {
+        res.status(400).json({ ok: false, error: 'Mandatory reason (at least 3 characters) required for coin adjustment.' });
+        return;
+      }
+
+      const targetUser = await db.first<{ uid: string; display_name: string }>(
+        'SELECT uid, display_name FROM users WHERE uid = ? LIMIT 1',
+        [targetUid]
+      );
+      if (!targetUser) {
+        res.status(404).json({ ok: false, error: 'Target user not found.' });
+        return;
+      }
+
+      const now = Date.now();
+      await db.run(
+        `INSERT OR IGNORE INTO watch_earn_balances (user_id, coins_available, coins_lifetime_earned, coins_redeemed, updated_at)
+         VALUES (?, 0, 0, 0, ?)`,
+        [targetUid, now]
+      );
+      const currentBal = await db.first<{
+        coins_available: number;
+        coins_lifetime_earned: number;
+        coins_redeemed: number;
+      }>('SELECT coins_available, coins_lifetime_earned, coins_redeemed FROM watch_earn_balances WHERE user_id = ?', [
+        targetUid,
+      ]);
+      const prevCoins = Number(currentBal?.coins_available || 0);
+      const nextCoins =
+        mode === 'add'
+          ? prevCoins + coinsInput
+          : mode === 'deduct'
+            ? Math.max(0, prevCoins - coinsInput)
+            : coinsInput;
+      const delta = nextCoins - prevCoins;
+      const lifetimeDelta = delta > 0 ? delta : 0;
+
+      await db.run(
+        `UPDATE watch_earn_balances
+         SET coins_available = ?,
+             coins_lifetime_earned = coins_lifetime_earned + ?,
+             updated_at = ?
+         WHERE user_id = ?`,
+        [nextCoins, lifetimeDelta, now, targetUid]
+      );
+
+      const txId = generateSecureId('cadj', 8);
+      const txPayload = {
+        id: txId,
+        userId: targetUid,
+        type: delta >= 0 ? 'admin_coin_credit' : 'admin_coin_deduct',
+        adUnitTitle: `Admin Adjustment (${mode})`,
+        coins: delta,
+        bdtEquivalent: 0,
+        status: 'Credited',
+        note: reason,
+        createdAt: now,
+      };
+      await db.run(
+        'INSERT INTO ad_reward_transactions (id, user_id, type, status, coins, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [txId, targetUid, txPayload.type, 'Credited', delta, JSON.stringify(txPayload), now]
+      );
+
+      await insertNotification(
+        db,
+        targetUid,
+        delta >= 0 ? 'কয়েন ব্যালেন্স আপডেট হয়েছে' : 'কয়েন সমন্বয় করা হয়েছে',
+        delta >= 0 ? 'Coins Credited' : 'Coin Balance Adjusted',
+        `অ্যাডমিন আপনার অ্যাকাউন্টে ${delta >= 0 ? `+${delta}` : delta} কয়েন সমন্বয় করেছেন। কারণ: ${reason}`,
+        `Admin adjusted your coins by ${delta >= 0 ? `+${delta}` : delta} coins. Reason: ${reason}`,
+        'reward'
+      );
+
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        'COINS_ADJUSTED',
+        'watch_earn_balances',
+        targetUid,
+        `Adjusted coins for ${targetUser.display_name} (${prevCoins} -> ${nextCoins})`,
+        { targetUserId: targetUid, previousValue: `${prevCoins}`, newValue: `${nextCoins}`, reason, transactionId: txId }
+      );
+
+      res.json({ ok: true, previousCoins: prevCoins, coinsAvailable: nextCoins, transactionId: txId });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to adjust user coins.');
     }
   });
 

@@ -23,6 +23,7 @@ import {
   DEFAULT_SITE_SETTINGS,
 } from './seedData';
 import { DIGITAL_HUB_AD_PROVIDER_CONFIG, mergeAdUnitsWithOverrides } from './adProviderConfig';
+import { mergeMobileAppsCatalog, MobileAppItem } from './mobileAppsCatalog';
 import {
   AccountDeletionRequest,
   AdNetworkConfig,
@@ -30,11 +31,15 @@ import {
   AdRevenueEntry,
   AdRewardTransaction,
   AdViewingSession,
+  AdminAnalyticsPayload,
+  AdminCoinsOverview,
   AdminRecord,
   AdminSecurityPayload,
   AdminUserDetailPayload,
   Advertisement,
   Announcement,
+  AppBrokenReport,
+  AppMetaPayload,
   AppNotification,
   AuditLog,
   AuthUser,
@@ -211,6 +216,7 @@ interface CatalogOverridesPayload {
   reviews: Review[];
   announcements: Announcement[];
   paymentMethods: PaymentMethodConfig[];
+  allPaymentMethods: PaymentMethodConfig[];
 }
 
 let catalogOverridesCache: { ts: number; data: CatalogOverridesPayload } | null = null;
@@ -218,7 +224,7 @@ let catalogOverridesInFlight: Promise<CatalogOverridesPayload> | null = null;
 
 async function fetchCatalogOverrides(force = false): Promise<CatalogOverridesPayload> {
   const now = Date.now();
-  if (!force && catalogOverridesCache && now - catalogOverridesCache.ts < 8000) {
+  if (!force && catalogOverridesCache && now - catalogOverridesCache.ts < 15000) {
     return catalogOverridesCache.data;
   }
   if (!force && catalogOverridesInFlight) {
@@ -232,19 +238,21 @@ async function fetchCatalogOverrides(force = false): Promise<CatalogOverridesPay
         headers: { Accept: 'application/json' },
       });
       if (!resp.ok) {
-        return { overrides: {}, reviews: [], announcements: [], paymentMethods: [] };
+        return { overrides: {}, reviews: [], announcements: [], paymentMethods: [], allPaymentMethods: [] };
       }
       const json = (await resp.json().catch(() => ({}))) as Partial<CatalogOverridesPayload>;
+      const pmList = Array.isArray(json.paymentMethods) ? json.paymentMethods : [];
       const payload: CatalogOverridesPayload = {
         overrides: json.overrides || {},
         reviews: Array.isArray(json.reviews) ? json.reviews : [],
         announcements: Array.isArray(json.announcements) ? json.announcements : [],
-        paymentMethods: Array.isArray(json.paymentMethods) ? json.paymentMethods : [],
+        paymentMethods: pmList,
+        allPaymentMethods: Array.isArray(json.allPaymentMethods) ? json.allPaymentMethods : pmList,
       };
       catalogOverridesCache = { ts: Date.now(), data: payload };
       return payload;
     } catch {
-      return { overrides: {}, reviews: [], announcements: [], paymentMethods: [] };
+      return { overrides: {}, reviews: [], announcements: [], paymentMethods: [], allPaymentMethods: [] };
     } finally {
       catalogOverridesInFlight = null;
     }
@@ -596,14 +604,39 @@ export function subscribeApprovedReviews(cb: (items: Review[]) => void): Unsubsc
 
 export function subscribeSiteSettings(cb: (settings: SiteSettings) => void): Unsubscribe {
   let fsBase: Partial<SiteSettings> = {};
-  const normalizeSettings = (raw: Partial<SiteSettings>): SiteSettings => {
+  const normalizeSettings = (
+    raw: Partial<SiteSettings>,
+    allMethods: PaymentMethodConfig[] = []
+  ): SiteSettings => {
     const merged = { ...DEFAULT_SITE_SETTINGS, ...raw };
+    const findMethod = (code: string) =>
+      allMethods.find((m) => String(m.code || '').trim().toLowerCase() === code);
+    const bkashPm = findMethod('bkash');
+    const nagadPm = findMethod('nagad');
+    const rocketPm = findMethod('rocket');
+
+    const normalizeAccountType = (val: string | undefined, fallback?: 'Personal' | 'Merchant' | 'Agent') => {
+      if (val === 'Personal' || val === 'Merchant' || val === 'Agent') return val;
+      return fallback;
+    };
+
     return {
       ...merged,
-      nagadNumber:
-        !merged.nagadNumber || merged.nagadNumber === '01727936180'
-          ? DEFAULT_SITE_SETTINGS.nagadNumber
-          : merged.nagadNumber,
+      bkashNumber: bkashPm ? bkashPm.accountNumber : merged.bkashNumber || DEFAULT_SITE_SETTINGS.bkashNumber,
+      bkashType: normalizeAccountType(bkashPm?.accountName, merged.bkashType),
+      bkashEnabled: bkashPm ? bkashPm.enabled : merged.bkashEnabled,
+      bkashNoteBn: bkashPm?.instructionsBn || merged.bkashNoteBn,
+      bkashNoteEn: bkashPm?.instructionsEn || merged.bkashNoteEn,
+      nagadNumber: nagadPm ? nagadPm.accountNumber : merged.nagadNumber || DEFAULT_SITE_SETTINGS.nagadNumber,
+      nagadType: normalizeAccountType(nagadPm?.accountName, merged.nagadType),
+      nagadEnabled: nagadPm ? nagadPm.enabled : merged.nagadEnabled,
+      nagadNoteBn: nagadPm?.instructionsBn || merged.nagadNoteBn,
+      nagadNoteEn: nagadPm?.instructionsEn || merged.nagadNoteEn,
+      rocketNumber: rocketPm ? rocketPm.accountNumber : merged.rocketNumber || DEFAULT_SITE_SETTINGS.rocketNumber,
+      rocketType: normalizeAccountType(rocketPm?.accountName, merged.rocketType),
+      rocketEnabled: rocketPm ? rocketPm.enabled : merged.rocketEnabled,
+      rocketNoteBn: rocketPm?.instructionsBn || merged.rocketNoteBn,
+      rocketNoteEn: rocketPm?.instructionsEn || merged.rocketNoteEn,
       telegramLink:
         !merged.telegramLink || merged.telegramLink === 'https://t.me/digitalhub_bd'
           ? DEFAULT_SITE_SETTINGS.telegramLink
@@ -613,9 +646,14 @@ export function subscribeSiteSettings(cb: (settings: SiteSettings) => void): Uns
     };
   };
   const emit = async (force = false) => {
-    const { overrides } = await fetchCatalogOverrides(force);
+    const { overrides, allPaymentMethods } = await fetchCatalogOverrides(force);
     const globalOverride = (overrides.settings || []).find((r) => r.id === 'global' && !r.deleted);
-    cb(normalizeSettings({ ...fsBase, ...((globalOverride?.data as Partial<SiteSettings>) || {}) }));
+    cb(
+      normalizeSettings(
+        { ...fsBase, ...((globalOverride?.data as Partial<SiteSettings>) || {}) },
+        allPaymentMethods
+      )
+    );
   };
   emit(false).catch(() => cb(DEFAULT_SITE_SETTINGS));
   const unsubCat = subscribeCatalogInvalidation(() => {
@@ -751,6 +789,23 @@ export function subscribePaymentMethods(cb: (items: PaymentMethodConfig[]) => vo
   };
 }
 
+export function subscribeMobileApps(
+  cb: (items: MobileAppItem[]) => void,
+  includeHidden = false
+): Unsubscribe {
+  const emit = async (force = false) => {
+    const { overrides } = await fetchCatalogOverrides(force);
+    cb(mergeMobileAppsCatalog(overrides.mobileApps, includeHidden));
+  };
+  emit(false).catch(() => cb(mergeMobileAppsCatalog(undefined, includeHidden)));
+  const unsubCat = subscribeCatalogInvalidation(() => {
+    emit(true).catch(() => {});
+  });
+  return () => {
+    unsubCat();
+  };
+}
+
 export async function seedMarketplaceToFirestore(_forceOverwrite = false): Promise<{ addedCount: number }> {
   notifyCatalogInvalidation();
   return { addedCount: 0 };
@@ -775,6 +830,8 @@ export interface CustomerDashboardPayload {
   viewingSessions: AdViewingSession[];
   adRewardTransactions: AdRewardTransaction[];
   announcements: Announcement[];
+  favoriteAppIds?: string[];
+  totalDownloads?: number;
 }
 
 export async function fetchCustomerDashboardServer(): Promise<CustomerDashboardPayload | null> {
@@ -1036,12 +1093,23 @@ export async function markNotificationRead(notificationId: string): Promise<void
   notifyDashboardInvalidation();
 }
 
+export async function markAllNotificationsRead(): Promise<{ updatedCount: number }> {
+  const res = await apiJson<{ ok: true; updatedCount: number }>('/api/notifications/mark-all-read', {
+    method: 'POST',
+    body: {},
+  });
+  notifyDashboardInvalidation();
+  return { updatedCount: Number(res.updatedCount || 0) };
+}
+
 export async function createSupportTicket(params: {
   userId: string;
   userEmail: string;
   subject: string;
   message: string;
   orderNumber?: string;
+  category?: string;
+  screenshotDataUrl?: string;
 }): Promise<void> {
   await apiJson('/api/tickets', {
     method: 'POST',
@@ -1049,6 +1117,8 @@ export async function createSupportTicket(params: {
       subject: params.subject,
       message: params.message,
       orderNumber: params.orderNumber || '',
+      category: params.category || 'general',
+      ...(params.screenshotDataUrl ? { screenshotDataUrl: params.screenshotDataUrl } : {}),
     },
   });
   notifyDashboardInvalidation();
@@ -1751,6 +1821,179 @@ export async function adminDeletePaymentMethod(id: string): Promise<void> {
   notifyCatalogInvalidation();
 }
 
+export async function adminFetchAnalytics(fromMs?: number, toMs?: number): Promise<AdminAnalyticsPayload> {
+  const qs = new URLSearchParams();
+  if (fromMs && fromMs > 0) qs.set('from', String(Math.floor(fromMs)));
+  if (toMs && toMs > 0) qs.set('to', String(Math.floor(toMs)));
+  const qStr = qs.toString() ? `?${qs.toString()}` : '';
+  return apiJson<AdminAnalyticsPayload & { ok: true }>(`/api/admin/analytics${qStr}`, { method: 'GET' });
+}
+
+export async function adminFetchCoinsOverview(): Promise<AdminCoinsOverview> {
+  return apiJson<AdminCoinsOverview & { ok: true }>('/api/admin/coins/overview', { method: 'GET' });
+}
+
+export async function adminAdjustUserCoins(params: {
+  targetUid: string;
+  mode: 'add' | 'deduct' | 'set';
+  coins: number;
+  reason: string;
+}): Promise<{ previousCoins: number; coinsAvailable: number; transactionId: string }> {
+  const res = await apiJson<{
+    ok: true;
+    previousCoins: number;
+    coinsAvailable: number;
+    transactionId: string;
+  }>('/api/admin/coins/adjust', {
+    method: 'POST',
+    body: params,
+  });
+  notifyDashboardInvalidation();
+  return {
+    previousCoins: res.previousCoins,
+    coinsAvailable: res.coinsAvailable,
+    transactionId: res.transactionId,
+  };
+}
+
+export async function adminSaveMobileApp(
+  app: MobileAppItem & { notifyUsers?: boolean },
+  isNew: boolean
+): Promise<void> {
+  await saveCatalogOverride(
+    'mobileApps',
+    app.id,
+    {
+      ...app,
+      logoUrl: app.iconUrl,
+      bannerImageUrl: app.bannerImageUrl || app.screenUrl,
+      playStoreUrl: app.officialStoreUrl,
+      notifyUsers: Boolean(app.notifyUsers),
+      updatedAt: Date.now(),
+    },
+    { auditAction: isNew ? 'create' : 'update' }
+  );
+  notifyCatalogInvalidation();
+}
+
+export async function adminDeleteMobileApp(appId: string): Promise<void> {
+  await deleteCatalogOverride('mobileApps', appId);
+  notifyCatalogInvalidation();
+}
+
+export async function adminFetchAppReports(): Promise<AppBrokenReport[]> {
+  const res = await apiJson<{ ok: true; reports: AppBrokenReport[] }>('/api/admin/app-reports', {
+    method: 'GET',
+  });
+  return res.reports || [];
+}
+
+export async function adminResolveAppReport(reportId: string): Promise<void> {
+  await apiJson(`/api/admin/app-reports/${encodeURIComponent(reportId)}/resolve`, {
+    method: 'POST',
+    body: {},
+  });
+}
+
+// =========================================================================
+// PRIVACY-RESPECTING ANALYTICS & SMART APP STORE PUBLIC CLIENT APIS
+// =========================================================================
+
+export async function trackAnalyticsEvent(params: {
+  visitorId: string;
+  sessionId?: string;
+  eventType: 'page_view' | 'heartbeat' | 'app_download';
+  pagePath?: string;
+  appId?: string;
+  deviceType?: 'mobile' | 'desktop';
+  referrerHost?: string;
+}): Promise<void> {
+  try {
+    await fetch(apiUrl('/api/analytics/track'), {
+      method: 'POST',
+      credentials: 'include',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+  } catch {
+    // Non-blocking analytics
+  }
+}
+
+export async function fetchAppMeta(): Promise<AppMetaPayload> {
+  try {
+    const res = await apiJson<AppMetaPayload & { ok: true }>('/api/apps/meta', { method: 'GET' });
+    return {
+      statsByApp: res.statsByApp || {},
+      reviews: Array.isArray(res.reviews) ? res.reviews : [],
+      favoriteAppIds: Array.isArray(res.favoriteAppIds) ? res.favoriteAppIds : [],
+    };
+  } catch {
+    return { statsByApp: {}, reviews: [], favoriteAppIds: [] };
+  }
+}
+
+export async function recordAppDownload(params: {
+  appId: string;
+  appName: string;
+  visitorId?: string;
+  deviceType?: 'mobile' | 'desktop';
+}): Promise<number> {
+  try {
+    const res = await apiJson<{ ok: true; downloads: number }>(
+      `/api/apps/${encodeURIComponent(params.appId)}/download`,
+      {
+        method: 'POST',
+        body: {
+          appName: params.appName,
+          visitorId: params.visitorId || '',
+          deviceType: params.deviceType || 'desktop',
+        },
+      }
+    );
+    notifyDashboardInvalidation();
+    return Number(res.downloads || 0);
+  } catch {
+    return 0;
+  }
+}
+
+export async function toggleAppFavorite(appId: string): Promise<{ favorited: boolean; favoriteAppIds: string[] }> {
+  const res = await apiJson<{ ok: true; favorited: boolean; favoriteAppIds: string[] }>(
+    `/api/apps/${encodeURIComponent(appId)}/favorite`,
+    { method: 'POST', body: {} }
+  );
+  notifyDashboardInvalidation();
+  return { favorited: Boolean(res.favorited), favoriteAppIds: res.favoriteAppIds || [] };
+}
+
+export async function submitAppReview(params: {
+  appId: string;
+  rating: number;
+  comment: string;
+}): Promise<AppMetaPayload['reviews'][number]> {
+  const res = await apiJson<{ ok: true; review: AppMetaPayload['reviews'][number] }>(
+    `/api/apps/${encodeURIComponent(params.appId)}/review`,
+    {
+      method: 'POST',
+      body: { rating: params.rating, comment: params.comment },
+    }
+  );
+  return res.review;
+}
+
+export async function reportBrokenAppLink(params: {
+  appId: string;
+  appName: string;
+  reason: string;
+}): Promise<void> {
+  await apiJson(`/api/apps/${encodeURIComponent(params.appId)}/report-link`, {
+    method: 'POST',
+    body: { appName: params.appName, reason: params.reason },
+  });
+}
+
 export async function adminSendNotification(params: {
   targetUid?: string;
   targetUids?: string[];
@@ -1758,7 +2001,7 @@ export async function adminSendNotification(params: {
   titleEn: string;
   messageBn: string;
   messageEn: string;
-  type?: 'order' | 'payment' | 'wallet' | 'referral' | 'system' | 'promo';
+  type?: AppNotification['type'];
 }): Promise<{ recipientCount: number }> {
   const res = await apiJson<{ ok: true; recipientCount: number }>('/api/admin/notifications/send', {
     method: 'POST',

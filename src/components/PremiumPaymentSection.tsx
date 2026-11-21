@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -16,10 +16,11 @@ import {
   CheckoutPaymentMethod,
   Language,
   PaymentMethod,
+  PaymentMethodConfig,
   SiteSettings,
   UserProfile,
 } from '../types/marketplace';
-import { PAYMENT_BRAND_META, resolvePaymentLogoUrl } from './BrandLogos';
+import { getPaymentBrandMeta, resolvePaymentLogoUrl } from './BrandLogos';
 import {
   compressImageToDataUrl,
   submitAddMoneyDeposit,
@@ -27,42 +28,71 @@ import {
 } from '../lib/firestoreService';
 import { t } from '../lib/i18n';
 
-export function getEnabledPaymentMethods(settings: SiteSettings): PaymentMethod[] {
-  return (['bkash', 'nagad', 'rocket'] as PaymentMethod[]).filter((m) =>
+export function getEnabledPaymentMethods(
+  settings: SiteSettings,
+  paymentMethods?: PaymentMethodConfig[]
+): PaymentMethod[] {
+  const base = (['bkash', 'nagad', 'rocket'] as PaymentMethod[]).filter((m) =>
     m === 'bkash'
       ? settings.bkashEnabled !== false
       : m === 'nagad'
         ? settings.nagadEnabled !== false
         : settings.rocketEnabled !== false
   );
+  if (!paymentMethods || paymentMethods.length === 0) return base;
+  const extras = paymentMethods
+    .filter(
+      (pm) =>
+        pm.enabled &&
+        pm.supportsDeposit &&
+        pm.code !== 'bkash' &&
+        pm.code !== 'nagad' &&
+        pm.code !== 'rocket' &&
+        pm.accountNumber.trim().length > 0
+    )
+    .map((pm) => pm.code as PaymentMethod);
+  return [...base, ...extras];
 }
 
-export function getPaymentMethodDetails(method: PaymentMethod, settings: SiteSettings) {
-  const brand = PAYMENT_BRAND_META[method];
+export function getPaymentMethodDetails(
+  method: PaymentMethod,
+  settings: SiteSettings,
+  paymentMethods?: PaymentMethodConfig[]
+) {
+  const pmRow = paymentMethods?.find((pm) => pm.code === method);
+  const brand = getPaymentBrandMeta(method, pmRow?.name);
   const number =
-    method === 'bkash'
+    pmRow?.accountNumber ||
+    (method === 'bkash'
       ? settings.bkashNumber
       : method === 'nagad'
         ? settings.nagadNumber
-        : settings.rocketNumber;
+        : method === 'rocket'
+          ? settings.rocketNumber
+          : '');
   const accountType =
-    method === 'bkash'
+    pmRow?.accountName ||
+    (method === 'bkash'
       ? settings.bkashType || 'Personal'
       : method === 'nagad'
         ? settings.nagadType || 'Personal'
-        : settings.rocketType || 'Personal';
+        : method === 'rocket'
+          ? settings.rocketType || 'Personal'
+          : 'Account');
   const noteBn =
-    method === 'bkash'
+    pmRow?.instructionsBn ||
+    (method === 'bkash'
       ? settings.bkashNoteBn
       : method === 'nagad'
         ? settings.nagadNoteBn
-        : settings.rocketNoteBn;
+        : settings.rocketNoteBn);
   const noteEn =
-    method === 'bkash'
+    pmRow?.instructionsEn ||
+    (method === 'bkash'
       ? settings.bkashNoteEn
       : method === 'nagad'
         ? settings.nagadNoteEn
-        : settings.rocketNoteEn;
+        : settings.rocketNoteEn);
   const logoUrl = resolvePaymentLogoUrl(method, settings);
 
   return {
@@ -77,6 +107,7 @@ export function getPaymentMethodDetails(method: PaymentMethod, settings: SiteSet
 
 interface PaymentCardsGridProps {
   settings: SiteSettings;
+  paymentMethods?: PaymentMethodConfig[];
   lang: Language;
   selectedMethod: CheckoutPaymentMethod;
   onSelect: (method: PaymentMethod) => void;
@@ -85,13 +116,14 @@ interface PaymentCardsGridProps {
 
 export function PaymentMethodCardsGrid({
   settings,
+  paymentMethods,
   lang,
   selectedMethod,
   onSelect,
   compact = false,
 }: PaymentCardsGridProps) {
   const [failedUrls, setFailedUrls] = useState<Record<string, boolean>>({});
-  const enabledMethods = getEnabledPaymentMethods(settings);
+  const enabledMethods = getEnabledPaymentMethods(settings, paymentMethods);
 
   if (enabledMethods.length === 0) {
     return (
@@ -110,7 +142,7 @@ export function PaymentMethodCardsGrid({
       }`}
     >
       {enabledMethods.map((m) => {
-        const { brand, number, accountType, logoUrl } = getPaymentMethodDetails(m, settings);
+        const { brand, number, accountType, logoUrl } = getPaymentMethodDetails(m, settings, paymentMethods);
         const isSelected = selectedMethod === m;
         const effectiveSrc = failedUrls[logoUrl] ? brand.defaultLogoPath : logoUrl;
 
@@ -203,6 +235,7 @@ export function PaymentMethodCardsGrid({
 interface SelectedPaymentInstructionCardProps {
   method: PaymentMethod;
   settings: SiteSettings;
+  paymentMethods?: PaymentMethodConfig[];
   amountBdt: number;
   lang: Language;
   copied: boolean;
@@ -212,6 +245,7 @@ interface SelectedPaymentInstructionCardProps {
 export function SelectedPaymentInstructionCard({
   method,
   settings,
+  paymentMethods,
   amountBdt,
   lang,
   copied,
@@ -220,7 +254,8 @@ export function SelectedPaymentInstructionCard({
   const [failedUrl, setFailedUrl] = useState('');
   const { brand, number, accountType, noteBn, noteEn, logoUrl } = getPaymentMethodDetails(
     method,
-    settings
+    settings,
+    paymentMethods
   );
   const effectiveSrc = failedUrl === logoUrl ? brand.defaultLogoPath : logoUrl;
   const note = lang === 'bn' ? noteBn : noteEn;
@@ -362,7 +397,7 @@ export function HomepagePaymentSection({
   onOpenAuth,
   onNavigateAddMoney,
 }: HomepagePaymentSectionProps) {
-  const enabledMethods = getEnabledPaymentMethods(settings);
+  const enabledMethods = useMemo(() => getEnabledPaymentMethods(settings), [settings]);
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>(enabledMethods[0] || 'bkash');
   const [amount, setAmount] = useState('500');
   const [senderNumber, setSenderNumber] = useState(profile?.phone || '');

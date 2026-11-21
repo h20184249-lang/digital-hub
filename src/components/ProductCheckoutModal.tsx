@@ -20,6 +20,7 @@ import {
   CheckoutPaymentMethod,
   Language,
   PaymentMethod,
+  PaymentMethodConfig,
   Product,
   ProductPackage,
   Review,
@@ -30,6 +31,8 @@ import {
 import { t } from '../lib/i18n';
 import { PaymentProviderLogo, ProductVisualArtwork, ServiceBrandLogo } from './BrandLogos';
 import {
+  getEnabledPaymentMethods,
+  getPaymentMethodDetails,
   PaymentMethodCardsGrid,
   ReceiptScreenshotUploadBox,
   SelectedPaymentInstructionCard,
@@ -69,6 +72,7 @@ interface ProductCheckoutModalProps {
   onClose: () => void;
   lang: Language;
   settings: SiteSettings;
+  paymentMethods?: PaymentMethodConfig[];
   user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
@@ -88,6 +92,7 @@ export function ProductCheckoutModal({
   onClose,
   lang,
   settings,
+  paymentMethods = [],
   user,
   profile,
   wallet,
@@ -136,23 +141,11 @@ export function ProductCheckoutModal({
 
   useEffect(() => {
     if (method === 'wallet') return;
-    const isEnabled =
-      method === 'bkash'
-        ? settings.bkashEnabled !== false
-        : method === 'nagad'
-          ? settings.nagadEnabled !== false
-          : settings.rocketEnabled !== false;
-    if (!isEnabled) {
-      const next = (['bkash', 'nagad', 'rocket'] as PaymentMethod[]).find((m) =>
-        m === 'bkash'
-          ? settings.bkashEnabled !== false
-          : m === 'nagad'
-            ? settings.nagadEnabled !== false
-            : settings.rocketEnabled !== false
-      );
-      setMethod(next || 'wallet');
+    const enabled = getEnabledPaymentMethods(settings, paymentMethods);
+    if (!enabled.includes(method)) {
+      setMethod(enabled[0] || 'wallet');
     }
-  }, [settings.bkashEnabled, settings.nagadEnabled, settings.rocketEnabled, method]);
+  }, [settings, paymentMethods, method]);
 
   const productReviews = useMemo(
     () => (product ? reviews.filter((r) => r.productId === product.id && r.approved) : []),
@@ -181,11 +174,7 @@ export function ProductCheckoutModal({
   const walletSufficient = walletBalance >= totalCost;
 
   const receiverNumber =
-    method === 'bkash'
-      ? settings.bkashNumber
-      : method === 'nagad'
-        ? settings.nagadNumber
-        : settings.rocketNumber;
+    method === 'wallet' ? '' : getPaymentMethodDetails(method, settings, paymentMethods).number;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(receiverNumber).catch(() => {});
@@ -702,6 +691,7 @@ export function ProductCheckoutModal({
 
                   <PaymentMethodCardsGrid
                     settings={settings}
+                    paymentMethods={paymentMethods}
                     lang={lang}
                     selectedMethod={method}
                     onSelect={(m) => setMethod(m)}
@@ -720,7 +710,7 @@ export function ProductCheckoutModal({
                         : `৳${totalCost} will be deducted from your verified ৳${walletBalance.toFixed(2)} wallet balance.`
                       : lang === 'bn'
                         ? `পর্যাপ্ত ব্যালেন্স নেই (আরও ৳${totalCost - walletBalance} প্রয়োজন)।`
-                        : `Insufficient wallet balance (short by ৳${totalCost - walletBalance}). Switch to bKash/Nagad/Rocket.`}
+                        : `Insufficient wallet balance (short by ৳${totalCost - walletBalance}). Switch to mobile banking / Bank.`}
                   </p>
                 </div>
               ) : (
@@ -728,6 +718,7 @@ export function ProductCheckoutModal({
                   <SelectedPaymentInstructionCard
                     method={method}
                     settings={settings}
+                    paymentMethods={paymentMethods}
                     amountBdt={totalCost}
                     lang={lang}
                     copied={copiedNum}

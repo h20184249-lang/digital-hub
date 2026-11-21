@@ -396,6 +396,50 @@ const SCHEMA_STATEMENTS: string[] = [
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_media_assets_created ON media_assets(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_rewarded_claims_created ON rewarded_claims(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_ad_reward_tx_created ON ad_reward_transactions(created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS analytics_events (
+    id TEXT PRIMARY KEY,
+    visitor_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    user_id TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    page_path TEXT NOT NULL DEFAULT '/',
+    app_id TEXT NOT NULL DEFAULT '',
+    device_type TEXT NOT NULL DEFAULT 'desktop',
+    referrer_host TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics_events(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_analytics_event_created ON analytics_events(event_type, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_analytics_visitor_created ON analytics_events(visitor_id, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS app_favorites (
+    user_id TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, app_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS app_reviews (
+    id TEXT PRIMARY KEY,
+    app_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    author_name TEXT NOT NULL,
+    rating INTEGER NOT NULL,
+    comment TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_app_reviews_app ON app_reviews(app_id, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS app_broken_reports (
+    id TEXT PRIMARY KEY,
+    app_id TEXT NOT NULL,
+    app_name TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_app_broken_reports_created ON app_broken_reports(created_at DESC)`,
 ];
 
 async function seedDefaultPaymentMethodsIfEmpty(db: AppDatabase): Promise<void> {

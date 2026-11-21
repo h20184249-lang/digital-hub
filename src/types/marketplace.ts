@@ -1,6 +1,6 @@
 export type Language = 'bn' | 'en';
 
-export type PaymentMethod = 'bkash' | 'nagad' | 'rocket';
+export type PaymentMethod = 'bkash' | 'nagad' | 'rocket' | (string & {});
 export type CheckoutPaymentMethod = PaymentMethod | 'wallet';
 
 export type OrderStatus =
@@ -564,7 +564,19 @@ export interface AppNotification {
   titleEn: string;
   messageBn: string;
   messageEn: string;
-  type: 'order' | 'payment' | 'promo' | 'support' | 'wallet' | 'referral' | 'system';
+  type:
+    | 'order'
+    | 'payment'
+    | 'promo'
+    | 'support'
+    | 'wallet'
+    | 'referral'
+    | 'system'
+    | 'new_app'
+    | 'app_update'
+    | 'announcement'
+    | 'download'
+    | 'reward';
   read: boolean;
   createdAt?: unknown;
 }
@@ -573,9 +585,11 @@ export interface SupportTicket {
   id: string;
   userId: string;
   userEmail?: string;
+  category?: string;
   subject: string;
   message: string;
   orderNumber?: string;
+  screenshotDataUrl?: string;
   status: 'open' | 'in_progress' | 'resolved' | 'closed';
   adminReply?: string;
   createdAt?: unknown;
@@ -820,4 +834,76 @@ export interface ServerAdAnalytics {
       lastEventAt: string;
     }
   >;
+}
+
+export interface AdminAnalyticsPayload {
+  range: { from: number; to: number };
+  kpis: {
+    totalUsers: number;
+    todayNewUsers: number;
+    activeUsersToday: number;
+    activeUsers7d: number;
+    activeUsers30d: number;
+    totalVisitors: number;
+    uniqueVisitors: number;
+    onlineUsers: number;
+    totalDownloads: number;
+    todayDownloads: number;
+    totalRewardClaims: number;
+    totalCoinsDistributed: number;
+    pendingWithdrawals: number;
+    pendingTickets: number;
+  };
+  deviceSplit: { mobile: number; desktop: number };
+  dailySeries: Array<{
+    date: string;
+    uniqueVisitors: number;
+    pageViews: number;
+    downloads: number;
+    registrations: number;
+    coinsDistributed: number;
+  }>;
+  topPages: Array<{ path: string; views: number }>;
+  topApps: Array<{ appId: string; downloads: number }>;
+  trafficSources: Array<{ source: string; visits: number }>;
+}
+
+export interface AdminCoinsOverview {
+  balances: Array<{
+    userId: string;
+    displayName: string;
+    contact: string;
+    coinsAvailable: number;
+    coinsLifetimeEarned: number;
+    coinsRedeemed: number;
+    updatedAt: number;
+  }>;
+  transactions: AdRewardTransaction[];
+  rewardClaims: RewardedAdClaim[];
+}
+
+export interface AppReviewItem {
+  id: string;
+  appId: string;
+  userId: string;
+  authorName: string;
+  rating: number;
+  comment: string;
+  createdAt: number;
+}
+
+export interface AppMetaPayload {
+  statsByApp: Record<string, { downloads: number; ratingAvg: number; ratingCount: number }>;
+  reviews: AppReviewItem[];
+  favoriteAppIds: string[];
+}
+
+export interface AppBrokenReport {
+  id: string;
+  appId: string;
+  appName: string;
+  userId: string;
+  reason: string;
+  status: 'open' | 'resolved' | string;
+  createdAt: number;
 }

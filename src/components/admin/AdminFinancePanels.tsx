@@ -1,7 +1,8 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownToLine,
   CheckCircle2,
+  Coins,
   Download,
   Image as ImageIcon,
   Search,
@@ -10,6 +11,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  AdminCoinsOverview,
   Language,
   Payment,
   UserProfile,
@@ -19,7 +21,9 @@ import {
   WithdrawalStatus,
 } from '../../types/marketplace';
 import {
+  adminAdjustUserCoins,
   adminAdjustWalletBalance,
+  adminFetchCoinsOverview,
   adminProcessWithdrawalServer,
   adminVerifyAddMoneyServer,
   formatDateShort,
@@ -1156,6 +1160,391 @@ export function AdminWithdrawalsPanel({
                   : actionModal.targetStatus === 'Paid'
                     ? 'Record Payout & Mark Paid'
                     : 'Reject & Refund Once'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =========================================================================
+// 4. COIN MANAGEMENT PANEL (BALANCES, REWARD CLAIMS & AUDITED ADJUSTMENTS)
+// =========================================================================
+
+interface AdminCoinManagementPanelProps {
+  lang: Language;
+  users: UserProfile[];
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
+}
+
+export function AdminCoinManagementPanel({
+  lang,
+  users,
+  onSuccess,
+  onError,
+}: AdminCoinManagementPanelProps) {
+  const [overview, setOverview] = useState<AdminCoinsOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [adjustTarget, setAdjustTarget] = useState<AdminCoinsOverview['balances'][number] | null>(null);
+  const [mode, setMode] = useState<'add' | 'deduct' | 'set'>('add');
+  const [coinsInput, setCoinsInput] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const loadOverview = async () => {
+    setLoading(true);
+    try {
+      const data = await adminFetchCoinsOverview();
+      setOverview(data);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to load coins overview.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadOverview();
+  }, []);
+
+  const userById = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    users.forEach((u) => map.set(u.uid, u));
+    return map;
+  }, [users]);
+
+  const filteredBalances = useMemo(() => {
+    const rows = overview?.balances || [];
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        (r.displayName || '').toLowerCase().includes(q) ||
+        (r.contact || '').toLowerCase().includes(q) ||
+        r.userId.toLowerCase().includes(q)
+    );
+  }, [overview, search]);
+
+  const totals = useMemo(() => {
+    const rows = overview?.balances || [];
+    return rows.reduce(
+      (acc, r) => ({
+        available: acc.available + (r.coinsAvailable || 0),
+        earned: acc.earned + (r.coinsLifetimeEarned || 0),
+        redeemed: acc.redeemed + (r.coinsRedeemed || 0),
+      }),
+      { available: 0, earned: 0, redeemed: 0 }
+    );
+  }, [overview]);
+
+  const handleAdjustSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!adjustTarget) return;
+    const coinsNum = Math.round(Number(coinsInput));
+    if (!Number.isFinite(coinsNum) || coinsNum < 0 || (mode !== 'set' && coinsNum <= 0)) {
+      onError('Enter a valid non-negative integer coin amount.');
+      return;
+    }
+    if (reason.trim().length < 3) {
+      onError('Please enter a brief audit reason (at least 3 characters).');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await adminAdjustUserCoins({
+        targetUid: adjustTarget.userId,
+        mode,
+        coins: coinsNum,
+        reason: reason.trim(),
+      });
+      onSuccess(
+        `Coins updated for ${adjustTarget.displayName || adjustTarget.userId}: ${res.previousCoins} → ${res.coinsAvailable} coins`
+      );
+      setAdjustTarget(null);
+      setCoinsInput('');
+      setReason('');
+      await loadOverview();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Coin adjustment failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5 text-xs">
+      {/* KPI Totals */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4">
+          <p className="text-[11px] font-bold text-[#777777] dark:text-slate-400">
+            {lang === 'bn' ? 'মোট উপলব্ধ কয়েন' : 'Total Available Coins'}
+          </p>
+          <p className="text-2xl font-extrabold font-mono-num text-[#FF8500] mt-1">
+            {totals.available.toLocaleString()}
+          </p>
+        </div>
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4">
+          <p className="text-[11px] font-bold text-[#777777] dark:text-slate-400">
+            {lang === 'bn' ? 'সর্বমোট অর্জিত কয়েন' : 'Lifetime Coins Distributed'}
+          </p>
+          <p className="text-2xl font-extrabold font-mono-num text-emerald-600 dark:text-emerald-400 mt-1">
+            {totals.earned.toLocaleString()}
+          </p>
+        </div>
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4">
+          <p className="text-[11px] font-bold text-[#777777] dark:text-slate-400">
+            {lang === 'bn' ? 'রিডিমকৃত কয়েন' : 'Total Coins Redeemed'}
+          </p>
+          <p className="text-2xl font-extrabold font-mono-num text-[#172033] dark:text-slate-100 mt-1">
+            {totals.redeemed.toLocaleString()}
+          </p>
+        </div>
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="relative flex-1 min-w-[220px] max-w-md">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={lang === 'bn' ? 'নাম, ইমেইল বা UID দিয়ে খুঁজুন...' : 'Search user by name, contact or UID...'}
+            className="w-full pl-9 pr-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => void loadOverview()}
+          disabled={loading}
+          className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 font-bold hover:border-[#FF8500] cursor-pointer"
+        >
+          {loading ? 'Loading...' : lang === 'bn' ? 'রিফ্রেশ কয়েন' : 'Refresh Coins'}
+        </button>
+      </div>
+
+      {/* User Coin Wallets Table */}
+      <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 overflow-hidden">
+        <div className="px-4 py-3 border-b border-[#E6ECFA] dark:border-slate-800 flex items-center justify-between">
+          <h3 className="font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+            <Coins className="w-4 h-4 text-[#FF8500]" />
+            <span>{lang === 'bn' ? 'ইউজার কয়েন অ্যাকাউন্টস' : 'User Coin Accounts'}</span>
+          </h3>
+          <span className="text-[11px] font-mono-num text-[#777777]">{filteredBalances.length} records</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead className="bg-[#F8FAFF] dark:bg-slate-950 border-b border-[#E6ECFA] dark:border-slate-800 text-[11px] text-[#777777]">
+              <tr>
+                <th className="px-4 py-2.5">User</th>
+                <th className="px-4 py-2.5">Available Coins</th>
+                <th className="px-4 py-2.5">Lifetime Earned</th>
+                <th className="px-4 py-2.5">Redeemed</th>
+                <th className="px-4 py-2.5 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#E6ECFA] dark:divide-slate-800">
+              {filteredBalances.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-8 text-center text-[#777777]">
+                    {loading ? 'Loading coin accounts...' : 'No coin records found.'}
+                  </td>
+                </tr>
+              ) : (
+                filteredBalances.map((row) => {
+                  const u = userById.get(row.userId);
+                  return (
+                    <tr key={row.userId} className="hover:bg-[#F8FAFF] dark:hover:bg-slate-800/40">
+                      <td className="px-4 py-3">
+                        <p className="font-bold text-[#172033] dark:text-slate-100">
+                          {row.displayName || u?.displayName || row.userId}
+                        </p>
+                        <p className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400">
+                          {row.contact || u?.phone || u?.email || row.userId}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3 font-mono-num font-extrabold text-[#FF8500]">
+                        {(row.coinsAvailable || 0).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 font-mono-num font-bold text-emerald-600 dark:text-emerald-400">
+                        {(row.coinsLifetimeEarned || 0).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 font-mono-num text-[#777777] dark:text-slate-300">
+                        {(row.coinsRedeemed || 0).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAdjustTarget(row);
+                            setMode('add');
+                            setCoinsInput('');
+                            setReason('');
+                          }}
+                          className="px-3 py-1.5 rounded-lg dh-orange-gradient text-white font-bold text-[11px] cursor-pointer"
+                        >
+                          Adjust Coins
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Recent Coin Transactions & Reward Claims */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5">
+          <h4 className="font-extrabold text-[#172033] dark:text-slate-100">
+            {lang === 'bn' ? 'কয়েন লেনদেন ইতিহাস' : 'Coin Transaction Ledger'}
+          </h4>
+          {!overview?.transactions?.length ? (
+            <p className="text-[#777777] py-4 text-center">No coin transactions yet.</p>
+          ) : (
+            <div className="divide-y divide-[#E6ECFA] dark:divide-slate-800 max-h-80 overflow-y-auto">
+              {overview.transactions.slice(0, 30).map((tx) => (
+                <div key={tx.id} className="py-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
+                      {tx.adTitle || tx.note || tx.type}
+                    </p>
+                    <p className="text-[10px] font-mono-num text-[#777777] dark:text-slate-400 truncate">
+                      {tx.userEmail || tx.userId} · {formatDateShort(tx.createdAt, lang)}
+                    </p>
+                  </div>
+                  <span
+                    className={`font-mono-num font-extrabold shrink-0 ${
+                      tx.type === 'coin_redemption' || tx.coins < 0 ? 'text-[#DC2626]' : 'text-emerald-600'
+                    }`}
+                  >
+                    {tx.type === 'coin_redemption' || tx.coins < 0 ? '-' : '+'}
+                    {Math.abs(tx.coins)} coins
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5">
+          <h4 className="font-extrabold text-[#172033] dark:text-slate-100">
+            {lang === 'bn' ? 'রিওয়ার্ড ক্লেইম লগ' : 'Rewarded Ad Claims'}
+          </h4>
+          {!overview?.rewardClaims?.length ? (
+            <p className="text-[#777777] py-4 text-center">No reward claims logged.</p>
+          ) : (
+            <div className="divide-y divide-[#E6ECFA] dark:divide-slate-800 max-h-80 overflow-y-auto">
+              {overview.rewardClaims.slice(0, 30).map((cl) => (
+                <div key={cl.id} className="py-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
+                      {cl.networkName} ({cl.status})
+                    </p>
+                    <p className="text-[10px] font-mono-num text-[#777777] dark:text-slate-400 truncate">
+                      {cl.userEmail || cl.userId} · {cl.claimDate}
+                    </p>
+                  </div>
+                  <span className="font-mono-num font-extrabold text-[#FF8500] shrink-0">
+                    ৳{cl.amountBdt}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Adjust Coins Modal */}
+      {adjustTarget && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+          <form
+            onSubmit={handleAdjustSubmit}
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 shadow-2xl overflow-hidden"
+          >
+            <div className="p-5 border-b border-[#E6ECFA] dark:border-slate-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-extrabold text-[#172033] dark:text-slate-100">
+                  Adjust User Coins
+                </h3>
+                <p className="text-xs font-mono-num text-[#777777] dark:text-slate-400">
+                  {adjustTarget.displayName || adjustTarget.userId} · Current: {adjustTarget.coinsAvailable} coins
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdjustTarget(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div>
+                <label className="block font-bold mb-1">Adjustment Mode</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['add', 'deduct', 'set'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setMode(m)}
+                      className={`py-2 rounded-xl font-bold capitalize border cursor-pointer ${
+                        mode === m
+                          ? 'bg-[#FF8500] border-[#FF8500] text-white'
+                          : 'bg-[#F3F6FF] dark:bg-slate-800 border-[#E6ECFA] dark:border-slate-700'
+                      }`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block font-bold mb-1">Coins Amount *</label>
+                <input
+                  type="number"
+                  required
+                  min={mode === 'set' ? 0 : 1}
+                  step={1}
+                  value={coinsInput}
+                  onChange={(e) => setCoinsInput(e.target.value)}
+                  placeholder="e.g., 50"
+                  className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+                />
+              </div>
+              <div>
+                <label className="block font-bold mb-1">Audit Reason *</label>
+                <textarea
+                  rows={2}
+                  required
+                  minLength={3}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Mandatory reason for coin audit log..."
+                  className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
+                />
+              </div>
+            </div>
+            <div className="p-4 border-t border-[#E6ECFA] dark:border-slate-800 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setAdjustTarget(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 font-bold"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={busy}
+                className="px-4 py-2 rounded-xl dh-orange-gradient text-white font-bold disabled:opacity-50"
+              >
+                {busy ? 'Saving...' : 'Apply Coin Update'}
               </button>
             </div>
           </form>

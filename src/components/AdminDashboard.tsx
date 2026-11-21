@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Bell,
   CheckCircle2,
+  Coins,
   CreditCard,
   Database,
   FileText,
@@ -21,6 +22,7 @@ import {
   Shield,
   ShieldAlert,
   ShoppingBag,
+  Smartphone,
   Sun,
   Users,
   Wallet,
@@ -30,6 +32,7 @@ import {
 import {
   AdNetworkConfig,
   AdRewardTransaction,
+  AdminAnalyticsPayload,
   Advertisement,
   Announcement,
   AuditLog,
@@ -55,6 +58,7 @@ import {
   WithdrawalRequest,
 } from '../types/marketplace';
 import {
+  adminFetchAnalytics,
   adminSaveSiteSettings,
   fetchAdminDashboardServer,
   fetchServerAdAnalytics,
@@ -70,7 +74,9 @@ import {
 import { DigitalHubLogo } from './DigitalHubLogo';
 import { AdminCharts } from './admin/AdminCharts';
 import { AdminUsersPanel } from './admin/AdminUsersPanel';
+import { AdminAppsPanel } from './admin/AdminAppsPanel';
 import {
+  AdminCoinManagementPanel,
   AdminTransactionsPanel,
   AdminWalletsPanel,
   AdminWithdrawalsPanel,
@@ -114,8 +120,10 @@ interface AdminDashboardProps {
 type AdminSection =
   | 'overview'
   | 'packages'
+  | 'apps'
   | 'users'
   | 'wallets'
+  | 'coins'
   | 'transactions'
   | 'withdrawals'
   | 'referrals'
@@ -166,6 +174,7 @@ export function AdminDashboard({
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [adRewardTransactions, setAdRewardTransactions] = useState<AdRewardTransaction[]>([]);
   const [adAnalytics, setAdAnalytics] = useState<ServerAdAnalytics | null>(null);
+  const [liveAnalytics, setLiveAnalytics] = useState<AdminAnalyticsPayload | null>(null);
 
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState('');
@@ -233,6 +242,9 @@ export function AdminDashboard({
     fetchServerAdAnalytics()
       .then(setAdAnalytics)
       .catch(() => {});
+    adminFetchAnalytics()
+      .then(setLiveAnalytics)
+      .catch(() => {});
 
     return () => {
       unsubs.forEach((u) => u());
@@ -247,12 +259,14 @@ export function AdminDashboard({
     setRefreshing(true);
     try {
       notifyDashboardInvalidation();
-      const [snap, stats] = await Promise.all([
+      const [snap, stats, siteStats] = await Promise.all([
         fetchAdminDashboardServer(true),
         fetchServerAdAnalytics(),
+        adminFetchAnalytics().catch(() => null),
       ]);
       if (snap?.superAdminEmail) setSuperAdminEmail(snap.superAdminEmail);
       setAdAnalytics(stats);
+      if (siteStats) setLiveAnalytics(siteStats);
     } finally {
       setRefreshing(false);
     }
@@ -349,6 +363,12 @@ export function AdminDashboard({
       icon: Package,
       badge: products.length,
     },
+    {
+      id: 'apps',
+      label: 'Smart App Store',
+      labelBn: 'স্মার্ট অ্যাপ স্টোর',
+      icon: Smartphone,
+    },
     { id: 'users', label: 'Users', labelBn: 'ইউজার ম্যানেজমেন্ট', icon: Users, badge: kpis.totalUsers },
     {
       id: 'wallets',
@@ -356,6 +376,12 @@ export function AdminDashboard({
       labelBn: 'ওয়ালেট ও ব্যালেন্স',
       icon: Wallet,
       badge: kpis.pendingDeposits || undefined,
+    },
+    {
+      id: 'coins',
+      label: 'Coin Management',
+      labelBn: 'কয়েন ম্যানেজমেন্ট',
+      icon: Coins,
     },
     { id: 'transactions', label: 'Transactions', labelBn: 'লেনদেন লেজার', icon: FileText },
     {
@@ -705,6 +731,55 @@ export function AdminDashboard({
                 ))}
               </div>
 
+              {/* Live Visitor & App Store Activity Strip */}
+              {liveAnalytics && (
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                  <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
+                        {lang === 'bn' ? 'অনলাইন ইউজার (৫ মি.)' : 'Online Users (5m)'}
+                      </p>
+                      <p className="text-lg font-extrabold font-mono-num text-emerald-600 dark:text-emerald-400">
+                        {liveAnalytics.kpis.onlineUsers.toLocaleString()}
+                      </p>
+                    </div>
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                  </div>
+                  <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3">
+                    <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
+                      {lang === 'bn' ? 'ইউনিক ভিজিটর' : 'Unique Visitors'}
+                    </p>
+                    <p className="text-lg font-extrabold font-mono-num text-[#172033] dark:text-slate-100">
+                      {liveAnalytics.kpis.uniqueVisitors.toLocaleString()}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSection('apps')}
+                    className="text-left rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 hover:border-[#FF8500] cursor-pointer"
+                  >
+                    <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
+                      {lang === 'bn' ? 'আজকের অ্যাপ ডাউনলোড' : 'App Downloads Today'}
+                    </p>
+                    <p className="text-lg font-extrabold font-mono-num text-[#FF8500]">
+                      {liveAnalytics.kpis.todayDownloads.toLocaleString()}
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSection('storefront')}
+                    className="text-left rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 hover:border-[#FF8500] cursor-pointer"
+                  >
+                    <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
+                      {lang === 'bn' ? 'ওপেন সাপোর্ট টিকেট' : 'Pending Tickets'}
+                    </p>
+                    <p className="text-lg font-extrabold font-mono-num text-[#172033] dark:text-slate-100">
+                      {liveAnalytics.kpis.pendingTickets.toLocaleString()}
+                    </p>
+                  </button>
+                </div>
+              )}
+
               {/* Real Database Charts */}
               <AdminCharts
                 lang={lang}
@@ -804,6 +879,10 @@ export function AdminDashboard({
             />
           )}
 
+          {section === 'apps' && (
+            <AdminAppsPanel lang={lang} onSuccess={showSuccess} onError={showError} />
+          )}
+
           {section === 'users' && (
             <AdminUsersPanel
               lang={lang}
@@ -821,6 +900,15 @@ export function AdminDashboard({
               users={users}
               wallets={wallets}
               walletTxs={walletTxs}
+              onSuccess={showSuccess}
+              onError={showError}
+            />
+          )}
+
+          {section === 'coins' && (
+            <AdminCoinManagementPanel
+              lang={lang}
+              users={users}
               onSuccess={showSuccess}
               onError={showError}
             />

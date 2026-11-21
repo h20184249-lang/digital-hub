@@ -1,14 +1,13 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
   Clock,
   Coins,
+  ExternalLink,
   Film,
   History,
-  Loader2,
   Lock,
-  Play,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -32,15 +31,15 @@ import {
   getTimeMs,
   getWatchEarnSummaryServer,
   redeemWatchEarnCoinsServer,
-  startWatchEarnSessionServer,
   verifyWatchEarnSessionServer,
   WatchEarnSummaryPayload,
 } from '../lib/firestoreService';
+import { resolveAdBrowserUrl } from '../lib/adNavigation';
 import { ManagedPlacementSlot } from './AdUnitFrame';
 import {
+  ActiveAdSessionStatusPanel,
   buildWatchableAdItems,
-  WatchableAdItem,
-  WatchAdModal,
+  useExternalWatchAdController,
   WatchRewardCompletionResult,
 } from './WatchEarnWidgets';
 
@@ -73,7 +72,6 @@ export function WatchAndEarnPage({
   onNavigate,
   onOpenAuth,
 }: WatchAndEarnPageProps) {
-  const [selectedAdId, setSelectedAdId] = useState<string>('');
   const [serverSummary, setServerSummary] = useState<WatchEarnSummaryPayload>({
     coinsAvailable: 0,
     coinsLifetimeEarned: 0,
@@ -88,31 +86,15 @@ export function WatchAndEarnPage({
     watchEarnEnabled: settings.watchEarnEnabled !== false,
     creditedSessions: [],
   });
-  const [modalOpen, setModalOpen] = useState(false);
-  const [activeAd, setActiveAd] = useState<WatchableAdItem | null>(null);
-  const [activeSession, setActiveSession] = useState<{
-    sessionId: string;
-    sessionToken: string;
-    requiredSeconds: number;
-    rewardCoins: number;
-    requiresS2SCallback?: boolean;
-  } | null>(null);
-  const [busyPlay, setBusyPlay] = useState(false);
   const [busyVerify, setBusyVerify] = useState(false);
   const [redeemAmount, setRedeemAmount] = useState('');
   const [busyRedeem, setBusyRedeem] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'info' | 'err'; text: string } | null>(null);
-  const startLockRef = useRef(false);
 
   const watchableAds = useMemo(
     () => buildWatchableAdItems(advertisements, managedAdUnits, adNetworks),
     [advertisements, managedAdUnits, adNetworks]
   );
-
-  const selectedAd = useMemo(() => {
-    if (watchableAds.length === 0) return null;
-    return watchableAds.find((a) => a.id === selectedAdId) || watchableAds[0];
-  }, [watchableAds, selectedAdId]);
 
   const refreshServerSummary = () => {
     if (!user) return;
@@ -179,83 +161,6 @@ export function WatchAndEarnPage({
     settings.rewardedAdEnabled !== false;
   const canWatchMore = adsWatchedToday < dailyAdLimit && coinsEarnedToday + coinsPerAd <= dailyCoinLimit;
 
-  const startWatchSession = async (targetAd?: WatchableAdItem | null) => {
-    if (!user) {
-      onOpenAuth();
-      return;
-    }
-    if (profile?.status === 'suspended') {
-      setFeedback({
-        type: 'err',
-        text: lang === 'bn' ? 'আপনার অ্যাকাউন্ট সাময়িকভাবে সাসপেন্ড আছে।' : 'Your account is currently suspended.',
-      });
-      return;
-    }
-    if (!watchEarnEnabled) {
-      setFeedback({
-        type: 'err',
-        text:
-          lang === 'bn'
-            ? 'ওয়াচ ও আর্ন বর্তমানে অ্যাডমিন দ্বারা বন্ধ রাখা হয়েছে।'
-            : 'Watch & Earn is currently paused by the administrator.',
-      });
-      return;
-    }
-    if (!canWatchMore) {
-      setFeedback({
-        type: 'info',
-        text:
-          lang === 'bn'
-            ? `আজকের দৈনিক বিজ্ঞাপন সীমা (${dailyAdLimit}/${dailyAdLimit}) পূর্ণ হয়েছে। আগামীকাল আবার চেষ্টা করুন।`
-            : `Today's daily ad limit (${dailyAdLimit}/${dailyAdLimit}) is complete. Come back tomorrow!`,
-      });
-      return;
-    }
-    const chosen = targetAd || selectedAd;
-    if (!chosen) {
-      setFeedback({
-        type: 'err',
-        text:
-          lang === 'bn'
-            ? 'বর্তমানে দেখার মতো কোনো সক্রিয় বিজ্ঞাপন নেই।'
-            : 'No active advertisements are available right now.',
-      });
-      return;
-    }
-    if (startLockRef.current || modalOpen) return;
-
-    startLockRef.current = true;
-    setBusyPlay(true);
-    setFeedback(null);
-
-    try {
-      const res = await startWatchEarnSessionServer({
-        unitId: chosen.unitId,
-        provider: chosen.provider,
-        launchUrl: chosen.targetUrl,
-        adTitle: lang === 'bn' ? chosen.titleBn : chosen.titleEn,
-      });
-      setSelectedAdId(chosen.id);
-      setActiveAd(chosen);
-      setActiveSession({
-        sessionId: res.sessionId,
-        sessionToken: res.sessionToken,
-        requiredSeconds: res.requiredSeconds || 5,
-        rewardCoins: res.rewardCoins || coinsPerAd,
-        requiresS2SCallback: res.requiresS2SCallback,
-      });
-      setModalOpen(true);
-    } catch (err) {
-      setFeedback({
-        type: 'err',
-        text: err instanceof Error ? err.message : 'Could not start Watch & Earn session.',
-      });
-    } finally {
-      setBusyPlay(false);
-      startLockRef.current = false;
-    }
-  };
-
   const handleRewardCredited = (res: WatchRewardCompletionResult) => {
     setServerSummary((prev) => ({
       ...prev,
@@ -271,20 +176,21 @@ export function WatchAndEarnPage({
       type: 'ok',
       text: res.alreadyCredited
         ? lang === 'bn'
-          ? 'এই বিজ্ঞাপনটির কয়েন ইতিমধ্যে আপনার অ্যাকাউন্টে যোগ করা হয়েছে।'
-          : 'Coins for this ad session were already credited.'
+          ? 'এই সেশনের কয়েন ইতিমধ্যে আপনার অ্যাকাউন্টে যোগ করা হয়েছে।'
+          : 'Coins for this session were already credited.'
         : lang === 'bn'
-          ? `অভিনন্দন! +${res.coinsAwarded} কয়েন স্বয়ংক্রিয়ভাবে আপনার অ্যাকাউন্টে যোগ হয়েছে (বর্তমান ব্যালেন্স: ${res.coinsAvailable} কয়েন)।`
-          : `Success! +${res.coinsAwarded} Coins credited automatically to your balance (New balance: ${res.coinsAvailable} Coins).`,
+          ? `সফল! +${res.coinsAwarded} কয়েন আপনার অ্যাকাউন্টে যোগ হয়েছে (মোট ব্যালেন্স: ${res.coinsAvailable} কয়েন)।`
+          : `Success! +${res.coinsAwarded} Coins credited to your balance (New balance: ${res.coinsAvailable} Coins).`,
     });
-    // Advance selected ad to next one automatically
-    if (watchableAds.length > 1 && activeAd) {
-      const curIdx = watchableAds.findIndex((a) => a.id === activeAd.id);
-      const nextAd = watchableAds[(curIdx + 1) % watchableAds.length];
-      if (nextAd) setSelectedAdId(nextAd.id);
-    }
     refreshServerSummary();
   };
+
+  const controller = useExternalWatchAdController({
+    uid: user?.uid,
+    isSuspended: profile?.status === 'suspended',
+    coinsPerAd,
+    onCredited: handleRewardCredited,
+  });
 
   const handleVerifySession = async (sessionId: string) => {
     setFeedback(null);
@@ -342,6 +248,8 @@ export function WatchAndEarnPage({
     }
   };
 
+  const approvedCount = watchableAds.filter((a) => a.rewardApproved).length;
+
   return (
     <div className="max-w-7xl mx-auto w-full px-3 sm:px-6 lg:px-8 py-5 sm:py-6 space-y-6">
       {/* Header Hero */}
@@ -350,44 +258,21 @@ export function WatchAndEarnPage({
           <div className="space-y-2 max-w-2xl min-w-0">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#FF8500]/20 border border-[#FF8500]/40 text-[#FF9B19] text-[11px] font-bold uppercase tracking-wider">
               <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-              {lang === 'bn' ? '৫ সেকেন্ডে অটো-কয়েন রিওয়ার্ড' : '5-Second Auto-Credit Watch & Earn'}
+              {lang === 'bn'
+                ? 'এক্সটার্নাল অ্যাড লিংক ও ৫ সেকেন্ড রিটার্ন সিস্টেম'
+                : 'External Ad Links & 5s Return Reward System'}
             </span>
             <h1 className="text-xl sm:text-3xl font-extrabold tracking-tight leading-tight">
-              {lang === 'bn' ? 'বিজ্ঞাপন দেখুন ও কয়েন আয় করুন' : 'Watch Ads & Earn Coins'}
+              {lang === 'bn' ? 'বিজ্ঞাপন দেখুন ও কয়েন আয় করুন' : 'Watch External Ads & Earn Coins'}
             </h1>
             <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
               {lang === 'bn'
-                ? `প্রতিটি বিজ্ঞাপন ৫ সেকেন্ড সম্পূর্ণ দেখলেই কোনো ক্লেইম বাটন ছাড়াই স্বয়ংক্রিয়ভাবে +${coinsPerAd} কয়েন আপনার অ্যাকাউন্টে স্থায়ীভাবে যোগ হবে (${coinsPerBdt} কয়েন = ৳১)।`
-                : `Watch any real ad for 5 full seconds and receive +${coinsPerAd} coins automatically with zero extra clicks (${coinsPerBdt} coins = ৳1). Balance persists permanently in your account.`}
+                ? `প্রতিটি বিজ্ঞাপনের পাশে Open Ad বাটনে চাপ দিলে নির্ধারিত URL নতুন ব্রাউজার ট্যাবে খুলবে। ফিরে এলে ৫ সেকেন্ডের কাউন্টডাউন শেষে Claim Coins বাটন আসবে (+${coinsPerAd} কয়েন, ${coinsPerBdt} কয়েন = ৳১)।`
+                : `Tap Open Ad to open the external URL in a single new tab. Return here for the 5-second countdown, then tap Claim Coins (+${coinsPerAd} Coins on policy-approved ads; ${coinsPerBdt} Coins = ৳1).`}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            <button
-              type="button"
-              disabled={busyPlay || !watchEarnEnabled || profile?.status === 'suspended' || (Boolean(user) && !canWatchMore)}
-              onClick={() => void startWatchSession()}
-              className="px-5 sm:px-6 py-3.5 rounded-2xl dh-orange-gradient text-white text-xs sm:text-sm font-extrabold inline-flex items-center gap-2 shadow-lg hover:opacity-95 disabled:opacity-50 cursor-pointer"
-            >
-              {busyPlay ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Play className="w-4 h-4 fill-current" />
-              )}
-              <span>
-                {busyPlay
-                  ? lang === 'bn'
-                    ? 'চালু হচ্ছে...'
-                    : 'Starting...'
-                  : user && !canWatchMore
-                    ? lang === 'bn'
-                      ? 'আজকের সীমা পূর্ণ'
-                      : 'Daily Limit Reached'
-                    : lang === 'bn'
-                      ? `বিজ্ঞাপন দেখুন (+${coinsPerAd} কয়েন)`
-                      : `WATCH AD & EARN (+${coinsPerAd})`}
-              </span>
-            </button>
             <button
               type="button"
               onClick={() => onNavigate('wallet')}
@@ -403,7 +288,7 @@ export function WatchAndEarnPage({
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
           <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
             <p className="text-[11px] text-white/70 truncate">
-              {lang === 'bn' ? 'উপলব্ধ বিজ্ঞাপন' : 'Available Ads'}
+              {lang === 'bn' ? 'উপলব্ধ বিজ্ঞাপন' : 'External Ad Links'}
             </p>
             <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-[#FF9B19] mt-0.5">
               {watchableAds.length}
@@ -476,8 +361,8 @@ export function WatchAndEarnPage({
               </p>
               <p className="text-xs text-[#777777] dark:text-slate-400">
                 {lang === 'bn'
-                  ? 'আপনার মোবাইল নম্বর বা ইমেইল অ্যাকাউন্ট দিয়ে লগইন করলে প্রতিটি ৫ সেকেন্ডের বিজ্ঞাপনের কয়েন স্থায়ীভাবে জমা থাকবে।'
-                  : 'Log in with your mobile number or email account so your 5-second ad coins save permanently.'}
+                  ? 'আপনার মোবাইল নম্বর বা ইমেইল অ্যাকাউন্ট দিয়ে লগইন করলে রিটার্ন সেশন ও কয়েন ব্যালেন্স স্থায়ীভাবে জমা থাকবে।'
+                  : 'Sign in with your mobile number or email so your active ad step and earned coins save permanently.'}
               </p>
             </div>
           </div>
@@ -491,19 +376,35 @@ export function WatchAndEarnPage({
         </div>
       )}
 
-      {/* Watchable Ads Selector + Coin Redemption */}
+      {/* Active Persistent Ad Session Status + 5s Countdown + Claim Coins Button */}
+      {user && controller.activeStep && (
+        <ActiveAdSessionStatusPanel
+          step={controller.activeStep}
+          secondsLeft={controller.secondsLeft}
+          busyAction={controller.busyAction}
+          lang={lang}
+          coinsPerBdt={coinsPerBdt}
+          onStartCountdown={controller.handleManualStartCountdown}
+          onClaimCoins={() => void controller.handleClaimOrFinishStep(lang)}
+          onCheckS2S={() => void controller.handleCheckS2SVerification()}
+          onResetStep={controller.resetActiveStep}
+          onGoWallet={() => onNavigate('wallet')}
+        />
+      )}
+
+      {/* Individual External Ad Cards with Open Ad Buttons + Coin Redemption */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 dh-card rounded-3xl p-4 sm:p-5 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-base sm:text-lg font-bold text-[#172033] dark:text-slate-100 flex items-center gap-2">
                 <Film className="w-5 h-5 text-[#FF8500]" />
-                {lang === 'bn' ? 'বিজ্ঞাপন নির্বাচন করুন (৫ সেকেন্ড = অটো কয়েন)' : 'Select an Ad to Watch (5s = Auto Coins)'}
+                {lang === 'bn' ? 'বিজ্ঞাপন তালিকা — প্রতিটি অ্যাডের জন্য আলাদা Open Ad বাটন' : 'External Ad Links — Open Ad One Step at a Time'}
               </h2>
               <p className="text-xs text-[#777777] dark:text-slate-400">
                 {lang === 'bn'
-                  ? `যেকোনো বিজ্ঞাপনে ট্যাপ করুন → ৫ সেকেন্ড দেখুন → +${coinsPerAd} কয়েন সাথে সাথে জমা হবে।`
-                  : `Tap any available ad → view for 5 seconds → +${coinsPerAd} coins credited automatically.`}
+                  ? `একসাথে কেবল একটি বিজ্ঞাপন খুলবে। আগের ধাপ সম্পন্ন না করে পরবর্তী বিজ্ঞাপন খোলা যাবে না।`
+                  : `Only one ad tab can be active at a time. Complete the active step before opening the next ad.`}
               </p>
             </div>
           </div>
@@ -516,51 +417,127 @@ export function WatchAndEarnPage({
             </div>
           ) : (
             <>
-              <div className="mb-3 p-2.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 text-[11px] text-[#555555] dark:text-slate-300 flex items-start gap-2">
+              <div className="p-3 rounded-xl bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 text-[11px] text-[#555555] dark:text-slate-300 flex items-start gap-2">
                 <ShieldCheck className="w-4 h-4 text-[#16A34A] shrink-0 mt-0.5" />
                 <span>
-                  {lang === 'bn'
-                    ? 'শুধুমাত্র অনুমোদিত Reward Ad ও S2S যাচাইকৃত বিজ্ঞাপনের জন্যই কয়েন প্রদান করা হয়। সাধারণ থার্ড-পার্টি ডিসপ্লে/ব্যানার বিজ্ঞাপনে কোনো ইনসেন্টিভ কয়েন দেওয়া হয় না।'
-                    : 'Coins are awarded exclusively on authorized Reward Ads & S2S-verified units. Non-incentivized third-party display banners never issue coins.'}
+                  {approvedCount > 0
+                    ? lang === 'bn'
+                      ? `নীতিমালা অনুমোদিত ${approvedCount}টি বিজ্ঞাপনে ৫ সেকেন্ড শেষে Claim Coins (+${coinsPerAd} কয়েন) সক্রিয় আছে। অন্যান্য ডিসপ্লে লিংকে শুধু নিরাপদ ভিউ ধাপ চলে।`
+                      : `${approvedCount} policy-approved ad(s) award +${coinsPerAd} Coins after 5s countdown + Claim Coins. Display-only links complete without coins.`
+                    : lang === 'bn'
+                      ? 'নেটওয়ার্ক নীতিমালা অনুযায়ী Reward-সহ বিজ্ঞাপন কেবল বিজ্ঞাপন নেটওয়ার্ক অনুমোদন করলে চালু হবে (অ্যাডমিন → Ad Units থেকে অনুমোদনযোগ্য)। এখন সব নির্ধারিত বিজ্ঞাপন লিংক নিরাপদে Open Ad বাটনে খুলবে।'
+                      : 'Per ad network policy, rewarded coins activate only on units approved by the ad network (manageable in Admin → Ad Units). All your external ad URLs open safely one by one via Open Ad.'}
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {watchableAds.slice(0, 8).map((item) => {
-                  const isSelected = selectedAd?.id === item.id;
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {watchableAds.map((item) => {
+                  const launch = resolveAdBrowserUrl(item.targetUrl);
+                  const isCurrentActive = controller.activeStep?.unitId === item.unitId;
+                  const isLockedByOther =
+                    controller.hasBlockingActiveStep && !isCurrentActive;
+                  const blockedReason =
+                    !user
+                      ? 'auth'
+                      : profile?.status === 'suspended'
+                        ? 'suspended'
+                        : isLockedByOther
+                          ? 'locked'
+                          : isCurrentActive && controller.hasBlockingActiveStep
+                            ? 'active'
+                            : item.rewardApproved && !canWatchMore
+                              ? 'limit'
+                              : null;
+
                   return (
-                    <button
+                    <div
                       key={item.id}
-                      type="button"
-                      disabled={busyPlay || (Boolean(user) && !canWatchMore)}
-                      onClick={() => void startWatchSession(item)}
-                      className={`group text-left p-3 rounded-2xl border transition-all flex items-center justify-between gap-2.5 cursor-pointer disabled:opacity-55 ${
-                        isSelected
+                      className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between gap-3 ${
+                        isCurrentActive
                           ? 'bg-[#FFF7EE] dark:bg-orange-500/15 border-[#FF8500] shadow-xs'
-                          : 'bg-[#F3F6FF] dark:bg-slate-800/80 border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500]'
+                          : 'bg-[#F3F6FF] dark:bg-slate-800/80 border-[#E6ECFA] dark:border-slate-700'
                       }`}
                     >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span className="w-9 h-9 rounded-xl dh-orange-gradient text-white flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                          <Play className="w-4 h-4 fill-current ml-0.5" />
-                        </span>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[10px] font-mono-num font-bold px-1.5 py-0.5 rounded bg-[#172033] text-white">
-                              {item.unitId}
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <span className="text-[10px] font-mono-num font-bold px-1.5 py-0.5 rounded bg-[#172033] text-white">
+                            {item.unitId} · {item.provider}
+                          </span>
+                          {item.rewardApproved ? (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-[#16A34A] dark:text-emerald-300">
+                              5s = +{coinsPerAd} {lang === 'bn' ? 'কয়েন' : 'Coins'}
                             </span>
-                            <span className="text-[10px] font-bold text-[#16A34A] dark:text-emerald-400">
-                              +{coinsPerAd} {lang === 'bn' ? 'কয়েন' : 'Coins'}
+                          ) : (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-200/80 dark:bg-slate-700 text-[#555555] dark:text-slate-300">
+                              {lang === 'bn' ? 'ডিসপ্লে লিংক' : 'Display Only'}
                             </span>
-                          </div>
-                          <p className="text-xs font-bold text-[#172033] dark:text-slate-100 truncate mt-0.5">
-                            {lang === 'bn' ? item.titleBn : item.titleEn}
-                          </p>
-                          <p className="text-[10px] text-[#777777] dark:text-slate-400 truncate">
-                            {item.provider} · 5s {lang === 'bn' ? 'ভেরিফায়েড ভিউ' : 'verified view'}
-                          </p>
+                          )}
                         </div>
+                        <p className="text-xs sm:text-sm font-bold text-[#172033] dark:text-slate-100 truncate">
+                          {lang === 'bn' ? item.titleBn : item.titleEn}
+                        </p>
+                        <p className="text-[11px] text-[#777777] dark:text-slate-400 truncate font-mono-num">
+                          {item.targetUrl}
+                        </p>
                       </div>
-                    </button>
+
+                      <div>
+                        {!user ? (
+                          <button
+                            type="button"
+                            onClick={onOpenAuth}
+                            className="w-full py-2 px-3 rounded-xl bg-[#172033] text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                          >
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>{lang === 'bn' ? 'সাইন ইন করে Open Ad' : 'Sign In to Open Ad'}</span>
+                          </button>
+                        ) : blockedReason || !launch.ok ? (
+                          <button
+                            type="button"
+                            disabled
+                            className="w-full py-2 px-3 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold inline-flex items-center justify-center gap-1.5 opacity-75 cursor-not-allowed"
+                          >
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>
+                              {blockedReason === 'active'
+                                ? lang === 'bn'
+                                  ? 'উপরের সেশন সম্পন্ন করুন'
+                                  : 'Complete Active Session Above'
+                                : blockedReason === 'locked'
+                                  ? lang === 'bn'
+                                    ? 'আগের ধাপ শেষ করুন'
+                                    : 'Finish Previous Ad First'
+                                  : blockedReason === 'limit'
+                                    ? lang === 'bn'
+                                      ? 'আজকের সীমা পূর্ণ'
+                                      : 'Daily Limit Reached'
+                                    : lang === 'bn'
+                                      ? 'অনুপলব্ধ'
+                                      : 'Unavailable'}
+                            </span>
+                          </button>
+                        ) : (
+                          <a
+                            href={launch.href}
+                            target="_blank"
+                            rel="noopener noreferrer nofollow"
+                            onClick={(e) => controller.handleOpenExternalAd(e, item, lang)}
+                            className="w-full py-2.5 px-3 rounded-xl dh-orange-gradient text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5 shadow-xs hover:opacity-95 cursor-pointer"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>
+                              {item.rewardApproved
+                                ? lang === 'bn'
+                                  ? `Open Ad (+${coinsPerAd} কয়েন)`
+                                  : `Open Ad (+${coinsPerAd} Coins)`
+                                : lang === 'bn'
+                                  ? 'Open Ad (নতুন ট্যাব)'
+                                  : 'Open Ad'}
+                            </span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
                   );
                 })}
               </div>
@@ -569,7 +546,7 @@ export function WatchAndEarnPage({
         </div>
 
         {/* Coin to BDT Wallet Redemption */}
-        <form onSubmit={handleRedeemCoins} className="dh-card rounded-3xl p-4 sm:p-5 space-y-3.5">
+        <form onSubmit={handleRedeemCoins} className="dh-card rounded-3xl p-4 sm:p-5 space-y-3.5 self-start">
           <div className="flex items-center gap-2">
             <Coins className="w-5 h-5 text-[#FF8500]" />
             <h2 className="text-base font-bold text-[#172033] dark:text-slate-100">
@@ -749,7 +726,7 @@ export function WatchAndEarnPage({
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-[#FF8500]" />
           <h3 className="text-sm font-bold text-[#172033] dark:text-slate-100">
-            {lang === 'bn' ? 'স্পন্সরড পার্টনার বিজ্ঞাপন' : 'Sponsored Partner Placement'}
+            {lang === 'bn' ? 'স্পন্সরড পার্টনার ব্যানার' : 'Sponsored Partner Banners'}
           </h3>
         </div>
         <ManagedPlacementSlot
@@ -760,43 +737,6 @@ export function WatchAndEarnPage({
           variant="grid"
         />
       </div>
-
-      <WatchAdModal
-        open={modalOpen}
-        ad={activeAd}
-        session={activeSession}
-        lang={lang}
-        coinsPerBdt={coinsPerBdt}
-        canWatchMore={canWatchMore}
-        onClose={() => {
-          setModalOpen(false);
-          setActiveSession(null);
-        }}
-        onRewardCredited={handleRewardCredited}
-        onSwitchAd={() => {
-          const curIdx = activeAd ? watchableAds.findIndex((a) => a.id === activeAd.id) : 0;
-          const nextAd = watchableAds[(curIdx + 1) % Math.max(1, watchableAds.length)];
-          setModalOpen(false);
-          setActiveSession(null);
-          if (nextAd) {
-            setTimeout(() => void startWatchSession(nextAd), 120);
-          }
-        }}
-        onWatchNext={() => {
-          const curIdx = activeAd ? watchableAds.findIndex((a) => a.id === activeAd.id) : 0;
-          const nextAd = watchableAds[(curIdx + 1) % Math.max(1, watchableAds.length)];
-          setModalOpen(false);
-          setActiveSession(null);
-          if (nextAd) {
-            setTimeout(() => void startWatchSession(nextAd), 120);
-          }
-        }}
-        onGoWallet={() => {
-          setModalOpen(false);
-          setActiveSession(null);
-          onNavigate('wallet');
-        }}
-      />
     </div>
   );
 }

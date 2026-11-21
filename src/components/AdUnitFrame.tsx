@@ -1,4 +1,4 @@
-import { MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { MouseEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ChevronLeft,
@@ -8,6 +8,7 @@ import {
   Megaphone,
   Play,
   RefreshCw,
+  ShieldCheck,
   Sparkles,
 } from 'lucide-react';
 import {
@@ -17,14 +18,9 @@ import {
   ManagedAdUnitConfig,
   ManagedAdUnitStatus,
 } from '../types/marketplace';
-import {
-  AD_PLACEMENT_LABELS,
-  AD_SLOT_CATEGORIES,
-  AUTHORIZED_REWARD_ADS,
-} from '../lib/adProviderConfig';
+import { AD_PLACEMENT_LABELS, AD_SLOT_CATEGORIES } from '../lib/adProviderConfig';
 import { resolveAdBrowserUrl, tryAcquireAdLaunchLock } from '../lib/adNavigation';
 import { apiUrl } from '../lib/apiClient';
-import { resolveStudioImage } from '../lib/studioAssets';
 
 function getAdSessionId(): string {
   try {
@@ -49,8 +45,13 @@ export interface ManagedUnitRuntimeStatus {
 const runtimeUnitStatuses = new Map<string, ManagedUnitRuntimeStatus>();
 const statusListeners = new Set<() => void>();
 
-// Global duplicate script execution guard so identical pop/native script URLs never execute twice concurrently
+// Global duplicate script execution guard so identical ad script URLs never execute twice on the same page
 const activeScriptOwners = new Map<string, string>();
+const scriptOwnerListeners = new Set<() => void>();
+
+function notifyScriptOwnersChanged(): void {
+  scriptOwnerListeners.forEach((fn) => fn());
+}
 
 function claimScriptSlotLock(scriptUrl: string, instanceKey: string): boolean {
   const normalized = scriptUrl.trim();
@@ -59,7 +60,10 @@ function claimScriptSlotLock(scriptUrl: string, instanceKey: string): boolean {
   if (currentOwner && currentOwner !== instanceKey) {
     return false;
   }
-  activeScriptOwners.set(normalized, instanceKey);
+  if (currentOwner !== instanceKey) {
+    activeScriptOwners.set(normalized, instanceKey);
+    notifyScriptOwnersChanged();
+  }
   return true;
 }
 
@@ -68,7 +72,15 @@ function releaseScriptSlotLock(scriptUrl: string, instanceKey: string): void {
   if (!normalized) return;
   if (activeScriptOwners.get(normalized) === instanceKey) {
     activeScriptOwners.delete(normalized);
+    notifyScriptOwnersChanged();
   }
+}
+
+function isScriptClaimedElsewhere(scriptUrl: string, myKey: string): boolean {
+  const normalized = scriptUrl.trim();
+  if (!normalized) return false;
+  const owner = activeScriptOwners.get(normalized);
+  return Boolean(owner && owner !== myKey);
 }
 
 export function reportManagedUnitStatus(
@@ -157,7 +169,9 @@ window.addEventListener('unhandledrejection', function(e) { if (e && e.preventDe
 </script>
 </head>
 <body>
+<div id="dh-isolated-banner-${unit.id}" data-banner-slot="${slot}" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;">
 ${unit.rawScriptHtml}
+</div>
 <script>
 (function() {
   var unitId = ${safeId};
@@ -254,9 +268,9 @@ ${unit.rawScriptHtml}
   } catch (e) {}
 
   setTimeout(function() { inspectRendered(false); }, 800);
-  setTimeout(function() { inspectRendered(false); }, 2200);
-  setTimeout(function() { inspectRendered(false); }, 4500);
-  setTimeout(function() { inspectRendered(true); }, 6800);
+  setTimeout(function() { inspectRendered(false); }, 2000);
+  setTimeout(function() { inspectRendered(false); }, 3400);
+  setTimeout(function() { inspectRendered(true); }, 4800);
 })();
 </script>
 </body>
@@ -268,18 +282,20 @@ export function AdUnitCardOrBanner({
   slot,
   lang,
   strictRewardMode = false,
+  collapseOnFailure = false,
+  slotOwnerKey,
   onStatusChange,
 }: {
   unit: ManagedAdUnitConfig;
   slot: AdPlacementSlot;
   lang: Language;
   strictRewardMode?: boolean;
+  collapseOnFailure?: boolean;
+  slotOwnerKey?: string;
   onStatusChange?: (unitId: string, status: ManagedAdUnitStatus, err?: string) => void;
 }) {
-  const instanceKey = useMemo(
-    () => `${unit.id}_${slot}_${Math.random().toString(36).slice(2, 7)}`,
-    [unit.id, slot]
-  );
+  const reactId = useId();
+  const instanceKey = `${unit.id}_${slot}_${slotOwnerKey || reactId}`;
   const [retryNonce, setRetryNonce] = useState(0);
   const [duplicateSkipped, setDuplicateSkipped] = useState(false);
   const [status, setStatus] = useState<ManagedAdUnitStatus>(
@@ -290,10 +306,11 @@ export function AdUnitCardOrBanner({
   const outerWrapRef = useRef<HTMLDivElement | null>(null);
   const impressionSentRef = useRef(false);
 
-  const isGlobalScriptType = unit.format === 'script_pop' || unit.format === 'native_widget';
+  const isScriptBackedType =
+    unit.format === 'banner_iframe' || unit.format === 'script_pop' || unit.format === 'native_widget';
 
   useEffect(() => {
-    if (!isGlobalScriptType || !unit.originalUrl) {
+    if (!isScriptBackedType || !unit.originalUrl) {
       setDuplicateSkipped(false);
       return;
     }
@@ -304,7 +321,7 @@ export function AdUnitCardOrBanner({
         releaseScriptSlotLock(unit.originalUrl, instanceKey);
       }
     };
-  }, [isGlobalScriptType, unit.originalUrl, instanceKey]);
+  }, [isScriptBackedType, unit.originalUrl, instanceKey]);
 
   const srcDoc = useMemo(
     () =>
@@ -377,12 +394,32 @@ export function AdUnitCardOrBanner({
     setRetryNonce((n) => n + 1);
   };
 
-  if (unit.format === 'direct_link' || duplicateSkipped) {
+  // Enforce duplicate-script prevention cleanly: in banner placements, collapse duplicate script slots cleanly
+  if (duplicateSkipped && unit.format !== 'direct_link') {
+    return null;
+  }
+
+  // Tall skyscraper banners (160x300, 160x600) only render when sufficient container & viewport space exist
+  if (
+    unit.dimensions &&
+    unit.dimensions.width <= 180 &&
+    unit.dimensions.height >= 300 &&
+    ((typeof window !== 'undefined' && window.innerWidth < 768 && slot !== 'available_ads') ||
+      (containerWidth > 0 && containerWidth < unit.dimensions.width))
+  ) {
+    return null;
+  }
+
+  if (unit.format === 'direct_link') {
     const launch = resolveAdBrowserUrl(unit.originalUrl);
 
     if (!launch.ok) {
+      if (collapseOnFailure && !strictRewardMode) return null;
       return (
-        <div className="w-full max-w-full rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 p-3.5 text-xs flex items-center justify-between gap-3">
+        <div
+          id={`dh-ad-container-${slot}-${unit.id}`}
+          className="w-full max-w-full rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 p-3.5 text-xs flex items-center justify-between gap-3"
+        >
           <div className="flex items-center gap-2 min-w-0">
             <AlertCircle className="w-4 h-4 text-[#FF8500] shrink-0" />
             <div className="min-w-0">
@@ -416,6 +453,7 @@ export function AdUnitCardOrBanner({
 
     return (
       <a
+        id={`dh-ad-container-${slot}-${unit.id}`}
         href={launch.href}
         target="_blank"
         rel="noopener noreferrer nofollow"
@@ -435,20 +473,27 @@ export function AdUnitCardOrBanner({
         </div>
         <span className="px-3 sm:px-3.5 py-2 rounded-xl dh-orange-gradient text-white text-xs font-bold inline-flex items-center gap-1.5 shrink-0 group-hover:opacity-95 shadow-xs">
           <Play className="w-3 h-3 fill-current" />
-          <span>{lang === 'bn' ? 'ওপেন' : 'Visit'}</span>
+          <span>{lang === 'bn' ? 'ওপেন' : 'Open Ad'}</span>
           <ExternalLink className="w-3.5 h-3.5" />
         </span>
       </a>
     );
   }
 
-  // Fallback for blocked external display scripts without faking loaded state in strictRewardMode
+  // When an ad script fails to load or is blocked:
+  // - In normal page placements (collapseOnFailure), collapse gracefully so there is zero broken UI or empty gap
+  //   and NEVER render a fake/demo placeholder banner.
+  // - In Available Ads / Watch-Earn strict inspection mode, show honest load status + Retry link.
   if (status === 'blocked' || status === 'error') {
+    if (collapseOnFailure && !strictRewardMode) {
+      return null;
+    }
+
     const partnerLaunch = resolveAdBrowserUrl(unit.originalUrl);
 
     if (!strictRewardMode && partnerLaunch.ok) {
       return (
-        <div className="w-full max-w-full overflow-hidden">
+        <div id={`dh-ad-container-${slot}-${unit.id}`} className="w-full max-w-full overflow-hidden">
           <div className="w-full rounded-2xl bg-gradient-to-r from-[#172033] via-[#1e2c47] to-[#253657] border border-[#FF8500]/35 px-3.5 py-2.5 sm:px-4 sm:py-3 text-white flex items-center justify-between gap-2.5 shadow-xs">
             <a
               href={partnerLaunch.href}
@@ -552,7 +597,11 @@ export function AdUnitCardOrBanner({
   const scaledHeight = Math.max(1, Math.floor(dims.height * scale));
 
   return (
-    <div ref={outerWrapRef} className="flex flex-col items-center justify-center w-full max-w-full overflow-hidden">
+    <div
+      id={`dh-ad-container-${slot}-${unit.id}`}
+      ref={outerWrapRef}
+      className="flex flex-col items-center justify-center w-full max-w-full overflow-hidden"
+    >
       <div
         className="relative max-w-full overflow-hidden rounded-xl border border-[#E6ECFA] dark:border-slate-700 bg-white dark:bg-slate-900 shadow-xs"
         style={{
@@ -598,6 +647,17 @@ export function AdUnitCardOrBanner({
   );
 }
 
+// Distinct primary banner preference order per page placement so every slot loads a unique script
+const SLOT_UNIT_PREFERENCE: Partial<Record<AdPlacementSlot, string[]>> = {
+  top_header: ['UNIT_09', 'UNIT_07', 'UNIT_05'],
+  home_main: ['UNIT_05', 'UNIT_08', 'UNIT_07', 'UNIT_09', 'UNIT_01'],
+  in_page: ['UNIT_08', 'UNIT_03', 'UNIT_12', 'UNIT_16'],
+  product_page: ['UNIT_05', 'UNIT_08', 'UNIT_03', 'UNIT_14'],
+  dashboard: ['UNIT_07', 'UNIT_08', 'UNIT_13', 'UNIT_23'],
+  footer: ['UNIT_07', 'UNIT_09', 'UNIT_21'],
+  sidebar: ['UNIT_06', 'UNIT_25', 'UNIT_08'],
+};
+
 /**
  * Renders eligible ads for any placement or category slot with priority, rotation,
  * duplicate-script protection, and responsive scaling across mobile and desktop.
@@ -617,11 +677,13 @@ export function ManagedPlacementSlot({
   variant?: 'banner' | 'slider' | 'grid' | 'compact';
   className?: string;
 }) {
+  const slotInstanceKey = useId();
   const [isMobile, setIsMobile] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth < 768 : false
   );
   const [slideIdx, setSlideIdx] = useState(0);
   const [activeSlotFilter, setActiveSlotFilter] = useState<'all' | AdSlotCategory>('all');
+  const [ownerRevision, setOwnerRevision] = useState(0);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -629,17 +691,29 @@ export function ManagedPlacementSlot({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  useEffect(() => {
+    const listener = () => setOwnerRevision((r) => r + 1);
+    scriptOwnerListeners.add(listener);
+    return () => {
+      scriptOwnerListeners.delete(listener);
+    };
+  }, []);
+
   const candidates = useMemo(() => {
     if (!adsEnabled) return [];
     const seenIds = new Set<string>();
+    const preferredOrder = SLOT_UNIT_PREFERENCE[placement] || [];
     return units
       .filter((u) => {
         if (!u.enabled) return false;
         if (seenIds.has(u.id)) return false;
         const matchesSlot = u.placements.includes(placement) || u.slotCategory === placement;
         if (!matchesSlot) return false;
-        if (isMobile && !u.showOnMobile) return false;
-        if (!isMobile && !u.showOnDesktop) return false;
+        // On non-grid slots, respect strict mobile vs desktop viewport rules
+        if (placement !== 'available_ads') {
+          if (isMobile && !u.showOnMobile) return false;
+          if (!isMobile && !u.showOnDesktop) return false;
+        }
         // Keep pop scripts safe inside Main Ad / Available Ads slots without unsolicited full-page interruption
         if (
           u.format === 'script_pop' &&
@@ -652,18 +726,36 @@ export function ManagedPlacementSlot({
         seenIds.add(u.id);
         return true;
       })
-      .sort((a, b) => a.priority - b.priority);
+      .sort((a, b) => {
+        const prefA = preferredOrder.indexOf(a.id);
+        const prefB = preferredOrder.indexOf(b.id);
+        if (prefA !== -1 && prefB !== -1) return prefA - prefB;
+        if (prefA !== -1) return -1;
+        if (prefB !== -1) return 1;
+        return a.priority - b.priority;
+      });
   }, [adsEnabled, units, placement, isMobile]);
 
+  // Select first candidate whose script URL is NOT already active elsewhere on the same page
+  const unclaimedCandidates = useMemo(() => {
+    if (placement === 'available_ads') return candidates;
+    const free = candidates.filter((u) => {
+      if (u.format === 'direct_link') return true;
+      return !isScriptClaimedElsewhere(u.originalUrl, `${u.id}_${placement}_${slotInstanceKey}`);
+    });
+    return free;
+  }, [candidates, placement, slotInstanceKey, ownerRevision]);
+
   useEffect(() => {
-    if (candidates.length <= 1) return;
-    const active = candidates[slideIdx % candidates.length];
-    const sec = Math.max(8, active?.rotationSeconds || 20);
+    const list = unclaimedCandidates.length > 0 ? unclaimedCandidates : candidates;
+    if (list.length <= 1) return;
+    const active = list[slideIdx % list.length];
+    const sec = Math.max(12, active?.rotationSeconds || 25);
     const timer = setInterval(() => {
-      setSlideIdx((prev) => (prev + 1) % candidates.length);
+      setSlideIdx((prev) => (prev + 1) % list.length);
     }, sec * 1000);
     return () => clearInterval(timer);
-  }, [candidates, slideIdx]);
+  }, [unclaimedCandidates, candidates, slideIdx]);
 
   if (!adsEnabled || candidates.length === 0) return null;
 
@@ -673,6 +765,8 @@ export function ManagedPlacementSlot({
       activeSlotFilter === 'all'
         ? AD_SLOT_CATEGORIES
         : AD_SLOT_CATEGORIES.filter((c) => c.key === activeSlotFilter);
+
+    const externalRewardUnits = units.filter((u) => u.enabled && u.format === 'direct_link');
 
     if (isAvailableAdsHub) {
       return (
@@ -685,7 +779,7 @@ export function ManagedPlacementSlot({
               </h3>
             </div>
             <span className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400 shrink-0">
-              {candidates.length + AUTHORIZED_REWARD_ADS.length} {lang === 'bn' ? 'সক্রিয়' : 'active'}
+              {candidates.length} {lang === 'bn' ? 'সক্রিয়' : 'active'}
             </span>
           </div>
 
@@ -732,38 +826,61 @@ export function ManagedPlacementSlot({
                           {lang === 'bn' ? cat.titleBn : cat.titleEn}
                         </h4>
                         <p className="text-[11px] text-[#777777] dark:text-slate-400">
-                          {lang === 'bn' ? cat.descBn : cat.descEn}
+                          {lang === 'bn'
+                            ? 'আপনার অনুমোদিত এক্সটার্নাল বিজ্ঞাপন লিংকসমূহ — নেটওয়ার্ক পলিসি অনুমোদন করলে ৫ সেকেন্ডে +৫ কয়েন রিওয়ার্ড।'
+                            : 'Your external ad links — policy-approved units pay +5 Coins after 5s verification.'}
                         </p>
                       </div>
-                      <span className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold">
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold">
+                        <ShieldCheck className="w-3.5 h-3.5" />
                         5s = +5 Coins
                       </span>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {AUTHORIZED_REWARD_ADS.map((rad) => (
-                        <div
-                          key={rad.id}
-                          className="rounded-2xl p-3 bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 flex items-center gap-3"
-                        >
-                          <img
-                            src={resolveStudioImage(rad.imageUrl)}
-                            alt={lang === 'bn' ? rad.titleBn : rad.titleEn}
-                            className="w-12 h-12 rounded-xl object-cover shrink-0"
-                            loading="lazy"
-                          />
-                          <div className="min-w-0">
-                            <span className="text-[10px] font-mono-num font-bold text-[#FF8500]">
-                              {rad.unitId} · {rad.provider}
-                            </span>
-                            <p className="text-xs font-bold text-[#172033] dark:text-slate-100 truncate">
-                              {lang === 'bn' ? rad.titleBn : rad.titleEn}
-                            </p>
-                            <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
-                              {lang === 'bn' ? 'অনুমোদিত রিওয়ার্ড স্লট (+৫ কয়েন)' : 'Authorized Reward (+5 Coins)'}
-                            </p>
+                      {externalRewardUnits.slice(0, 6).map((u) => {
+                        const launch = resolveAdBrowserUrl(u.originalUrl);
+                        return (
+                          <div
+                            key={`rew_${u.id}`}
+                            className="rounded-2xl p-3 bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 flex items-center justify-between gap-2.5"
+                          >
+                            <div className="min-w-0">
+                              <span className="text-[10px] font-mono-num font-bold text-[#FF8500]">
+                                {u.id} · {u.provider}
+                              </span>
+                              <p className="text-xs font-bold text-[#172033] dark:text-slate-100 truncate">
+                                {lang === 'bn' ? u.labelBn : u.label}
+                              </p>
+                              <p
+                                className={`text-[10px] font-bold ${
+                                  u.supportsRewardedVerification
+                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                    : 'text-[#777777] dark:text-slate-400'
+                                }`}
+                              >
+                                {u.supportsRewardedVerification
+                                  ? lang === 'bn'
+                                    ? 'পলিসি অনুমোদিত (+৫ কয়েন)'
+                                    : 'Reward Approved (+5 Coins)'
+                                  : lang === 'bn'
+                                    ? 'এক্সটার্নাল লিংক · পলিসি যাচাই বাকি'
+                                    : 'External Link · Policy Pending'}
+                              </p>
+                            </div>
+                            {launch.ok && (
+                              <a
+                                href={launch.href}
+                                target="_blank"
+                                rel="noopener noreferrer nofollow"
+                                className="px-2.5 py-1.5 rounded-xl dh-orange-gradient text-white text-[11px] font-bold inline-flex items-center gap-1 shrink-0"
+                              >
+                                <span>{lang === 'bn' ? 'ওপেন' : 'Open'}</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -800,6 +917,7 @@ export function ManagedPlacementSlot({
                         unit={unit}
                         slot={placement}
                         lang={lang}
+                        collapseOnFailure={false}
                       />
                     ))}
                   </div>
@@ -833,8 +951,11 @@ export function ManagedPlacementSlot({
     );
   }
 
+  const displayList = unclaimedCandidates.length > 0 ? unclaimedCandidates : [];
+  if (displayList.length === 0) return null;
+
   if (variant === 'slider') {
-    const activeUnit = candidates[slideIdx % candidates.length];
+    const activeUnit = displayList[slideIdx % displayList.length];
     return (
       <div className={`w-full max-w-full overflow-hidden space-y-2 ${className}`}>
         <AdUnitCardOrBanner
@@ -842,25 +963,27 @@ export function ManagedPlacementSlot({
           unit={activeUnit}
           slot={placement}
           lang={lang}
+          slotOwnerKey={slotInstanceKey}
+          collapseOnFailure
         />
-        {candidates.length > 1 && (
+        {displayList.length > 1 && (
           <div className="flex items-center justify-center gap-2">
             <button
               type="button"
-              onClick={() => setSlideIdx((p) => (p - 1 + candidates.length) % candidates.length)}
+              onClick={() => setSlideIdx((p) => (p - 1 + displayList.length) % displayList.length)}
               className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-100"
               aria-label="Previous ad"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </button>
             <div className="flex items-center gap-1">
-              {candidates.map((u, i) => (
+              {displayList.map((u, i) => (
                 <button
                   key={u.id}
                   type="button"
                   onClick={() => setSlideIdx(i)}
                   className={`h-1.5 rounded-full transition-all ${
-                    i === slideIdx % candidates.length ? 'w-5 bg-[#FF8500]' : 'w-2 bg-gray-300 dark:bg-slate-600'
+                    i === slideIdx % displayList.length ? 'w-5 bg-[#FF8500]' : 'w-2 bg-gray-300 dark:bg-slate-600'
                   }`}
                   aria-label={`Ad ${i + 1}`}
                 />
@@ -868,7 +991,7 @@ export function ManagedPlacementSlot({
             </div>
             <button
               type="button"
-              onClick={() => setSlideIdx((p) => (p + 1) % candidates.length)}
+              onClick={() => setSlideIdx((p) => (p + 1) % displayList.length)}
               className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-100"
               aria-label="Next ad"
             >
@@ -880,7 +1003,7 @@ export function ManagedPlacementSlot({
     );
   }
 
-  const activeUnit = candidates[slideIdx % candidates.length];
+  const activeUnit = displayList[slideIdx % displayList.length];
   return (
     <div className={`w-full max-w-full overflow-hidden ${className}`}>
       <AdUnitCardOrBanner
@@ -888,6 +1011,8 @@ export function ManagedPlacementSlot({
         unit={activeUnit}
         slot={placement}
         lang={lang}
+        slotOwnerKey={slotInstanceKey}
+        collapseOnFailure
       />
     </div>
   );

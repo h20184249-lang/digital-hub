@@ -6,20 +6,28 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  Download,
   ExternalLink,
+  Flag,
+  Flame,
+  Heart,
   MessageCircle,
   Search,
   Send,
   ShieldCheck,
   Smartphone,
+  Sparkles,
+  Star,
+  TrendingUp,
   Wallet,
   X,
 } from 'lucide-react';
 import type {
+  AppMetaPayload,
   AuthUser,
   CheckoutPaymentMethod,
   Language,
-  PaymentMethod,
+  PaymentMethodConfig,
   SiteSettings,
   UserProfile,
   WalletAccount,
@@ -36,11 +44,19 @@ import {
 } from '../lib/mobileAppsCatalog';
 import {
   compressImageToDataUrl,
+  fetchAppMeta,
+  recordAppDownload,
+  reportBrokenAppLink,
+  submitAppReview,
   submitOrderWithManualPayment,
   submitOrderWithWalletBalance,
+  subscribeMobileApps,
+  toggleAppFavorite,
   validateTransactionIdServer,
 } from '../lib/firestoreService';
 import {
+  getEnabledPaymentMethods,
+  getPaymentMethodDetails,
   PaymentMethodCardsGrid,
   ReceiptScreenshotUploadBox,
   SelectedPaymentInstructionCard,
@@ -52,6 +68,7 @@ interface MobileAppStoreSectionProps {
   mode: 'home' | 'page';
   lang: Language;
   settings: SiteSettings;
+  paymentMethods?: PaymentMethodConfig[];
   user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
@@ -79,14 +96,45 @@ function buildWhatsAppPrefillUrl(baseLink: string | undefined, message: string):
   return `${cleanBase}${sep}text=${encodeURIComponent(message)}`;
 }
 
+function getVisitorId(): string {
+  try {
+    const key = 'dh_visitor_id_v1';
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+    const created = `v_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem(key, created);
+    return created;
+  } catch {
+    return 'v_anon';
+  }
+}
+
+function getAppPlanPrice(app: MobileAppItem | null, plan: MobileAppDevicePlan): number {
+  if (!app) return plan.priceBdt;
+  if (plan.id === '1_device' && typeof app.price1DeviceBdt === 'number' && app.price1DeviceBdt > 0) {
+    return app.price1DeviceBdt;
+  }
+  if (plan.id === '2_devices' && typeof app.price2DevicesBdt === 'number' && app.price2DevicesBdt > 0) {
+    return app.price2DevicesBdt;
+  }
+  return plan.priceBdt;
+}
+
 function AppScreenshotPreview({
   app,
+  imageUrl,
   size = 'card',
 }: {
   app: MobileAppItem;
+  imageUrl?: string;
   size?: 'card' | 'modal';
 }) {
   const [imgFailed, setImgFailed] = useState(false);
+  const src = imageUrl || app.bannerImageUrl || app.screenUrl;
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [src]);
 
   if (imgFailed) {
     return (
@@ -106,10 +154,11 @@ function AppScreenshotPreview({
     <div className="relative w-full h-full bg-[#0F172A] overflow-hidden select-none">
       {/* Ambient blurred backdrop from the app's own real screenshot */}
       <img
-        src={app.screenUrl}
+        src={src}
         alt=""
         aria-hidden="true"
         loading="lazy"
+        decoding="async"
         referrerPolicy="no-referrer"
         onError={() => setImgFailed(true)}
         className="absolute inset-0 w-full h-full object-cover scale-125 blur-xl opacity-45"
@@ -123,9 +172,10 @@ function AppScreenshotPreview({
         }`}
       >
         <img
-          src={app.screenUrl}
+          src={src}
           alt={`${app.name} official mobile app preview`}
           loading="lazy"
+          decoding="async"
           referrerPolicy="no-referrer"
           onError={() => setImgFailed(true)}
           className={`max-h-full max-w-full object-contain rounded-xl shadow-[0_10px_28px_rgba(0,0,0,0.45)] border border-white/15 transition-transform duration-300 ${
@@ -141,6 +191,7 @@ export function MobileAppStoreSection({
   mode,
   lang,
   settings,
+  paymentMethods,
   user,
   profile,
   wallet,
@@ -149,13 +200,31 @@ export function MobileAppStoreSection({
   onBackHome,
   onGoToOrders,
 }: MobileAppStoreSectionProps) {
+  const [liveApps, setLiveApps] = useState<MobileAppItem[]>(() => [...MOBILE_APPS_CATALOG]);
+  const [appMeta, setAppMeta] = useState<AppMetaPayload>({
+    statsByApp: {},
+    reviews: [],
+    favoriteAppIds: [],
+  });
   const [selectedCategory, setSelectedCategory] = useState<'all' | MobileAppCategoryId>('all');
+  const [discoveryFilter, setDiscoveryFilter] = useState<
+    'all' | 'latest' | 'popular' | 'trending' | 'updated' | 'favorites'
+  >('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedHome, setExpandedHome] = useState(false);
 
-  // Active modals
+  // Active modals & Smart Store interaction state
   const [detailsApp, setDetailsApp] = useState<MobileAppItem | null>(null);
   const [detailsPlanId, setDetailsPlanId] = useState<'1_device' | '2_devices'>('1_device');
+  const [activeScreenshot, setActiveScreenshot] = useState<string>('');
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState('');
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewFeedback, setReviewFeedback] = useState('');
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportDone, setReportDone] = useState('');
 
   const [orderApp, setOrderApp] = useState<MobileAppItem | null>(null);
   const [orderPlanId, setOrderPlanId] = useState<'1_device' | '2_devices'>('1_device');
@@ -173,39 +242,58 @@ export function MobileAppStoreSection({
   const [orderError, setOrderError] = useState('');
   const [completedOrder, setCompletedOrder] = useState<CompletedMobileOrderSummary | null>(null);
 
+  useEffect(() => {
+    const unsub = subscribeMobileApps((apps) => {
+      setLiveApps(apps);
+    }, false);
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetchAppMeta()
+      .then((m) => {
+        if (active) setAppMeta(m);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [user?.uid]);
+
+  const enabledManualMethods = useMemo(
+    () => getEnabledPaymentMethods(settings, paymentMethods),
+    [settings, paymentMethods]
+  );
+
   // Ensure selected manual method is enabled
   useEffect(() => {
     if (paymentMethod === 'wallet') return;
-    const isEnabled =
-      paymentMethod === 'bkash'
-        ? settings.bkashEnabled !== false
-        : paymentMethod === 'nagad'
-          ? settings.nagadEnabled !== false
-          : settings.rocketEnabled !== false;
-    if (!isEnabled) {
-      const next = (['bkash', 'nagad', 'rocket'] as PaymentMethod[]).find((m) =>
-        m === 'bkash'
-          ? settings.bkashEnabled !== false
-          : m === 'nagad'
-            ? settings.nagadEnabled !== false
-            : settings.rocketEnabled !== false
-      );
-      setPaymentMethod(next || 'wallet');
+    if (!enabledManualMethods.includes(paymentMethod)) {
+      setPaymentMethod(enabledManualMethods[0] || 'wallet');
     }
-  }, [settings.bkashEnabled, settings.nagadEnabled, settings.rocketEnabled, paymentMethod]);
+  }, [enabledManualMethods, paymentMethod]);
 
   const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: MOBILE_APPS_CATALOG.length };
-    for (const app of MOBILE_APPS_CATALOG) {
+    const counts: Record<string, number> = { all: liveApps.length };
+    for (const app of liveApps) {
       counts[app.category] = (counts[app.category] || 0) + 1;
     }
     return counts;
-  }, []);
+  }, [liveApps]);
+
+  const favoriteSet = useMemo(() => new Set(appMeta.favoriteAppIds || []), [appMeta.favoriteAppIds]);
 
   const filteredApps = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return MOBILE_APPS_CATALOG.filter((app) => {
+    const list = liveApps.filter((app) => {
       if (selectedCategory !== 'all' && app.category !== selectedCategory) return false;
+      if (discoveryFilter === 'favorites' && !favoriteSet.has(app.id)) return false;
+      if (discoveryFilter === 'popular') {
+        const dl = appMeta.statsByApp[app.id]?.downloads || 0;
+        if (!app.popular && !app.featured && dl === 0) return false;
+      }
+      if (discoveryFilter === 'trending' && !app.trending && !app.featured) return false;
       if (!q) return true;
       const cat = getMobileAppCategoryMeta(app.category);
       const haystack = [
@@ -216,15 +304,39 @@ export function MobileAppStoreSection({
         cat.labelBn,
         cat.labelEn,
         app.slug,
+        app.version || '',
       ]
         .join(' ')
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [selectedCategory, searchQuery]);
+
+    if (discoveryFilter === 'popular') {
+      return [...list].sort(
+        (a, b) =>
+          (appMeta.statsByApp[b.id]?.downloads || 0) - (appMeta.statsByApp[a.id]?.downloads || 0) ||
+          Number(Boolean(b.popular)) - Number(Boolean(a.popular))
+      );
+    }
+    if (discoveryFilter === 'updated' || discoveryFilter === 'latest') {
+      return [...list].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    }
+    if (discoveryFilter === 'trending') {
+      return [...list].sort(
+        (a, b) =>
+          Number(Boolean(b.trending)) - Number(Boolean(a.trending)) ||
+          (appMeta.statsByApp[b.id]?.downloads || 0) - (appMeta.statsByApp[a.id]?.downloads || 0)
+      );
+    }
+    return list;
+  }, [liveApps, selectedCategory, discoveryFilter, searchQuery, favoriteSet, appMeta.statsByApp]);
 
   const isHomeCompact =
-    mode === 'home' && !expandedHome && selectedCategory === 'all' && searchQuery.trim() === '';
+    mode === 'home' &&
+    !expandedHome &&
+    selectedCategory === 'all' &&
+    discoveryFilter === 'all' &&
+    searchQuery.trim() === '';
   const visibleApps = isHomeCompact ? filteredApps.slice(0, 12) : filteredApps;
 
   const activeOrderPlan: MobileAppDevicePlan =
@@ -232,20 +344,27 @@ export function MobileAppStoreSection({
   const activeDetailsPlan: MobileAppDevicePlan =
     MOBILE_APP_DEVICE_PLANS.find((p) => p.id === detailsPlanId) || MOBILE_APP_DEVICE_PLANS[0];
 
-  const totalCostBdt = activeOrderPlan.priceBdt * orderQty;
+  const activeOrderUnitPrice = getAppPlanPrice(orderApp, activeOrderPlan);
+  const activeDetailsPrice = getAppPlanPrice(detailsApp, activeDetailsPlan);
+  const totalCostBdt = activeOrderUnitPrice * orderQty;
   const walletBalance = wallet?.availableBalanceBdt || 0;
   const walletSufficient = walletBalance >= totalCostBdt;
 
-  const receiverNumber =
-    paymentMethod === 'bkash'
-      ? settings.bkashNumber
-      : paymentMethod === 'nagad'
-        ? settings.nagadNumber
-        : settings.rocketNumber;
+  const activePaymentMeta = getPaymentMethodDetails(
+    paymentMethod === 'wallet' ? 'bkash' : paymentMethod,
+    settings,
+    paymentMethods
+  );
+  const receiverNumber = activePaymentMeta.number || '';
 
   const openDetails = (app: MobileAppItem, defaultPlan: '1_device' | '2_devices' = '1_device') => {
     setDetailsApp(app);
     setDetailsPlanId(defaultPlan);
+    setActiveScreenshot(app.bannerImageUrl || app.screenUrl);
+    setReviewFeedback('');
+    setReportOpen(false);
+    setReportReason('');
+    setReportDone('');
   };
 
   const openOrderModal = (app: MobileAppItem, defaultPlan: '1_device' | '2_devices' = '1_device') => {
@@ -267,6 +386,106 @@ export function MobileAppStoreSection({
     navigator.clipboard.writeText(receiverNumber).catch(() => {});
     setCopiedPayNum(true);
     setTimeout(() => setCopiedPayNum(false), 1800);
+  };
+
+  const handleToggleFavorite = async (appId: string) => {
+    if (!user) {
+      onOpenAuth();
+      return;
+    }
+    try {
+      const res = await toggleAppFavorite(appId);
+      setAppMeta((prev) => ({ ...prev, favoriteAppIds: res.favoriteAppIds }));
+    } catch {
+      // Non-fatal
+    }
+  };
+
+  const handleTrackDownload = (app: MobileAppItem) => {
+    const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+    recordAppDownload({
+      appId: app.id,
+      appName: app.name,
+      visitorId: getVisitorId(),
+      deviceType: isMobile ? 'mobile' : 'desktop',
+    }).then((count) => {
+      if (count > 0) {
+        setAppMeta((prev) => ({
+          ...prev,
+          statsByApp: {
+            ...prev.statsByApp,
+            [app.id]: {
+              downloads: count,
+              ratingAvg: prev.statsByApp[app.id]?.ratingAvg || 0,
+              ratingCount: prev.statsByApp[app.id]?.ratingCount || 0,
+            },
+          },
+        }));
+      }
+    });
+  };
+
+  const handleSubmitAppReview = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!detailsApp) return;
+    if (!user) {
+      onOpenAuth();
+      return;
+    }
+    setReviewBusy(true);
+    setReviewFeedback('');
+    try {
+      const review = await submitAppReview({
+        appId: detailsApp.id,
+        rating: reviewRating,
+        comment: reviewComment,
+      });
+      setReviewComment('');
+      setReviewFeedback(lang === 'bn' ? 'আপনার রিভিউ যুক্ত হয়েছে!' : 'Thank you! Your review has been posted.');
+      const nextReviews = [review, ...appMeta.reviews.filter((r) => r.id !== review.id)];
+      const appRevs = nextReviews.filter((r) => r.appId === detailsApp.id);
+      const avg = appRevs.length ? Number((appRevs.reduce((s, r) => s + r.rating, 0) / appRevs.length).toFixed(1)) : reviewRating;
+      setAppMeta((prev) => ({
+        ...prev,
+        reviews: nextReviews,
+        statsByApp: {
+          ...prev.statsByApp,
+          [detailsApp.id]: {
+            downloads: prev.statsByApp[detailsApp.id]?.downloads || 0,
+            ratingAvg: avg,
+            ratingCount: appRevs.length,
+          },
+        },
+      }));
+    } catch (err) {
+      setReviewFeedback(err instanceof Error ? err.message : 'Failed to post review.');
+    } finally {
+      setReviewBusy(false);
+    }
+  };
+
+  const handleSubmitBrokenReport = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!detailsApp) return;
+    setReportBusy(true);
+    try {
+      await reportBrokenAppLink({
+        appId: detailsApp.id,
+        appName: detailsApp.name,
+        reason: reportReason || 'Broken download or store link',
+      });
+      setReportDone(
+        lang === 'bn'
+          ? 'রিপোর্ট গৃহীত হয়েছে। অ্যাডমিন শীঘ্রই লিংক যাচাই করবেন।'
+          : 'Report submitted. Our admin team will check this link shortly.'
+      );
+      setReportReason('');
+      setReportOpen(false);
+    } catch {
+      setReportDone(lang === 'bn' ? 'রিপোর্ট পাঠানো যায়নি।' : 'Could not submit report.');
+    } finally {
+      setReportBusy(false);
+    }
   };
 
   const handleReceiptUpload = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -325,12 +544,15 @@ export function MobileAppStoreSection({
       return;
     }
 
-    const { product, pkg } = buildMobileAppProductForOrder(orderApp, activeOrderPlan);
+    const { product, pkg } = buildMobileAppProductForOrder(orderApp, {
+      ...activeOrderPlan,
+      priceBdt: activeOrderUnitPrice,
+    });
 
     const deliveryLines = [
       `Store: Mobile App Store (Android Only)`,
       `App: ${orderApp.name}`,
-      `Package: ${activeOrderPlan.labelEn} (৳${activeOrderPlan.priceBdt}) × ${orderQty} = ৳${totalCostBdt}`,
+      `Package: ${activeOrderPlan.labelEn} (৳${activeOrderUnitPrice}) × ${orderQty} = ৳${totalCostBdt}`,
       cleanWhatsapp ? `WhatsApp: ${cleanWhatsapp}` : null,
       cleanTelegram ? `Telegram: ${cleanTelegram}` : null,
       `Official Source: ${orderApp.officialStoreUrl}`,
@@ -461,7 +683,7 @@ export function MobileAppStoreSection({
                 <span>{lang === 'bn' ? 'শুধুমাত্র Android / Mobile অ্যাপস' : 'Android / Mobile Apps Only'}</span>
                 <span aria-hidden="true">·</span>
                 <span className="font-mono-num tabular-nums">
-                  {MOBILE_APPS_CATALOG.length} {lang === 'bn' ? 'টি অ্যাপ' : 'Apps'}
+                  {liveApps.length} {lang === 'bn' ? 'টি অ্যাপ' : 'Apps'}
                 </span>
                 <span aria-hidden="true">·</span>
                 <span className="font-semibold text-[#172033] dark:text-slate-200 font-mono-num tabular-nums">
@@ -506,11 +728,43 @@ export function MobileAppStoreSection({
               onClick={onNavigateAll}
               className="min-h-[42px] px-4 py-2 rounded-xl bg-[#172033] dark:bg-slate-800 hover:bg-[#FF8500] text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
             >
-              <span>{lang === 'bn' ? 'সব ৪১টি অ্যাপ' : 'All 41 Apps'}</span>
+              <span>{lang === 'bn' ? `সব ${liveApps.length}টি অ্যাপ` : `All ${liveApps.length} Apps`}</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           )}
         </div>
+      </div>
+
+      {/* Discovery Quick Filters (Latest, Popular, Trending, Recently Updated, Favorites) */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+        {(
+          [
+            { id: 'all', bn: 'সব ডিসকভারি', en: 'Discover All', icon: Sparkles },
+            { id: 'latest', bn: 'সর্বশেষ (Latest)', en: 'Latest', icon: Sparkles },
+            { id: 'popular', bn: 'জনপ্রিয় (Popular)', en: 'Popular', icon: Flame },
+            { id: 'trending', bn: 'ট্রেন্ডিং', en: 'Trending', icon: TrendingUp },
+            { id: 'updated', bn: 'সাম্প্রতিক আপডেট', en: 'Recently Updated', icon: CheckCircle2 },
+            { id: 'favorites', bn: `পছন্দের (${appMeta.favoriteAppIds.length})`, en: `Favorites (${appMeta.favoriteAppIds.length})`, icon: Heart },
+          ] as const
+        ).map((df) => {
+          const Icon = df.icon;
+          const active = discoveryFilter === df.id;
+          return (
+            <button
+              key={df.id}
+              type="button"
+              onClick={() => setDiscoveryFilter(df.id)}
+              className={`min-h-[34px] px-3 py-1.5 rounded-xl text-[11px] font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                active
+                  ? 'bg-[#172033] dark:bg-[#FF8500] text-white shadow-xs'
+                  : 'bg-[#F8FAFF] dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-800 text-[#475569] dark:text-slate-300 hover:border-[#FF8500]'
+              }`}
+            >
+              <Icon className={`w-3.5 h-3.5 ${df.id === 'favorites' && active ? 'fill-current' : ''}`} />
+              <span>{lang === 'bn' ? df.bn : df.en}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Interactive Category Filter Bar */}
@@ -559,7 +813,7 @@ export function MobileAppStoreSection({
       </div>
 
       {/* Results Count Line when filtering */}
-      {(selectedCategory !== 'all' || searchQuery.trim() !== '') && (
+      {(selectedCategory !== 'all' || discoveryFilter !== 'all' || searchQuery.trim() !== '') && (
         <div className="flex items-center justify-between gap-2 text-xs text-[#64748B] dark:text-slate-400">
           <p className="font-medium">
             {lang === 'bn'
@@ -570,6 +824,7 @@ export function MobileAppStoreSection({
             type="button"
             onClick={() => {
               setSelectedCategory('all');
+              setDiscoveryFilter('all');
               setSearchQuery('');
             }}
             className="text-[#FF8500] font-bold hover:underline cursor-pointer"
@@ -583,39 +838,65 @@ export function MobileAppStoreSection({
       {visibleApps.length === 0 ? (
         <div className="rounded-3xl bg-white dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-800 p-10 text-center space-y-3">
           <p className="text-sm font-bold text-[#172033] dark:text-slate-100">
-            {lang === 'bn'
-              ? `"${searchQuery}" নামে কোনো মোবাইল অ্যাপ পাওয়া যায়নি।`
-              : `No mobile apps matched "${searchQuery}".`}
+            {discoveryFilter === 'favorites'
+              ? lang === 'bn'
+                ? 'আপনার ফেভারিট তালিকায় এখনো কোনো অ্যাপ নেই।'
+                : 'No favorite apps saved yet.'
+              : lang === 'bn'
+                ? `"${searchQuery}" নামে কোনো মোবাইল অ্যাপ পাওয়া যায়নি।`
+                : `No mobile apps matched "${searchQuery}".`}
           </p>
           <button
             type="button"
             onClick={() => {
               setSearchQuery('');
               setSelectedCategory('all');
+              setDiscoveryFilter('all');
             }}
             className="px-4 py-2 rounded-xl dh-orange-gradient text-white text-xs font-bold cursor-pointer"
           >
-            {lang === 'bn' ? 'সব অ্যাপ দেখুন' : 'Show All 41 Apps'}
+            {lang === 'bn' ? 'সব অ্যাপ দেখুন' : `Show All ${liveApps.length} Apps`}
           </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
           {visibleApps.map((app) => {
             const catMeta = getMobileAppCategoryMeta(app.category);
+            const appStats = appMeta.statsByApp[app.id];
+            const isFav = favoriteSet.has(app.id);
             return (
               <article
                 key={app.id}
                 className="group rounded-2xl bg-white dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-800 overflow-hidden flex flex-col transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_32px_rgba(23,32,51,0.09)] dark:hover:shadow-[0_14px_32px_rgba(0,0,0,0.45)]"
               >
-                {/* Official App Screenshot Preview */}
-                <button
-                  type="button"
-                  onClick={() => openDetails(app, '1_device')}
-                  className="relative aspect-[16/10] w-full overflow-hidden text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FF8500] cursor-pointer"
-                  aria-label={`${app.name} details`}
-                >
-                  <AppScreenshotPreview app={app} size="card" />
-                </button>
+                {/* Official App Screenshot Preview + Favorite Toggle */}
+                <div className="relative aspect-[16/10] w-full overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => openDetails(app, '1_device')}
+                    className="w-full h-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FF8500] cursor-pointer block"
+                    aria-label={`${app.name} details`}
+                  >
+                    <AppScreenshotPreview app={app} size="card" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleFavorite(app.id)}
+                    aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}
+                    className={`absolute top-2.5 right-2.5 z-20 w-8 h-8 rounded-full flex items-center justify-center shadow-md transition-colors cursor-pointer ${
+                      isFav
+                        ? 'bg-rose-500 text-white'
+                        : 'bg-[#0F172A]/75 text-white/90 hover:bg-rose-500'
+                    }`}
+                  >
+                    <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
+                  </button>
+                  {(app.trending || app.popular) && (
+                    <span className="absolute top-2.5 left-2.5 z-20 px-2 py-0.5 rounded-md bg-[#FF8500] text-white text-[10px] font-extrabold uppercase tracking-wider shadow">
+                      {app.trending ? 'Trending' : 'Popular'}
+                    </span>
+                  )}
+                </div>
 
                 {/* Card Body */}
                 <div className="p-4 flex-1 flex flex-col justify-between gap-3.5">
@@ -626,6 +907,7 @@ export function MobileAppStoreSection({
                         src={app.iconUrl}
                         alt={`${app.name} official logo`}
                         loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         className="w-11 h-11 rounded-xl object-cover border border-[#E2E9F7] dark:border-slate-700 bg-white dark:bg-slate-800 shrink-0 shadow-xs"
                       />
@@ -634,8 +916,26 @@ export function MobileAppStoreSection({
                           {app.name}
                         </h3>
                         <p className="text-[11px] font-medium text-[#64748B] dark:text-slate-400 truncate mt-0.5">
-                          {lang === 'bn' ? catMeta.labelBn : catMeta.labelEn} · Android
+                          {lang === 'bn' ? catMeta.labelBn : catMeta.labelEn}
+                          {app.version ? ` · v${app.version}` : ''}
+                          {app.sizeLabel ? ` · ${app.sizeLabel}` : ''}
                         </p>
+                        {(appStats?.downloads > 0 || appStats?.ratingCount > 0) && (
+                          <div className="flex items-center gap-2.5 mt-1 text-[10px] font-mono-num font-bold text-[#475569] dark:text-slate-300">
+                            {appStats.ratingCount > 0 && (
+                              <span className="inline-flex items-center gap-0.5 text-[#FF8500]">
+                                <Star className="w-3 h-3 fill-current" />
+                                {appStats.ratingAvg.toFixed(1)} ({appStats.ratingCount})
+                              </span>
+                            )}
+                            {appStats.downloads > 0 && (
+                              <span className="inline-flex items-center gap-0.5 text-[#0EA5E9]">
+                                <Download className="w-3 h-3" />
+                                {appStats.downloads}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -649,27 +949,30 @@ export function MobileAppStoreSection({
                   <div className="space-y-3 pt-2.5 border-t border-[#EDF2FA] dark:border-slate-800">
                     {/* Two Device Package Prices (Tabular Numerals) */}
                     <div className="grid grid-cols-2 gap-2">
-                      {MOBILE_APP_DEVICE_PLANS.map((plan) => (
-                        <button
-                          key={plan.id}
-                          type="button"
-                          onClick={() => openOrderModal(app, plan.id)}
-                          className="px-2.5 py-2 rounded-xl bg-[#F5F8FF] dark:bg-slate-800/80 hover:bg-[#FFF5EA] dark:hover:bg-orange-950/35 border border-[#E6ECFA] dark:border-slate-700/80 hover:border-[#FF8500]/60 text-left transition-colors cursor-pointer"
-                        >
-                          <span className="block text-[10px] font-semibold text-[#64748B] dark:text-slate-400 truncate">
-                            {plan.devices === 1
-                              ? lang === 'bn'
-                                ? '১ ডিভাইস'
-                                : '1 Device'
-                              : lang === 'bn'
-                                ? '২ ডিভাইস'
-                                : '2 Devices'}
-                          </span>
-                          <span className="block text-sm font-extrabold font-mono-num tabular-nums text-[#FF8500] leading-tight mt-0.5">
-                            ৳{plan.priceBdt}
-                          </span>
-                        </button>
-                      ))}
+                      {MOBILE_APP_DEVICE_PLANS.map((plan) => {
+                        const unitPrice = getAppPlanPrice(app, plan);
+                        return (
+                          <button
+                            key={plan.id}
+                            type="button"
+                            onClick={() => openOrderModal(app, plan.id)}
+                            className="px-2.5 py-2 rounded-xl bg-[#F5F8FF] dark:bg-slate-800/80 hover:bg-[#FFF5EA] dark:hover:bg-orange-950/35 border border-[#E6ECFA] dark:border-slate-700/80 hover:border-[#FF8500]/60 text-left transition-colors cursor-pointer"
+                          >
+                            <span className="block text-[10px] font-semibold text-[#64748B] dark:text-slate-400 truncate">
+                              {plan.devices === 1
+                                ? lang === 'bn'
+                                  ? '১ ডিভাইস'
+                                  : '1 Device'
+                                : lang === 'bn'
+                                  ? '২ ডিভাইস'
+                                  : '2 Devices'}
+                            </span>
+                            <span className="block text-sm font-extrabold font-mono-num tabular-nums text-[#FF8500] leading-tight mt-0.5">
+                              ৳{unitPrice}
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
 
                     {/* Details + Order Now Buttons */}
@@ -722,7 +1025,7 @@ export function MobileAppStoreSection({
         </div>
       )}
 
-      {mode === 'home' && expandedHome && selectedCategory === 'all' && searchQuery.trim() === '' && (
+      {mode === 'home' && expandedHome && selectedCategory === 'all' && discoveryFilter === 'all' && searchQuery.trim() === '' && (
         <div className="flex justify-center pt-1">
           <button
             type="button"
@@ -781,12 +1084,114 @@ export function MobileAppStoreSection({
 
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
-              {/* Large Official Preview */}
-              <div className="relative h-60 sm:h-72 rounded-2xl overflow-hidden border border-[#E2E9F7] dark:border-slate-800">
-                <AppScreenshotPreview app={detailsApp} size="modal" />
+              {/* Large Official Preview + Multi-Screenshot Gallery */}
+              <div className="space-y-2">
+                <div className="relative h-60 sm:h-72 rounded-2xl overflow-hidden border border-[#E2E9F7] dark:border-slate-800">
+                  <AppScreenshotPreview app={detailsApp} imageUrl={activeScreenshot} size="modal" />
+                </div>
+                {(() => {
+                  const galleryUrls = Array.from(
+                    new Set(
+                      [detailsApp.bannerImageUrl || detailsApp.screenUrl, ...(detailsApp.screenshots || [])].filter(Boolean)
+                    )
+                  );
+                  if (galleryUrls.length <= 1) return null;
+                  return (
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                      {galleryUrls.map((url, idx) => (
+                        <button
+                          key={url + idx}
+                          type="button"
+                          onClick={() => setActiveScreenshot(url)}
+                          className={`w-16 h-12 rounded-xl overflow-hidden border-2 shrink-0 cursor-pointer ${
+                            activeScreenshot === url ? 'border-[#FF8500]' : 'border-[#E2E9F7] dark:border-slate-700 opacity-75 hover:opacity-100'
+                          }`}
+                        >
+                          <img src={url} alt="" loading="lazy" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
 
-              {/* Description & Official Store Verification Link */}
+              {/* Version, Size, Downloads, Ratings & Favorite Strip */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-2xl bg-[#F8FAFF] dark:bg-slate-800/70 border border-[#E2E9F7] dark:border-slate-700 text-xs">
+                <div className="flex flex-wrap items-center gap-3 font-mono-num">
+                  {detailsApp.version && (
+                    <span className="font-bold text-[#172033] dark:text-slate-100">v{detailsApp.version}</span>
+                  )}
+                  {detailsApp.sizeLabel && (
+                    <span className="text-[#64748B] dark:text-slate-300">{detailsApp.sizeLabel}</span>
+                  )}
+                  <span className="inline-flex items-center gap-1 text-[#0EA5E9] font-bold">
+                    <Download className="w-3.5 h-3.5" />
+                    {appMeta.statsByApp[detailsApp.id]?.downloads || 0} {lang === 'bn' ? 'ডাউনলোড' : 'downloads'}
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-[#FF8500] font-bold">
+                    <Star className="w-3.5 h-3.5 fill-current" />
+                    {(appMeta.statsByApp[detailsApp.id]?.ratingAvg || 0).toFixed(1)} ({appMeta.statsByApp[detailsApp.id]?.ratingCount || 0})
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleFavorite(detailsApp.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold inline-flex items-center gap-1 cursor-pointer ${
+                      favoriteSet.has(detailsApp.id)
+                        ? 'bg-rose-500 text-white'
+                        : 'bg-white dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-700 text-[#172033] dark:text-slate-100'
+                    }`}
+                  >
+                    <Heart className={`w-3.5 h-3.5 ${favoriteSet.has(detailsApp.id) ? 'fill-current' : ''}`} />
+                    <span>{favoriteSet.has(detailsApp.id) ? (lang === 'bn' ? 'সেভড' : 'Saved') : lang === 'bn' ? 'ফেভারিট' : 'Favorite'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setReportOpen((v) => !v)}
+                    className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-700 text-xs font-bold text-[#64748B] hover:text-[#DC2626] inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Flag className="w-3.5 h-3.5" />
+                    <span>{lang === 'bn' ? 'রিপোর্ট' : 'Report Link'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {reportDone && (
+                <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 text-[#16A34A] text-xs font-bold">
+                  {reportDone}
+                </div>
+              )}
+
+              {reportOpen && (
+                <form
+                  onSubmit={handleSubmitBrokenReport}
+                  className="p-3.5 rounded-2xl bg-[#FFF7EE] dark:bg-slate-800/80 border border-[#FF8500]/35 space-y-2 text-xs"
+                >
+                  <p className="font-bold text-[#172033] dark:text-slate-100">
+                    {lang === 'bn' ? 'ভাঙা ডাউনলোড/অফিশিয়াল লিংক রিপোর্ট করুন' : 'Report Broken Link or App Issue'}
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      required
+                      value={reportReason}
+                      onChange={(e) => setReportReason(e.target.value)}
+                      placeholder={lang === 'bn' ? 'সমস্যার বিবরণ লিখুন...' : 'Describe issue (e.g. link not opening)...'}
+                      className="flex-1 px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-700 text-xs"
+                    />
+                    <button
+                      type="submit"
+                      disabled={reportBusy}
+                      className="px-4 py-2 rounded-xl bg-[#DC2626] text-white font-bold text-xs cursor-pointer disabled:opacity-60"
+                    >
+                      {reportBusy ? '...' : lang === 'bn' ? 'রিপোর্ট পাঠান' : 'Submit Report'}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* Description & Official Store Verification Link + Tracked Download CTA */}
               <div className="space-y-3">
                 <p className="text-sm text-[#334155] dark:text-slate-200 leading-relaxed">
                   {lang === 'bn' ? detailsApp.shortDescBn : detailsApp.shortDescEn}
@@ -802,11 +1207,16 @@ export function MobileAppStoreSection({
                 </ul>
 
                 <div className="pt-1 flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <span className="text-[#64748B] dark:text-slate-400">
-                    {lang === 'bn'
-                      ? 'প্ল্যাটফর্ম: শুধুমাত্র Android / Mobile'
-                      : 'Platform: Android / Mobile Only'}
-                  </span>
+                  <a
+                    href={detailsApp.downloadUrl || detailsApp.officialStoreUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => handleTrackDownload(detailsApp)}
+                    className="px-4 py-2 rounded-xl bg-[#16A34A] hover:bg-[#15803D] text-white font-bold inline-flex items-center gap-1.5 shadow-xs"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{lang === 'bn' ? 'অ্যাপ ডাউনলোড / ইনস্টল করুন' : 'Download / Install App'}</span>
+                  </a>
                   <a
                     href={detailsApp.officialStoreUrl}
                     target="_blank"
@@ -835,6 +1245,7 @@ export function MobileAppStoreSection({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {MOBILE_APP_DEVICE_PLANS.map((plan) => {
                     const selected = detailsPlanId === plan.id;
+                    const unitPrice = getAppPlanPrice(detailsApp, plan);
                     return (
                       <button
                         key={plan.id}
@@ -861,12 +1272,90 @@ export function MobileAppStoreSection({
                           </p>
                         </div>
                         <span className="text-xl font-extrabold font-mono-num tabular-nums text-[#FF8500] shrink-0">
-                          ৳{plan.priceBdt}
+                          ৳{unitPrice}
                         </span>
                       </button>
                     );
                   })}
                 </div>
+              </div>
+
+              {/* App Ratings & Community Reviews */}
+              <div className="space-y-3 pt-3 border-t border-[#EDF2FA] dark:border-slate-800">
+                <p className="text-xs font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+                  <Star className="w-4 h-4 text-[#FF8500] fill-current" />
+                  <span>{lang === 'bn' ? 'রেটিং ও ইউজার রিভিউ' : 'Ratings & User Reviews'}</span>
+                </p>
+
+                <form onSubmit={handleSubmitAppReview} className="p-3.5 rounded-2xl bg-[#F8FAFF] dark:bg-slate-800/70 border border-[#E2E9F7] dark:border-slate-700 space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-[#172033] dark:text-slate-100">
+                      {lang === 'bn' ? 'আপনার রেটিং দিন:' : 'Rate this app:'}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button
+                          key={star}
+                          type="button"
+                          onClick={() => setReviewRating(star)}
+                          className={`p-1 cursor-pointer ${star <= reviewRating ? 'text-[#FF8500]' : 'text-slate-300 dark:text-slate-600'}`}
+                        >
+                          <Star className="w-4 h-4 fill-current" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      required
+                      value={reviewComment}
+                      onChange={(e) => setReviewComment(e.target.value)}
+                      placeholder={lang === 'bn' ? 'এই অ্যাপ সম্পর্কে আপনার মতামত লিখুন...' : 'Write a short review...'}
+                      className="flex-1 px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-700 text-xs"
+                    />
+                    <button
+                      type="submit"
+                      disabled={reviewBusy}
+                      className="px-4 py-2 rounded-xl dh-orange-gradient text-white font-bold text-xs cursor-pointer disabled:opacity-60"
+                    >
+                      {reviewBusy ? '...' : lang === 'bn' ? 'পোস্ট করুন' : 'Post Review'}
+                    </button>
+                  </div>
+                  {reviewFeedback && (
+                    <p className="text-[11px] font-semibold text-[#16A34A]">{reviewFeedback}</p>
+                  )}
+                </form>
+
+                {(() => {
+                  const appReviews = appMeta.reviews.filter((r) => r.appId === detailsApp.id);
+                  if (appReviews.length === 0) {
+                    return (
+                      <p className="text-xs text-[#64748B] dark:text-slate-400">
+                        {lang === 'bn' ? 'এখনো কোনো রিভিউ নেই — প্রথম রিভিউ দিন!' : 'No reviews yet — be the first to rate this app!'}
+                      </p>
+                    );
+                  }
+                  return (
+                    <div className="space-y-2">
+                      {appReviews.slice(0, 6).map((rev) => (
+                        <div
+                          key={rev.id}
+                          className="p-3 rounded-2xl bg-[#F8FAFF] dark:bg-slate-800/60 border border-[#E2E9F7] dark:border-slate-700 space-y-1 text-xs"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-[#172033] dark:text-slate-100">{rev.authorName}</span>
+                            <span className="inline-flex items-center gap-0.5 text-[#FF8500] font-bold">
+                              <Star className="w-3 h-3 fill-current" />
+                              {rev.rating}/5
+                            </span>
+                          </div>
+                          <p className="text-[#475569] dark:text-slate-300">{rev.comment}</p>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -877,7 +1366,7 @@ export function MobileAppStoreSection({
                   {lang === 'bn' ? activeDetailsPlan.labelBn : activeDetailsPlan.labelEn}
                 </span>
                 <span className="text-xl font-extrabold font-mono-num tabular-nums text-[#FF8500]">
-                  ৳{activeDetailsPlan.priceBdt}
+                  ৳{activeDetailsPrice}
                 </span>
               </div>
               <button
@@ -888,8 +1377,8 @@ export function MobileAppStoreSection({
                 <ShieldCheck className="w-4 h-4" />
                 <span>
                   {lang === 'bn'
-                    ? `অর্ডার করুন · ৳${activeDetailsPlan.priceBdt}`
-                    : `Order Now · ৳${activeDetailsPlan.priceBdt}`}
+                    ? `অর্ডার করুন · ৳${activeDetailsPrice}`
+                    : `Order Now · ৳${activeDetailsPrice}`}
                 </span>
               </button>
             </div>
@@ -1092,6 +1581,7 @@ export function MobileAppStoreSection({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       {MOBILE_APP_DEVICE_PLANS.map((plan) => {
                         const isSelected = orderPlanId === plan.id;
+                        const unitPrice = getAppPlanPrice(orderApp, plan);
                         return (
                           <button
                             key={plan.id}
@@ -1118,7 +1608,7 @@ export function MobileAppStoreSection({
                               </p>
                             </div>
                             <span className="text-lg font-extrabold font-mono-num tabular-nums text-[#FF8500] shrink-0">
-                              ৳{plan.priceBdt}
+                              ৳{unitPrice}
                             </span>
                           </button>
                         );
@@ -1278,6 +1768,7 @@ export function MobileAppStoreSection({
 
                     <PaymentMethodCardsGrid
                       settings={settings}
+                      paymentMethods={paymentMethods}
                       lang={lang}
                       selectedMethod={paymentMethod}
                       onSelect={(m) => setPaymentMethod(m)}
@@ -1308,6 +1799,7 @@ export function MobileAppStoreSection({
                         <SelectedPaymentInstructionCard
                           method={paymentMethod}
                           settings={settings}
+                          paymentMethods={paymentMethods}
                           amountBdt={totalCostBdt}
                           lang={lang}
                           copied={copiedPayNum}

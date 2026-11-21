@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   Award,
@@ -12,6 +12,7 @@ import {
   HelpCircle,
   LayoutGrid,
   Lock,
+  RefreshCw,
   Search,
   Send,
   Share2,
@@ -21,6 +22,7 @@ import {
   TrendingUp,
   Tv,
   Users,
+  WifiOff,
   Wrench,
   Zap,
 } from 'lucide-react';
@@ -67,9 +69,11 @@ import {
   subscribeCoupons,
   subscribeDashboardInvalidation,
   subscribeManagedAdUnits,
+  subscribeMobileApps,
   subscribePaymentMethods,
   subscribeProducts,
   subscribeSiteSettings,
+  trackAnalyticsEvent,
 } from './lib/firestoreService';
 import {
   DEFAULT_AD_NETWORKS,
@@ -82,33 +86,24 @@ import {
   STUDIO_IMAGES,
 } from './lib/seedData';
 import { mergeAdUnitsWithOverrides } from './lib/adProviderConfig';
+import { MOBILE_APPS_CATALOG, type MobileAppItem } from './lib/mobileAppsCatalog';
 import { t } from './lib/i18n';
+import { useOnlineStatus, useSwUpdatePrompt } from './hooks/usePWAInstall';
 import { Navbar } from './components/Navbar';
 import { BannerSlotView } from './components/BannerSlotView';
 import { AdPlayerSection } from './components/AdPlayerSection';
 import { ManagedPlacementSlot } from './components/AdUnitFrame';
 import { NativeAdRow, SocialBarWidget } from './components/AutomaticAdEngine';
-import { WatchAndEarnPage } from './components/WatchAndEarnPage';
 import { WatchEarnHomeBanner } from './components/WatchEarnWidgets';
 import { AuthModal } from './components/AuthModal';
 import { CartDrawer, getCartItemKey } from './components/CartDrawer';
 import { HomepagePaymentSection } from './components/PremiumPaymentSection';
 import { ProductCheckoutModal } from './components/ProductCheckoutModal';
-import { ProductDetailPage } from './components/ProductDetailPage';
-import { WalletAndAddMoney } from './components/WalletAndAddMoney';
-import { CustomerDashboard } from './components/CustomerDashboard';
-import { AdminDashboard } from './components/AdminDashboard';
 import { DigitalHubLogo } from './components/DigitalHubLogo';
 import { MobileAppDownloadCard } from './components/MobileAppDownloadCard';
 import { CapCutRechargeSection } from './components/CapCutRechargeSection';
 import { MobileAppStoreSection } from './components/MobileAppStoreSection';
-import {
-  CategoryCatalogPage,
-  OffersPage,
-  PolicyPage,
-  ProductCard,
-  SupportAndContactPage,
-} from './components/StorefrontPages';
+import { CategoryCatalogPage, ProductCard } from './components/StorefrontPages';
 import { ServiceBrandLogo } from './components/BrandLogos';
 import {
   CATALOG_23_CATEGORIES,
@@ -117,6 +112,57 @@ import {
   getProductCatalogSectionId,
   isPackagePurchasable,
 } from './lib/catalogHelpers';
+
+const WatchAndEarnPage = lazy(() =>
+  import('./components/WatchAndEarnPage').then((m) => ({ default: m.WatchAndEarnPage }))
+);
+const ProductDetailPage = lazy(() =>
+  import('./components/ProductDetailPage').then((m) => ({ default: m.ProductDetailPage }))
+);
+const WalletAndAddMoney = lazy(() =>
+  import('./components/WalletAndAddMoney').then((m) => ({ default: m.WalletAndAddMoney }))
+);
+const CustomerDashboard = lazy(() =>
+  import('./components/CustomerDashboard').then((m) => ({ default: m.CustomerDashboard }))
+);
+const AdminDashboard = lazy(() =>
+  import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
+);
+const OffersPage = lazy(() =>
+  import('./components/StorefrontPages').then((m) => ({ default: m.OffersPage }))
+);
+const PolicyPage = lazy(() =>
+  import('./components/StorefrontPages').then((m) => ({ default: m.PolicyPage }))
+);
+const SupportAndContactPage = lazy(() =>
+  import('./components/StorefrontPages').then((m) => ({ default: m.SupportAndContactPage }))
+);
+
+function getAnalyticsVisitorId(): string {
+  try {
+    const key = 'dh_visitor_id_v1';
+    const existing = localStorage.getItem(key);
+    if (existing && /^[a-zA-Z0-9_-]{8,64}$/.test(existing)) return existing;
+    const created = `vis_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(key, created);
+    return created;
+  } catch {
+    return `vis_${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
+function getAnalyticsSessionId(): string {
+  try {
+    const key = 'dh_analytics_sess_v1';
+    const existing = sessionStorage.getItem(key);
+    if (existing && /^[a-zA-Z0-9_-]{8,64}$/.test(existing)) return existing;
+    const created = `asess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    sessionStorage.setItem(key, created);
+    return created;
+  } catch {
+    return 'asess_browser';
+  }
+}
 
 export default function App() {
   const [detailProductId, setDetailProductId] = useState<string>(
@@ -167,7 +213,19 @@ export default function App() {
   const [viewingSessions, setViewingSessions] = useState<AdViewingSession[]>([]);
   const [adRewardTransactions, setAdRewardTransactions] = useState<AdRewardTransaction[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [mobileApps, setMobileApps] = useState<MobileAppItem[]>(() => [...MOBILE_APPS_CATALOG]);
+  const [favoriteAppIds, setFavoriteAppIds] = useState<string[]>([]);
+  const [totalDownloads, setTotalDownloads] = useState<number>(0);
+  const [analyticsOptOut, setAnalyticsOptOut] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('dh_analytics_optout') === '1';
+    } catch {
+      return false;
+    }
+  });
   const langRef = useRef<Language>(lang);
+  const isOnline = useOnlineStatus();
+  const { swUpdateAvailable, applySwUpdate } = useSwUpdatePrompt();
 
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
@@ -242,6 +300,7 @@ export default function App() {
     const u9 = subscribeManagedAdUnits(setAdUnitOverrides);
     const u10 = subscribeAnnouncements(setAnnouncements);
     const u11 = subscribePaymentMethods(setPaymentMethods);
+    const u12 = subscribeMobileApps(setMobileApps, false);
     return () => {
       u1();
       u2();
@@ -254,6 +313,7 @@ export default function App() {
       u9();
       u10();
       u11();
+      u12();
     };
   }, []);
 
@@ -318,6 +378,8 @@ export default function App() {
     setRewardClaims([]);
     setViewingSessions([]);
     setAdRewardTransactions([]);
+    setFavoriteAppIds([]);
+    setTotalDownloads(0);
   }, []);
 
   const handleLogout = useCallback(async () => {
@@ -348,6 +410,8 @@ export default function App() {
     setRewardClaims(data.rewardClaims || []);
     setViewingSessions(data.viewingSessions || []);
     setAdRewardTransactions(data.adRewardTransactions || []);
+    setFavoriteAppIds(Array.isArray(data.favoriteAppIds) ? data.favoriteAppIds : []);
+    setTotalDownloads(Number(data.totalDownloads || 0));
     if (Array.isArray(data.announcements)) {
       setAnnouncements(data.announcements);
     }
@@ -472,6 +536,49 @@ export default function App() {
     document.title = titleMap[route] || brand;
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [route, detailProduct, settings.siteName]);
+
+  // Privacy-respecting visitor analytics & live online heartbeat
+  useEffect(() => {
+    const dnt = typeof navigator !== 'undefined' && navigator.doNotTrack === '1';
+    if (analyticsOptOut || dnt) return;
+    const pagePath =
+      route === 'product-detail' && detailProductId
+        ? `/product/${detailProductId}`
+        : route === 'home'
+          ? '/'
+          : `/${route}`;
+    let refHost = '';
+    try {
+      if (document.referrer) refHost = new URL(document.referrer).hostname;
+    } catch {
+      refHost = '';
+    }
+    const visitorId = getAnalyticsVisitorId();
+    const sessionId = getAnalyticsSessionId();
+    const deviceType: 'mobile' | 'desktop' = window.innerWidth < 768 ? 'mobile' : 'desktop';
+
+    void trackAnalyticsEvent({
+      visitorId,
+      sessionId,
+      eventType: 'page_view',
+      pagePath,
+      deviceType,
+      referrerHost: refHost,
+    });
+
+    const hb = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void trackAnalyticsEvent({
+          visitorId,
+          sessionId,
+          eventType: 'heartbeat',
+          pagePath,
+          deviceType,
+        });
+      }
+    }, 60000);
+    return () => window.clearInterval(hb);
+  }, [route, detailProductId, analyticsOptOut]);
 
   const openCatalogSection = (sectionId: string) => {
     setCatalogSearchQuery('');
@@ -682,6 +789,33 @@ export default function App() {
         </div>
       )}
 
+      {!isOnline && (
+        <div className="bg-amber-600 text-white px-4 py-1.5 text-center text-xs font-bold flex items-center justify-center gap-2">
+          <WifiOff className="w-3.5 h-3.5 shrink-0" />
+          <span>
+            {lang === 'bn'
+              ? 'অফলাইন মোড চালু — সংরক্ষিত পেজ প্রদর্শিত হচ্ছে'
+              : 'You are offline — showing cached content'}
+          </span>
+        </div>
+      )}
+
+      {swUpdateAvailable && (
+        <div className="fixed bottom-20 lg:bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl bg-[#172033] text-white text-xs font-bold shadow-2xl border border-[#FF8500] flex items-center gap-3">
+          <span>
+            {lang === 'bn' ? 'নতুন ভার্সন আপডেট এসেছে' : 'New version available'}
+          </span>
+          <button
+            type="button"
+            onClick={() => void applySwUpdate()}
+            className="px-3 py-1 rounded-xl bg-[#FF8500] text-white font-extrabold inline-flex items-center gap-1 cursor-pointer hover:opacity-90"
+          >
+            <RefreshCw className="w-3 h-3" />
+            <span>{lang === 'bn' ? 'রিলোড করুন' : 'Reload'}</span>
+          </button>
+        </div>
+      )}
+
       {toast && (
         <div className="fixed top-20 right-3 sm:right-4 z-50 max-w-[calc(100vw-1.5rem)] sm:max-w-md px-4 py-2.5 rounded-2xl bg-[#172033] text-white text-xs font-bold shadow-xl border border-[#FF8500] flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 text-[#FF8500] shrink-0" />
@@ -690,6 +824,13 @@ export default function App() {
       )}
 
       <main className="flex-1 w-full min-w-0">
+        <Suspense
+          fallback={
+            <div className="min-h-[60vh] flex items-center justify-center p-8">
+              <div className="w-8 h-8 rounded-full border-2 border-[#FF8500] border-t-transparent animate-spin" />
+            </div>
+          }
+        >
         {isMaintenanceBlocked ? (
           <div className="min-h-[82vh] flex items-center justify-center px-4 py-12">
             <div className="max-w-lg w-full rounded-3xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 shadow-lg p-7 sm:p-9 text-center space-y-5">
@@ -992,6 +1133,7 @@ export default function App() {
               mode="home"
               lang={lang}
               settings={settings}
+              paymentMethods={paymentMethods}
               user={user}
               profile={profile}
               wallet={wallet}
@@ -1410,6 +1552,7 @@ export default function App() {
             mode="page"
             lang={lang}
             settings={settings}
+            paymentMethods={paymentMethods}
             user={user}
             profile={profile}
             wallet={wallet}
@@ -1454,6 +1597,7 @@ export default function App() {
             categories={categories}
             lang={lang}
             settings={settings}
+            paymentMethods={paymentMethods}
             user={user}
             profile={profile}
             wallet={wallet}
@@ -1595,6 +1739,10 @@ export default function App() {
             profile={profile}
             wallet={wallet}
             walletTxs={walletTxs}
+            adRewardTransactions={adRewardTransactions}
+            favoriteAppIds={favoriteAppIds}
+            totalDownloads={totalDownloads}
+            mobileApps={mobileApps}
             orders={orders}
             payments={payments}
             referrals={referrals}
@@ -1657,6 +1805,7 @@ export default function App() {
         )}
         </>
         )}
+        </Suspense>
       </main>
 
       {!isMaintenanceBlocked && route !== 'admin' && (
@@ -1790,8 +1939,29 @@ export default function App() {
             </div>
           </div>
         </div>
-        <div className="border-t border-[#E6ECFA] dark:border-slate-800 py-3 px-4 text-center text-[11px] text-[#777777] dark:text-slate-400">
-          © {new Date().getFullYear()} {t(lang, 'footerRights')}
+        <div className="border-t border-[#E6ECFA] dark:border-slate-800 py-3 px-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-[#777777] dark:text-slate-400">
+          <span>© {new Date().getFullYear()} {t(lang, 'footerRights')}</span>
+          <button
+            type="button"
+            onClick={() => {
+              const next = !analyticsOptOut;
+              setAnalyticsOptOut(next);
+              try {
+                localStorage.setItem('dh_analytics_optout', next ? '1' : '0');
+              } catch {
+                // Non-fatal
+              }
+            }}
+            className="underline hover:text-[#FF8500] cursor-pointer"
+          >
+            {analyticsOptOut
+              ? lang === 'bn'
+                ? 'অ্যানালিটিক্স বন্ধ আছে (চালু করুন)'
+                : 'Analytics: Opted Out (Enable)'
+              : lang === 'bn'
+                ? 'অ্যানালিটিক্স প্রাইভেসি (অপ্ট-আউট)'
+                : 'Analytics Privacy (Opt-Out)'}
+          </button>
         </div>
       </footer>
       )}
@@ -1845,6 +2015,7 @@ export default function App() {
         onClearCart={() => setCart([])}
         coupons={coupons}
         settings={settings}
+        paymentMethods={paymentMethods}
         lang={lang}
         user={user}
         profile={profile}
@@ -1866,6 +2037,7 @@ export default function App() {
         }}
         lang={lang}
         settings={settings}
+        paymentMethods={paymentMethods}
         user={user}
         profile={profile}
         wallet={wallet}

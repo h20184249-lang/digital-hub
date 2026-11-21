@@ -308,7 +308,12 @@ export function Navbar({
                   {profile?.displayName || t(lang, 'navAccount')}
                 </span>
                 {unreadNotifications > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-[#DC2626] border-2 border-white dark:border-slate-900" />
+                  <span
+                    aria-label={`${unreadNotifications} unread notifications`}
+                    className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#DC2626] border-2 border-white dark:border-slate-900 text-white text-[9px] font-extrabold font-mono-num flex items-center justify-center leading-none"
+                  >
+                    {unreadNotifications > 99 ? '99+' : unreadNotifications}
+                  </span>
                 )}
               </button>
             ) : (
@@ -398,7 +403,12 @@ export function Navbar({
           <UserIcon className="w-5 h-5" />
           <span className="truncate max-w-full px-0.5">{t(lang, 'navAccount')}</span>
           {unreadNotifications > 0 && (
-            <span className="absolute top-0 right-2 w-2 h-2 rounded-full bg-[#DC2626]" />
+            <span
+              aria-label={`${unreadNotifications} unread notifications`}
+              className="absolute top-0.5 right-2 min-w-[16px] h-[16px] px-1 rounded-full bg-[#DC2626] text-white text-[9px] font-extrabold font-mono-num flex items-center justify-center leading-none"
+            >
+              {unreadNotifications > 99 ? '99+' : unreadNotifications}
+            </span>
           )}
         </button>
       </nav>

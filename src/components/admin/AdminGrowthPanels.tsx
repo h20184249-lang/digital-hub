@@ -789,33 +789,65 @@ export function AdminAdsPanel({
                     {unit.provider} · {unit.format} · {unit.showOnMobile ? 'Mobile' : ''}{unit.showOnMobile && unit.showOnDesktop ? '+' : ''}{unit.showOnDesktop ? 'Desktop' : ''} · {unit.placements.join(', ')}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await adminSaveManagedAdUnit({
-                        id: unit.id,
-                        enabled: !unit.enabled,
-                        placements: unit.placements,
-                        showOnMobile: unit.showOnMobile,
-                        showOnDesktop: unit.showOnDesktop,
-                        priority: unit.priority,
-                        rotationSeconds: unit.rotationSeconds,
-                        supportsRewardedVerification: unit.supportsRewardedVerification,
-                      });
-                      onSuccess(`Ad unit ${unit.label} ${!unit.enabled ? 'enabled' : 'disabled'}.`);
-                    } catch (err) {
-                      onError(err instanceof Error ? err.message : 'Update failed.');
-                    }
-                  }}
-                  className={`px-3 py-1.5 rounded-xl font-bold shrink-0 ${
-                    unit.enabled
-                      ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                  }`}
-                >
-                  {unit.enabled ? 'Enabled' : 'Disabled'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const nextReward = !unit.supportsRewardedVerification;
+                      try {
+                        await adminSaveManagedAdUnit({
+                          id: unit.id,
+                          enabled: unit.enabled,
+                          placements: unit.placements,
+                          showOnMobile: unit.showOnMobile,
+                          showOnDesktop: unit.showOnDesktop,
+                          priority: unit.priority,
+                          rotationSeconds: unit.rotationSeconds,
+                          supportsRewardedVerification: nextReward,
+                        });
+                        onSuccess(
+                          `Ad unit ${unit.id} reward policy set to ${nextReward ? 'Approved (+5 Coins)' : 'Display Only'}.`
+                        );
+                      } catch (err) {
+                        onError(err instanceof Error ? err.message : 'Update failed.');
+                      }
+                    }}
+                    className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold shrink-0 ${
+                      unit.supportsRewardedVerification
+                        ? 'bg-[#FFF3E5] dark:bg-orange-950/50 text-[#FF8500] border border-[#FF8500]/40'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    {unit.supportsRewardedVerification ? 'Reward Policy: Approved' : 'Policy: Display Only'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await adminSaveManagedAdUnit({
+                          id: unit.id,
+                          enabled: !unit.enabled,
+                          placements: unit.placements,
+                          showOnMobile: unit.showOnMobile,
+                          showOnDesktop: unit.showOnDesktop,
+                          priority: unit.priority,
+                          rotationSeconds: unit.rotationSeconds,
+                          supportsRewardedVerification: unit.supportsRewardedVerification,
+                        });
+                        onSuccess(`Ad unit ${unit.label} ${!unit.enabled ? 'enabled' : 'disabled'}.`);
+                      } catch (err) {
+                        onError(err instanceof Error ? err.message : 'Update failed.');
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-xl font-bold shrink-0 ${
+                      unit.enabled
+                        ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                    }`}
+                  >
+                    {unit.enabled ? 'Enabled' : 'Disabled'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -1168,16 +1200,46 @@ export function AdminPaymentMethodsPanel({
         onSubmit={handleSave}
         className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-3 text-xs"
       >
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
-            <CreditCard className="w-4 h-4 text-[#FF8500]" />
-            {editingId ? `Edit Payment Method (${name})` : 'Add Payment Method (bKash / Nagad / Rocket / Bank / Custom)'}
-          </h3>
-          {editingId && (
-            <button type="button" onClick={resetForm} className="text-xs font-bold text-[#777777] hover:underline">
-              Cancel Edit
-            </button>
-          )}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+              <CreditCard className="w-4 h-4 text-[#FF8500]" />
+              {editingId ? `Edit Payment Method (${name})` : 'Add Payment Method (bKash / Nagad / Rocket / Bank / Custom)'}
+            </h3>
+            <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
+              ✓ Changes persist in database & sync live across Checkout, Add Money, Storefront Instructions & Withdrawals.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {!editingId && !methods.some((m) => m.code === 'bank_transfer') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingId('');
+                  setCode('bank_transfer');
+                  setName('Bank Transfer');
+                  setType('bank_transfer');
+                  setAccountName('BRAC Bank / DBBL');
+                  setMinAmount('500');
+                  setMaxAmount('200000');
+                  setInstructionsEn('Transfer to the bank account above and upload your deposit slip / reference ID.');
+                  setInstructionsBn('উক্ত ব্যাংক অ্যাকাউন্টে ট্রান্সফার করে স্লিপ বা রেফারেন্স নম্বর জমা দিন।');
+                  setRequirementsEn('Bank Name, Account Number & Holder Name');
+                  setSupportsDeposit(true);
+                  setSupportsWithdrawal(true);
+                  setEnabled(true);
+                }}
+                className="px-2.5 py-1 rounded-lg bg-[#F3F6FF] dark:bg-slate-800 text-[#FF8500] font-bold hover:underline"
+              >
+                + Preset Bank Transfer
+              </button>
+            )}
+            {editingId && (
+              <button type="button" onClick={resetForm} className="text-xs font-bold text-[#777777] hover:underline">
+                Cancel Edit
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
