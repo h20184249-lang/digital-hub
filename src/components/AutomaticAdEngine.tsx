@@ -68,6 +68,7 @@ export function PublisherScriptSlot({
           activeNetwork.publisherId
         )}`;
         libScript.dataset.dhAdsense = activeNetwork.publisherId;
+        libScript.onerror = () => {};
         document.head.appendChild(libScript);
       }
       const ins = document.createElement('ins');
@@ -80,21 +81,27 @@ export function PublisherScriptSlot({
       injectedNodes.push(ins);
 
       const pushScript = document.createElement('script');
-      pushScript.text = '(window.adsbygoogle = window.adsbygoogle || []).push({});';
+      pushScript.text = 'try{(window.adsbygoogle = window.adsbygoogle || []).push({});}catch(e){}';
       host.appendChild(pushScript);
       injectedNodes.push(pushScript);
     } else if (isSafeOfficialScriptSrc(activeNetwork.scriptSrc)) {
+      const cleanSrc = activeNetwork.scriptSrc!.trim();
       if (activeNetwork.containerId) {
         const zoneDiv = document.createElement('div');
         zoneDiv.id = activeNetwork.containerId;
         host.appendChild(zoneDiv);
         injectedNodes.push(zoneDiv);
       }
-      const extScript = document.createElement('script');
-      extScript.async = true;
-      extScript.src = activeNetwork.scriptSrc!.trim();
-      host.appendChild(extScript);
-      injectedNodes.push(extScript);
+      const alreadyLoaded = Boolean(document.querySelector(`script[src="${CSS.escape(cleanSrc)}"]`));
+      if (!alreadyLoaded) {
+        const extScript = document.createElement('script');
+        extScript.async = true;
+        extScript.src = cleanSrc;
+        extScript.referrerPolicy = 'strict-origin-when-cross-origin';
+        extScript.onerror = () => {};
+        host.appendChild(extScript);
+        injectedNodes.push(extScript);
+      }
     }
 
     return () => {

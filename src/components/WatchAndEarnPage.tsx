@@ -67,6 +67,7 @@ export function WatchAndEarnPage({
   settings,
   advertisements = [],
   managedAdUnits,
+  adNetworks = [],
   viewingSessions,
   rewardTransactions,
   onNavigate,
@@ -81,7 +82,7 @@ export function WatchAndEarnPage({
     coinsEarnedToday: 0,
     dailyAdLimit: Math.max(1, settings.rewardedAdDailyLimit ?? 5),
     dailyCoinLimit: Math.max(10, settings.watchEarnDailyCoinLimit ?? 100),
-    coinsPerAd: Math.max(1, settings.watchEarnCoinsPerAd ?? 10),
+    coinsPerAd: Math.max(1, settings.watchEarnCoinsPerAd ?? 5),
     coinsPerBdt: Math.max(1, settings.watchEarnCoinsPerBdt ?? 10),
     minRedeemCoins: Math.max(10, settings.watchEarnMinRedeemCoins ?? 50),
     watchEarnEnabled: settings.watchEarnEnabled !== false,
@@ -94,6 +95,7 @@ export function WatchAndEarnPage({
     sessionToken: string;
     requiredSeconds: number;
     rewardCoins: number;
+    requiresS2SCallback?: boolean;
   } | null>(null);
   const [busyPlay, setBusyPlay] = useState(false);
   const [busyVerify, setBusyVerify] = useState(false);
@@ -103,8 +105,8 @@ export function WatchAndEarnPage({
   const startLockRef = useRef(false);
 
   const watchableAds = useMemo(
-    () => buildWatchableAdItems(advertisements, managedAdUnits),
-    [advertisements, managedAdUnits]
+    () => buildWatchableAdItems(advertisements, managedAdUnits, adNetworks),
+    [advertisements, managedAdUnits, adNetworks]
   );
 
   const selectedAd = useMemo(() => {
@@ -160,7 +162,7 @@ export function WatchAndEarnPage({
 
   const dailyAdLimit = Math.max(1, serverSummary.dailyAdLimit || settings.rewardedAdDailyLimit || 5);
   const dailyCoinLimit = Math.max(10, serverSummary.dailyCoinLimit || settings.watchEarnDailyCoinLimit || 100);
-  const coinsPerAd = Math.max(1, serverSummary.coinsPerAd || settings.watchEarnCoinsPerAd || 10);
+  const coinsPerAd = Math.max(1, serverSummary.coinsPerAd || settings.watchEarnCoinsPerAd || 5);
   const coinsPerBdt = Math.max(1, serverSummary.coinsPerBdt || settings.watchEarnCoinsPerBdt || 10);
   const minRedeemCoins = Math.max(10, serverSummary.minRedeemCoins || settings.watchEarnMinRedeemCoins || 50);
 
@@ -231,6 +233,7 @@ export function WatchAndEarnPage({
         unitId: chosen.unitId,
         provider: chosen.provider,
         launchUrl: chosen.targetUrl,
+        adTitle: lang === 'bn' ? chosen.titleBn : chosen.titleEn,
       });
       setSelectedAdId(chosen.id);
       setActiveAd(chosen);
@@ -239,6 +242,7 @@ export function WatchAndEarnPage({
         sessionToken: res.sessionToken,
         requiredSeconds: res.requiredSeconds || 5,
         rewardCoins: res.rewardCoins || coinsPerAd,
+        requiresS2SCallback: res.requiresS2SCallback,
       });
       setModalOpen(true);
     } catch (err) {
@@ -511,46 +515,56 @@ export function WatchAndEarnPage({
                 : 'Watch & Earn is currently paused by the administrator.'}
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {watchableAds.slice(0, 8).map((item) => {
-                const isSelected = selectedAd?.id === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    disabled={busyPlay || (Boolean(user) && !canWatchMore)}
-                    onClick={() => void startWatchSession(item)}
-                    className={`group text-left p-3 rounded-2xl border transition-all flex items-center justify-between gap-2.5 cursor-pointer disabled:opacity-55 ${
-                      isSelected
-                        ? 'bg-[#FFF7EE] dark:bg-orange-500/15 border-[#FF8500] shadow-xs'
-                        : 'bg-[#F3F6FF] dark:bg-slate-800/80 border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="w-9 h-9 rounded-xl dh-orange-gradient text-white flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                        <Play className="w-4 h-4 fill-current ml-0.5" />
-                      </span>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] font-mono-num font-bold px-1.5 py-0.5 rounded bg-[#172033] text-white">
-                            {item.unitId}
-                          </span>
-                          <span className="text-[10px] font-bold text-[#16A34A] dark:text-emerald-400">
-                            +{coinsPerAd} {lang === 'bn' ? 'কয়েন' : 'Coins'}
-                          </span>
+            <>
+              <div className="mb-3 p-2.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 text-[11px] text-[#555555] dark:text-slate-300 flex items-start gap-2">
+                <ShieldCheck className="w-4 h-4 text-[#16A34A] shrink-0 mt-0.5" />
+                <span>
+                  {lang === 'bn'
+                    ? 'শুধুমাত্র অনুমোদিত Reward Ad ও S2S যাচাইকৃত বিজ্ঞাপনের জন্যই কয়েন প্রদান করা হয়। সাধারণ থার্ড-পার্টি ডিসপ্লে/ব্যানার বিজ্ঞাপনে কোনো ইনসেন্টিভ কয়েন দেওয়া হয় না।'
+                    : 'Coins are awarded exclusively on authorized Reward Ads & S2S-verified units. Non-incentivized third-party display banners never issue coins.'}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {watchableAds.slice(0, 8).map((item) => {
+                  const isSelected = selectedAd?.id === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      disabled={busyPlay || (Boolean(user) && !canWatchMore)}
+                      onClick={() => void startWatchSession(item)}
+                      className={`group text-left p-3 rounded-2xl border transition-all flex items-center justify-between gap-2.5 cursor-pointer disabled:opacity-55 ${
+                        isSelected
+                          ? 'bg-[#FFF7EE] dark:bg-orange-500/15 border-[#FF8500] shadow-xs'
+                          : 'bg-[#F3F6FF] dark:bg-slate-800/80 border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="w-9 h-9 rounded-xl dh-orange-gradient text-white flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                          <Play className="w-4 h-4 fill-current ml-0.5" />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-mono-num font-bold px-1.5 py-0.5 rounded bg-[#172033] text-white">
+                              {item.unitId}
+                            </span>
+                            <span className="text-[10px] font-bold text-[#16A34A] dark:text-emerald-400">
+                              +{coinsPerAd} {lang === 'bn' ? 'কয়েন' : 'Coins'}
+                            </span>
+                          </div>
+                          <p className="text-xs font-bold text-[#172033] dark:text-slate-100 truncate mt-0.5">
+                            {lang === 'bn' ? item.titleBn : item.titleEn}
+                          </p>
+                          <p className="text-[10px] text-[#777777] dark:text-slate-400 truncate">
+                            {item.provider} · 5s {lang === 'bn' ? 'ভেরিফায়েড ভিউ' : 'verified view'}
+                          </p>
                         </div>
-                        <p className="text-xs font-bold text-[#172033] dark:text-slate-100 truncate mt-0.5">
-                          {lang === 'bn' ? item.titleBn : item.titleEn}
-                        </p>
-                        <p className="text-[10px] text-[#777777] dark:text-slate-400 truncate">
-                          {item.provider} · 5s {lang === 'bn' ? 'ভেরিফায়েড ভিউ' : 'verified view'}
-                        </p>
                       </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
 
@@ -678,31 +692,53 @@ export function WatchAndEarnPage({
             </p>
           ) : (
             <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-              {rewardTransactions.slice(0, 20).map((tx) => (
-                <div
-                  key={tx.id}
-                  className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 flex items-center justify-between gap-2 text-xs"
-                >
-                  <div className="min-w-0">
-                    <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
-                      {tx.note || tx.type} ({tx.provider})
-                    </p>
-                    <p className="text-[11px] text-[#777777] dark:text-slate-400">
-                      {formatDateShort(tx.createdAt, lang)}
-                    </p>
+              {rewardTransactions.slice(0, 20).map((tx) => {
+                const statusLower = String(tx.status || '').toLowerCase();
+                const isCredited = statusLower === 'credited' || statusLower === 'approved';
+                const isRejected = statusLower === 'rejected' || statusLower === 'failed';
+                return (
+                  <div
+                    key={tx.id}
+                    className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 flex items-start justify-between gap-2 text-xs"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
+                        {tx.adTitle || tx.note || tx.type}
+                      </p>
+                      <p className="text-[11px] text-[#555555] dark:text-slate-300 truncate font-mono-num">
+                        {tx.unitId ? `${tx.unitId} · ` : ''}
+                        {tx.provider}
+                      </p>
+                      <p className="text-[11px] text-[#777777] dark:text-slate-400">
+                        {formatDateShort(tx.createdAt, lang)}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0 space-y-1">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                          isCredited
+                            ? 'bg-emerald-100 dark:bg-emerald-500/20 text-[#16A34A] dark:text-emerald-300'
+                            : isRejected
+                              ? 'bg-red-100 dark:bg-red-500/20 text-[#DC2626] dark:text-red-300'
+                              : 'bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300'
+                        }`}
+                      >
+                        {tx.status || 'Credited'}
+                      </span>
+                      <p
+                        className={`font-mono-num font-extrabold ${
+                          tx.coins >= 0 ? 'text-[#16A34A] dark:text-emerald-400' : 'text-[#FF8500]'
+                        }`}
+                      >
+                        {tx.coins >= 0 ? `+${tx.coins}` : tx.coins} coins
+                      </p>
+                      <p className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400">
+                        ৳{tx.bdtEquivalent}
+                      </p>
+                    </div>
                   </div>
-                  <div className="text-right shrink-0 font-mono-num">
-                    <p
-                      className={`font-extrabold ${
-                        tx.coins >= 0 ? 'text-[#16A34A] dark:text-emerald-400' : 'text-[#FF8500]'
-                      }`}
-                    >
-                      {tx.coins >= 0 ? `+${tx.coins}` : tx.coins} coins
-                    </p>
-                    <p className="text-[11px] text-[#777777] dark:text-slate-400">৳{tx.bdtEquivalent}</p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  AdNetworkConfig,
   Advertisement,
   AppRoute,
   AuthUser,
@@ -31,9 +32,11 @@ import {
   getWatchEarnSummaryServer,
   startWatchEarnSessionServer,
   trackAdEvent,
+  verifyWatchEarnSessionServer,
   WatchEarnSummaryPayload,
 } from '../lib/firestoreService';
 import { classifyAdMediaUrl, resolveAdBrowserUrl, tryAcquireAdLaunchLock } from '../lib/adNavigation';
+import { AUTHORIZED_REWARD_ADS } from '../lib/adProviderConfig';
 import { resolveStudioImage } from '../lib/studioAssets';
 import { AdUnitCardOrBanner } from './AdUnitFrame';
 
@@ -50,49 +53,47 @@ export interface WatchableAdItem {
   imageUrl?: string;
   targetUrl: string;
   managedUnit?: ManagedAdUnitConfig;
+  supportsRewardedVerification: boolean;
+  rewardMode: 'first_party_timer' | 's2s_callback';
 }
 
 export function buildWatchableAdItems(
-  advertisements: Advertisement[],
-  managedAdUnits: ManagedAdUnitConfig[]
+  _advertisements: Advertisement[],
+  managedAdUnits: ManagedAdUnitConfig[],
+  adNetworks: AdNetworkConfig[] = []
 ): WatchableAdItem[] {
-  const today = new Date().toISOString().slice(0, 10);
   const items: WatchableAdItem[] = [];
   const seen = new Set<string>();
 
-  // 1. Enabled partner ads with real visual creatives or videos (highest reliability across mobile/desktop)
-  advertisements
-    .filter((ad) => {
-      if (!ad.enabled) return false;
-      if (ad.startDate && ad.startDate > today) return false;
-      if (ad.endDate && ad.endDate < today) return false;
-      return Boolean(ad.targetUrl && (ad.thumbnailUrl || ad.mediaUrl));
-    })
-    .sort((a, b) => a.sortOrder - b.sortOrder || b.priority - a.priority)
-    .forEach((ad) => {
-      const unitId = ad.code || ad.id;
-      if (seen.has(unitId)) return;
-      seen.add(unitId);
-      const mediaInfo = ad.mediaType === 'video' ? classifyAdMediaUrl(ad.mediaUrl) : null;
-      const isVideo = mediaInfo && (mediaInfo.kind === 'direct_video' || mediaInfo.kind === 'embed_video');
-      items.push({
-        id: ad.id,
-        unitId,
-        provider: ad.networkName || 'SPONSORED',
-        titleBn: ad.titleBn,
-        titleEn: ad.titleEn,
-        descriptionBn: ad.descriptionBn || 'যাচাইকৃত ডিজিটাল পার্টনার বিজ্ঞাপন',
-        descriptionEn: ad.descriptionEn || 'Verified digital partner advertisement',
-        kind: isVideo ? 'video' : 'sponsored_creative',
-        mediaUrl: isVideo ? mediaInfo.playableSrc : undefined,
-        imageUrl: ad.thumbnailUrl || ad.mediaUrl,
-        targetUrl: ad.targetUrl,
-      });
+  // 1. Authorized first-party DIGITAL HUB Reward Ads (server-enforced 5s viewing timer = +5 coins)
+  // Third-party non-incentivized display networks are NEVER eligible to mint Watch & Earn coins.
+  AUTHORIZED_REWARD_ADS.forEach((rewardAd) => {
+    if (seen.has(rewardAd.unitId)) return;
+    seen.add(rewardAd.unitId);
+    items.push({
+      id: rewardAd.id,
+      unitId: rewardAd.unitId,
+      provider: rewardAd.provider,
+      titleBn: rewardAd.titleBn,
+      titleEn: rewardAd.titleEn,
+      descriptionBn: rewardAd.descriptionBn,
+      descriptionEn: rewardAd.descriptionEn,
+      kind: 'sponsored_creative',
+      imageUrl: rewardAd.imageUrl,
+      targetUrl: rewardAd.targetUrl,
+      supportsRewardedVerification: true,
+      rewardMode: 'first_party_timer',
     });
+  });
 
-  // 2. Enabled iframe/native managed ad units (also selectable for live ad-network verification)
+  // 2. Third-party managed ad units ONLY when explicitly approved for S2S rewarded verification
   managedAdUnits
-    .filter((u) => u.enabled && (u.format === 'banner_iframe' || u.format === 'native_widget'))
+    .filter(
+      (u) =>
+        u.enabled &&
+        u.supportsRewardedVerification === true &&
+        (u.format === 'banner_iframe' || u.format === 'native_widget' || u.format === 'direct_link')
+    )
     .sort((a, b) => a.priority - b.priority)
     .forEach((u) => {
       if (seen.has(u.id)) return;
@@ -103,11 +104,34 @@ export function buildWatchableAdItems(
         provider: u.provider,
         titleBn: u.labelBn,
         titleEn: u.label,
-        descriptionBn: `${u.provider} লাইভ অ্যাড নেটওয়ার্ক ইউনিট`,
-        descriptionEn: `${u.provider} live ad network unit`,
-        kind: 'script_banner',
+        descriptionBn: `${u.provider} অনুমোদিত S2S রিওয়ার্ডেড অ্যাড`,
+        descriptionEn: `${u.provider} S2S-verified rewarded ad`,
+        kind: u.format === 'direct_link' ? 'sponsored_creative' : 'script_banner',
         targetUrl: u.originalUrl,
         managedUnit: u,
+        supportsRewardedVerification: true,
+        rewardMode: 's2s_callback',
+      });
+    });
+
+  // 3. Approved third-party ad networks ONLY when explicitly marked supportsIncentivizedRewards === true
+  adNetworks
+    .filter((n) => n.enabled && n.supportsIncentivizedRewards === true && n.approvalStatus === 'active')
+    .forEach((n) => {
+      if (seen.has(n.id)) return;
+      seen.add(n.id);
+      items.push({
+        id: n.id,
+        unitId: n.id,
+        provider: n.provider.toUpperCase(),
+        titleBn: n.name,
+        titleEn: n.name,
+        descriptionBn: `${n.provider} S2S অনুমোদিত রিওয়ার্ডেড নেটওয়ার্ক`,
+        descriptionEn: `${n.provider} S2S-verified rewarded network`,
+        kind: 'sponsored_creative',
+        targetUrl: '/?route=watch-earn',
+        supportsRewardedVerification: true,
+        rewardMode: 's2s_callback',
       });
     });
 
@@ -136,6 +160,7 @@ interface WatchAdModalProps {
     sessionToken: string;
     requiredSeconds: number;
     rewardCoins: number;
+    requiresS2SCallback?: boolean;
   } | null;
   lang: Language;
   coinsPerBdt: number;
@@ -164,11 +189,12 @@ export function WatchAdModal({
   const [adLoadState, setAdLoadState] = useState<'loading' | 'loaded' | 'failed'>('loading');
   const [loadError, setLoadError] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(requiredSeconds);
-  const [phase, setPhase] = useState<'loading_ad' | 'counting' | 'crediting' | 'credited' | 'failed'>('loading_ad');
+  const [phase, setPhase] = useState<'loading_ad' | 'counting' | 'crediting' | 'awaiting_s2s' | 'credited' | 'failed'>('loading_ad');
   const [creditResult, setCreditResult] = useState<WatchRewardCompletionResult | null>(null);
   const [creditError, setCreditError] = useState('');
   const [isTabVisible, setIsTabVisible] = useState(true);
   const [retryNonce, setRetryNonce] = useState(0);
+  const [checkingS2S, setCheckingS2S] = useState(false);
   const completionFiredRef = useRef(false);
 
   // Reset state whenever a fresh session starts
@@ -223,10 +249,17 @@ export function WatchAdModal({
   }, [open, phase, isTabVisible, secondsLeft]);
 
   // Automatic coin crediting immediately when countdown hits 0 (NO manual Claim button required)
+  // For S2S-verified third-party sessions, wait for verified provider callback instead of self-crediting
   useEffect(() => {
     if (!open || !session || phase !== 'counting' || secondsLeft > 0) return;
     if (completionFiredRef.current) return;
     completionFiredRef.current = true;
+
+    if (session.requiresS2SCallback) {
+      setPhase('awaiting_s2s');
+      return;
+    }
+
     setPhase('crediting');
 
     let cancelled = false;
@@ -275,13 +308,17 @@ export function WatchAdModal({
   if (!open || !ad || !session) return null;
 
   const progressPercent =
-    phase === 'credited' || phase === 'crediting'
+    phase === 'credited' || phase === 'crediting' || phase === 'awaiting_s2s'
       ? 100
       : phase === 'counting'
         ? Math.min(100, Math.round(((requiredSeconds - secondsLeft) / requiredSeconds) * 100))
         : 0;
 
-  const launch = resolveAdBrowserUrl(ad.targetUrl, { dh_unit: ad.unitId });
+  const resolvedTarget =
+    ad.targetUrl.startsWith('/') && typeof window !== 'undefined'
+      ? `${window.location.origin}${ad.targetUrl}`
+      : ad.targetUrl;
+  const launch = resolveAdBrowserUrl(resolvedTarget, { dh_unit: ad.unitId });
   const videoMedia = ad.kind === 'video' ? classifyAdMediaUrl(ad.mediaUrl) : null;
 
   return (
@@ -500,6 +537,71 @@ export function WatchAdModal({
             </div>
           )}
 
+          {phase === 'awaiting_s2s' && (
+            <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-800 space-y-2.5 text-xs">
+              <p className="font-extrabold text-[#172033] dark:text-slate-100">
+                {lang === 'bn'
+                  ? 'প্রোভাইডার S2S কলব্যাক যাচাইয়ের অপেক্ষায় আছে'
+                  : 'Awaiting Provider S2S Callback Verification'}
+              </p>
+              <p className="text-[#777777] dark:text-slate-400">
+                {lang === 'bn'
+                  ? 'থার্ড-পার্টি রিওয়ার্ডেড অ্যাড নেটওয়ার্ক থেকে কনফার্মেশন পেলেই কয়েন যোগ হবে।'
+                  : 'Coins will credit once the rewarded ad network sends verified S2S confirmation.'}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={checkingS2S}
+                  onClick={async () => {
+                    if (!session) return;
+                    setCheckingS2S(true);
+                    try {
+                      const check = await verifyWatchEarnSessionServer(session.sessionId);
+                      if (check.verified) {
+                        const summaryNow = await getWatchEarnSummaryServer();
+                        const payload: WatchRewardCompletionResult = {
+                          coinsAwarded: check.coinsAwarded,
+                          alreadyCredited: false,
+                          coinsAvailable: summaryNow.coinsAvailable,
+                          coinsLifetimeEarned: summaryNow.coinsLifetimeEarned,
+                          coinsRedeemed: summaryNow.coinsRedeemed,
+                          adsWatchedToday: summaryNow.adsWatchedToday,
+                          coinsEarnedToday: summaryNow.coinsEarnedToday,
+                          dailyAdLimit: summaryNow.dailyAdLimit,
+                          dailyCoinLimit: summaryNow.dailyCoinLimit,
+                          bdtEquivalent: Number((check.coinsAwarded / Math.max(1, coinsPerBdt)).toFixed(2)),
+                          message: check.message,
+                        };
+                        setCreditResult(payload);
+                        setPhase('credited');
+                        onRewardCredited(payload);
+                      } else {
+                        setCreditError(check.message);
+                      }
+                    } catch (err) {
+                      setCreditError(err instanceof Error ? err.message : 'Verification pending');
+                    } finally {
+                      setCheckingS2S(false);
+                    }
+                  }}
+                  className="px-3.5 py-2 rounded-xl dh-orange-gradient text-white font-bold inline-flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${checkingS2S ? 'animate-spin' : ''}`} />
+                  <span>{lang === 'bn' ? 'স্ট্যাটাস যাচাই করুন' : 'Check Verification'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-bold text-[#172033] dark:text-slate-200"
+                >
+                  {lang === 'bn' ? 'বন্ধ করুন' : 'Close'}
+                </button>
+              </div>
+              {creditError && <p className="text-[11px] text-amber-800 dark:text-amber-300 font-semibold">{creditError}</p>}
+            </div>
+          )}
+
           {phase === 'credited' && creditResult && (
             <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 space-y-3">
               <div className="flex items-start gap-2.5">
@@ -604,6 +706,7 @@ interface WatchEarnHomeBannerProps {
   settings: SiteSettings;
   advertisements: Advertisement[];
   managedAdUnits: ManagedAdUnitConfig[];
+  adNetworks?: AdNetworkConfig[];
   onNavigate: (r: AppRoute) => void;
   onOpenAuth: () => void;
   onToast?: (msg: string) => void;
@@ -617,6 +720,7 @@ export function WatchEarnHomeBanner({
   settings,
   advertisements,
   managedAdUnits,
+  adNetworks = [],
   onNavigate,
   onOpenAuth,
   onToast,
@@ -632,12 +736,13 @@ export function WatchEarnHomeBanner({
     sessionToken: string;
     requiredSeconds: number;
     rewardCoins: number;
+    requiresS2SCallback?: boolean;
   } | null>(null);
   const startLockRef = useRef(false);
 
   const watchableAds = useMemo(
-    () => buildWatchableAdItems(advertisements, managedAdUnits),
-    [advertisements, managedAdUnits]
+    () => buildWatchableAdItems(advertisements, managedAdUnits, adNetworks),
+    [advertisements, managedAdUnits, adNetworks]
   );
 
   useEffect(() => {
@@ -655,7 +760,7 @@ export function WatchEarnHomeBanner({
 
   if (!watchEarnEnabled) return null;
 
-  const coinsPerAd = summary?.coinsPerAd || Math.max(1, settings.watchEarnCoinsPerAd ?? 10);
+  const coinsPerAd = summary?.coinsPerAd || Math.max(1, settings.watchEarnCoinsPerAd ?? 5);
   const coinsPerBdt = summary?.coinsPerBdt || Math.max(1, settings.watchEarnCoinsPerBdt ?? 10);
   const dailyAdLimit = summary?.dailyAdLimit || Math.max(1, settings.rewardedAdDailyLimit ?? 5);
   const adsWatchedToday = summary?.adsWatchedToday ?? 0;
@@ -676,7 +781,7 @@ export function WatchEarnHomeBanner({
     if (startLockRef.current || modalOpen) return;
     if (watchableAds.length === 0) {
       setErrorMsg(
-        lang === 'bn' ? 'বর্তমানে দেখার মতো কোনো সক্রিয় বিজ্ঞাপন নেই।' : 'No active advertisements available right now.'
+        lang === 'bn' ? 'বর্তমানে দেখার মতো কোনো অনুমোদিত Reward Ad নেই।' : 'No authorized Reward Ads available right now.'
       );
       return;
     }
@@ -692,6 +797,7 @@ export function WatchEarnHomeBanner({
         unitId: chosen.unitId,
         provider: chosen.provider,
         launchUrl: chosen.targetUrl,
+        adTitle: lang === 'bn' ? chosen.titleBn : chosen.titleEn,
       });
       setActiveAd(chosen);
       setActiveSession({
@@ -699,6 +805,7 @@ export function WatchEarnHomeBanner({
         sessionToken: res.sessionToken,
         requiredSeconds: res.requiredSeconds || 5,
         rewardCoins: res.rewardCoins || coinsPerAd,
+        requiresS2SCallback: res.requiresS2SCallback,
       });
       setModalOpen(true);
     } catch (err) {

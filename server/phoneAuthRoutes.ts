@@ -241,7 +241,7 @@ async function getGlobalSiteSettings(db: AppDatabase): Promise<EffectiveSiteSett
     adsEnabled: raw.adsEnabled !== false,
     watchEarnEnabled: raw.watchEarnEnabled !== false,
     rewardedAdEnabled: raw.rewardedAdEnabled !== false,
-    watchEarnCoinsPerAd: Math.max(1, Math.floor(Number(raw.watchEarnCoinsPerAd ?? 10) || 10)),
+    watchEarnCoinsPerAd: Math.max(1, Math.floor(Number(raw.watchEarnCoinsPerAd ?? 5) || 5)),
     watchEarnCoinsPerBdt: Math.max(1, Number(raw.watchEarnCoinsPerBdt ?? 10) || 10),
     watchEarnDailyCoinLimit: Math.max(10, Math.floor(Number(raw.watchEarnDailyCoinLimit ?? 100) || 100)),
     rewardedAdDailyLimit: Math.max(1, Math.floor(Number(raw.rewardedAdDailyLimit ?? 5) || 5)),
@@ -2712,13 +2712,50 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
 
-      const body = (req.body || {}) as { unitId?: string; provider?: string; launchUrl?: string };
+      const body = (req.body || {}) as {
+        unitId?: string;
+        provider?: string;
+        adTitle?: string;
+        launchUrl?: string;
+      };
       const unitId = String(body.unitId || '').trim().slice(0, 80);
-      const provider = String(body.provider || 'PARTNER').trim().slice(0, 60);
+      const provider = String(body.provider || 'DIGITAL_HUB').trim().slice(0, 60);
+      const adTitle = String(body.adTitle || '').trim().slice(0, 140);
       const launchUrl = String(body.launchUrl || '').trim().slice(0, 600);
       if (!unitId) {
         res.status(400).json({ ok: false, error: 'সঠিক অ্যাড ইউনিট নির্বাচন করুন।' });
         return;
+      }
+
+      // Authorize reward units:
+      // 1) First-party DIGITAL HUB Reward Ads (DH_REWARD_*) use 5s server-enforced viewing timer.
+      // 2) Third-party ad units/networks ONLY if explicitly authorized for incentivized rewards in catalog_overrides (require S2S callback).
+      const FIRST_PARTY_REWARD_UNITS = new Set([
+        'DH_REWARD_01',
+        'DH_REWARD_02',
+        'DH_REWARD_03',
+        'DH_REWARD_04',
+        'DH_REWARD_05',
+      ]);
+      const isFirstPartyReward = FIRST_PARTY_REWARD_UNITS.has(unitId.toUpperCase());
+      let requiresS2SCallback = false;
+      if (!isFirstPartyReward) {
+        const unitOv = await db.first<{ payload_json: string }>(
+          `SELECT payload_json FROM catalog_overrides WHERE collection IN ('advertisingUnits', 'adNetworks') AND doc_id = ? AND deleted = 0 LIMIT 1`,
+          [unitId]
+        );
+        const ovObj = unitOv ? parseJsonSafe<Record<string, unknown>>(unitOv.payload_json, {}) : {};
+        const s2sApproved =
+          ovObj.supportsRewardedVerification === true || ovObj.supportsIncentivizedRewards === true;
+        if (!s2sApproved) {
+          res.status(403).json({
+            ok: false,
+            error:
+              'এই থার্ড-পার্টি অ্যাড নেটওয়ার্কটি ইনসেন্টিভাইজড রিওয়ার্ড অনুমোদন করে না। শুধুমাত্র অনুমোদিত Reward Ad দেখুন।',
+          });
+          return;
+        }
+        requiresS2SCallback = true;
       }
 
       const stats = await computeWatchEarnUserStats(db, user.uid, siteSettings);
@@ -2760,15 +2797,18 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       const sessionId = generateSecureId('wsess', 8);
       const sessionToken = generateSecureId('wtok', 12);
+      const initialStatus = requiresS2SCallback ? 'awaiting_callback' : 'watching';
       const payload = {
         id: sessionId,
         userId: user.uid,
         userEmail: getUserPrimaryIdentifier(user),
         unitId,
+        adTitle: adTitle || `${provider} · ${unitId}`,
         provider,
         sessionToken,
         launchUrl,
-        status: 'watching',
+        requiresS2SCallback,
+        status: initialStatus,
         requiredSeconds: WATCH_EARN_REQUIRED_SECONDS,
         rewardCoins: stats.coinsPerAd,
         coinsAwarded: 0,
@@ -2777,7 +2817,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       };
       await db.run(
         'INSERT INTO ad_viewing_sessions (id, user_id, session_token, status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [sessionId, user.uid, sessionToken, 'watching', JSON.stringify(payload), now, now]
+        [sessionId, user.uid, sessionToken, initialStatus, JSON.stringify(payload), now, now]
       );
       res.status(201).json({
         ok: true,
@@ -2786,11 +2826,14 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         unitId,
         provider,
         launchUrl,
-        status: 'watching',
+        requiresS2SCallback,
+        status: initialStatus,
         requiredSeconds: WATCH_EARN_REQUIRED_SECONDS,
         rewardCoins: stats.coinsPerAd,
         serverStartedAt: now,
-        message: `${WATCH_EARN_REQUIRED_SECONDS} সেকেন্ড বিজ্ঞাপনটি দেখুন — সম্পন্ন হলে স্বয়ংক্রিয়ভাবে +${stats.coinsPerAd} কয়েন যোগ হবে।`,
+        message: requiresS2SCallback
+          ? `অ্যাড ভিউ শুরু হয়েছে — প্রোভাইডার S2S কলব্যাক যাচাইয়ের পর +${stats.coinsPerAd} কয়েন যোগ হবে।`
+          : `${WATCH_EARN_REQUIRED_SECONDS} সেকেন্ড বিজ্ঞাপনটি দেখুন — সম্পন্ন হলে স্বয়ংক্রিয়ভাবে +${stats.coinsPerAd} কয়েন যোগ হবে।`,
       });
     } catch (err) {
       handleRouteError(res, err, 'সেশন শুরু করা যায়নি।');
@@ -2898,6 +2941,18 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
 
+      // S2S-only third-party sessions MUST be credited via /api/ads/postback/:provider, never by client /complete
+      if (existingObj.requiresS2SCallback === true || currentStatus === 'awaiting_callback') {
+        res.status(403).json({
+          ok: false,
+          verified: false,
+          status: 'awaiting_callback',
+          coinsAwarded: 0,
+          error: 'এই অ্যাড নেটওয়ার্কটির জন্য প্রোভাইডারের অনুমোদিত S2S কলব্যাক যাচাই প্রয়োজন।',
+        });
+        return;
+      }
+
       // Enforce real server-side 5-second watch timer (rejects forged/premature requests)
       const elapsedMs = now - Number(row.created_at || 0);
       if (elapsedMs < WATCH_EARN_MIN_ELAPSED_MS) {
@@ -2988,17 +3043,21 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       const rtxId = generateSecureId('rtx', 8);
       const bdtEquivalent = Number((rewardCoins / siteSettings.watchEarnCoinsPerBdt).toFixed(2));
+      const unitIdStr = String(existingObj.unitId || 'DH_REWARD');
+      const adTitleStr = String(existingObj.adTitle || `Reward Ad (${unitIdStr})`);
       const rtxPayload = {
         id: rtxId,
         sessionId,
         userId: user.uid,
         userEmail: getUserPrimaryIdentifier(user),
-        provider: String(existingObj.provider || 'PARTNER'),
+        unitId: unitIdStr,
+        adTitle: adTitleStr,
+        provider: String(existingObj.provider || 'DIGITAL_HUB'),
         type: 'watch_earn_credit',
         coins: rewardCoins,
         bdtEquivalent,
         status: 'Credited',
-        note: `Watch & Earn 5s verified view (${String(existingObj.unitId || 'AD')})`,
+        note: `${adTitleStr} — 5s verified (+${rewardCoins} coins)`,
         createdAt: now,
       };
       await db.run(

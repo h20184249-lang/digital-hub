@@ -792,9 +792,9 @@ export function AdminSettingsPanel({
             <input
               type="number"
               min={1}
-              value={draft.watchEarnCoinsPerAd ?? 10}
+              value={draft.watchEarnCoinsPerAd ?? 5}
               onChange={(e) =>
-                setDraft({ ...draft, watchEarnCoinsPerAd: Math.max(1, Number(e.target.value) || 10) })
+                setDraft({ ...draft, watchEarnCoinsPerAd: Math.max(1, Number(e.target.value) || 5) })
               }
               className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
             />

@@ -1126,6 +1126,7 @@ export async function startWatchEarnSessionServer(params: {
   unitId: string;
   provider: string;
   launchUrl?: string;
+  adTitle?: string;
 }): Promise<{
   ok: boolean;
   sessionId: string;
@@ -1158,7 +1159,7 @@ export async function startWatchEarnSessionServer(params: {
     sessionToken: data.sessionToken || '',
     status: data.status || 'watching',
     requiredSeconds: Number(data.requiredSeconds || 5),
-    rewardCoins: Number(data.rewardCoins || 10),
+    rewardCoins: Number(data.rewardCoins || 5),
     serverStartedAt: Number(data.serverStartedAt || Date.now()),
     requiresS2SCallback: data.requiresS2SCallback === true,
     message: data.message || '',
@@ -1294,7 +1295,7 @@ const EMPTY_WATCH_EARN_SUMMARY: WatchEarnSummaryPayload = {
   coinsEarnedToday: 0,
   dailyAdLimit: 5,
   dailyCoinLimit: 100,
-  coinsPerAd: 10,
+  coinsPerAd: 5,
   coinsPerBdt: 10,
   minRedeemCoins: 50,
   watchEarnEnabled: true,
@@ -1320,7 +1321,7 @@ export async function getWatchEarnSummaryServer(): Promise<WatchEarnSummaryPaylo
       coinsEarnedToday: Number(data.coinsEarnedToday || 0),
       dailyAdLimit: Number(data.dailyAdLimit || 5),
       dailyCoinLimit: Number(data.dailyCoinLimit || 100),
-      coinsPerAd: Number(data.coinsPerAd || 10),
+      coinsPerAd: Number(data.coinsPerAd || 5),
       coinsPerBdt: Number(data.coinsPerBdt || 10),
       minRedeemCoins: Number(data.minRedeemCoins || 50),
       watchEarnEnabled: data.watchEarnEnabled !== false,

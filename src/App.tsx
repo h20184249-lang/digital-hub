@@ -955,6 +955,7 @@ export default function App() {
               settings={settings}
               advertisements={advertisements}
               managedAdUnits={managedAdUnits}
+              adNetworks={adNetworks}
               onNavigate={setRoute}
               onOpenAuth={() => {
                 setAuthInitialMode('login');

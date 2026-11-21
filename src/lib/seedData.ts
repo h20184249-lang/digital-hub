@@ -61,7 +61,7 @@ export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   rewardedAdCooldownMinutes: 5,
   rewardedAdDailyLimit: 5,
   watchEarnEnabled: true,
-  watchEarnCoinsPerAd: 10,
+  watchEarnCoinsPerAd: 5,
   watchEarnCoinsPerBdt: 10,
   watchEarnDailyCoinLimit: 100,
   watchEarnMinRedeemCoins: 50,

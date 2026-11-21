@@ -415,6 +415,15 @@ export interface Banner {
   updatedAt?: unknown;
 }
 
+export type AdSlotCategory =
+  | 'main_ad'
+  | 'reward_ad'
+  | 'banner_ad'
+  | 'small_banner'
+  | 'medium_banner'
+  | 'large_banner'
+  | 'additional_ads';
+
 export type AdPlacementSlot =
   | 'top_header'
   | 'home_main'
@@ -425,16 +434,18 @@ export type AdPlacementSlot =
   | 'slider'
   | 'in_page'
   | 'footer'
-  | 'available_ads';
+  | 'available_ads'
+  | AdSlotCategory;
 
 export type ManagedAdUnitFormat = 'script_pop' | 'direct_link' | 'native_widget' | 'banner_iframe';
 export type ManagedAdUnitStatus = 'idle' | 'loading' | 'loaded' | 'blocked' | 'error';
-export type AdUnitProviderName = 'AFDERS' | 'ARWF' | 'BICEA' | 'AUCTIONR' | 'ASIAFILM';
+export type AdUnitProviderName = 'AFDERS' | 'ARWF' | 'BICEA' | 'AUCTIONR' | 'ASIAFILM' | 'DIGITAL_HUB';
 
 export interface ManagedAdUnitConfig {
   id: string;
   unitNumber: number;
   provider: AdUnitProviderName;
+  slotCategory?: AdSlotCategory;
   label: string;
   labelBn: string;
   format: ManagedAdUnitFormat;
@@ -484,6 +495,8 @@ export interface AdRewardTransaction {
   sessionId: string;
   userId: string;
   userEmail?: string;
+  unitId?: string;
+  adTitle?: string;
   provider: string;
   coins: number;
   bdtEquivalent: number;

@@ -531,8 +531,26 @@ export function createApiApp(): express.Express {
           settingsObj = {};
         }
       }
-      const coinsPerAd = Math.max(1, Math.floor(Number(settingsObj.watchEarnCoinsPerAd ?? 10) || 10));
+      const coinsPerAd = Math.max(1, Math.floor(Number(settingsObj.watchEarnCoinsPerAd ?? 5) || 5));
       const coinsPerBdt = Math.max(1, Number(settingsObj.watchEarnCoinsPerBdt ?? 10) || 10);
+
+      // Duplicate provider event ID prevention across all sessions
+      const dupEvent = await db.first<{ id: string }>(
+        `SELECT id FROM ad_viewing_sessions WHERE json_extract(payload_json, '$.providerEventId') = ? LIMIT 1`,
+        [providerEventId]
+      );
+      if (dupEvent) {
+        res.json({
+          ok: true,
+          recorded: true,
+          alreadyCredited: true,
+          credited: false,
+          coinsAwarded: 0,
+          provider: providerRaw,
+          sessionToken,
+        });
+        return;
+      }
 
       let payloadObj: Record<string, unknown> = {};
       try {
@@ -571,17 +589,21 @@ export function createApiApp(): express.Express {
         );
         const rtxId = `rtx_${now.toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
         const bdtEquivalent = Number((rewardCoins / coinsPerBdt).toFixed(2));
+        const unitIdStr = String(payloadObj.unitId || providerRaw.toUpperCase());
+        const adTitleStr = String(payloadObj.adTitle || `Reward Ad (${unitIdStr})`);
         const rtxPayload = {
           id: rtxId,
           sessionId: sessionRow.id,
           userId: sessionRow.user_id,
           userEmail: String(payloadObj.userEmail || ''),
+          unitId: unitIdStr,
+          adTitle: adTitleStr,
           provider: String(payloadObj.provider || providerRaw.toUpperCase()),
           type: 'watch_earn_credit',
           coins: rewardCoins,
           bdtEquivalent,
           status: 'Credited',
-          note: `S2S verified ad reward (+${rewardCoins} coins)`,
+          note: `S2S verified reward: ${adTitleStr} (+${rewardCoins} coins)`,
           createdAt: now,
         };
         await db.run(
