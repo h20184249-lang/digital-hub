@@ -410,13 +410,14 @@ export function HomepagePaymentSection({
 
   useEffect(() => {
     if (enabledMethods.length > 0 && !enabledMethods.includes(selectedMethod)) {
-      setSelectedMethod(enabledMethods[0]);
+      const next = enabledMethods[0];
+      if (next !== selectedMethod) setSelectedMethod(next);
     }
   }, [enabledMethods, selectedMethod]);
 
   useEffect(() => {
     if (profile?.phone && !senderNumber) {
-      setSenderNumber(profile.phone);
+      setSenderNumber((prev) => prev || profile.phone || '');
     }
   }, [profile?.phone, senderNumber]);
 

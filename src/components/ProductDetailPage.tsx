@@ -97,20 +97,23 @@ interface ProductDetailPageProps {
   onOrderSuccess: () => void;
 }
 
+const EMPTY_PAYMENT_METHODS: PaymentMethodConfig[] = [];
+const EMPTY_MANAGED_AD_UNITS: ManagedAdUnitConfig[] = [];
+
 export function ProductDetailPage({
   product,
   allProducts,
   categories,
   lang,
   settings,
-  paymentMethods = [],
+  paymentMethods = EMPTY_PAYMENT_METHODS,
   user,
   profile,
   wallet,
   banners,
   advertisements,
   adNetworks,
-  managedAdUnits = [],
+  managedAdUnits = EMPTY_MANAGED_AD_UNITS,
   reviews,
   onBack,
   onNavigate,
@@ -161,7 +164,8 @@ export function ProductDetailPage({
     if (method === 'wallet') return;
     const enabled = getEnabledPaymentMethods(settings, paymentMethods);
     if (!enabled.includes(method)) {
-      setMethod(enabled[0] || 'wallet');
+      const next = enabled[0] || 'wallet';
+      if (next !== method) setMethod(next);
     }
   }, [settings, paymentMethods, method]);
 

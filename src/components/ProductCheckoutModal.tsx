@@ -85,6 +85,10 @@ interface ProductCheckoutModalProps {
   onOrderSuccess: () => void;
 }
 
+const EMPTY_PAYMENT_METHODS: PaymentMethodConfig[] = [];
+const EMPTY_ADVERTISEMENTS: Advertisement[] = [];
+const EMPTY_AD_NETWORKS: AdNetworkConfig[] = [];
+
 export function ProductCheckoutModal({
   product,
   initialTab = 'details',
@@ -92,13 +96,13 @@ export function ProductCheckoutModal({
   onClose,
   lang,
   settings,
-  paymentMethods = [],
+  paymentMethods = EMPTY_PAYMENT_METHODS,
   user,
   profile,
   wallet,
   banners,
-  advertisements = [],
-  adNetworks = [],
+  advertisements = EMPTY_ADVERTISEMENTS,
+  adNetworks = EMPTY_AD_NETWORKS,
   reviews,
   onAddToCart,
   onOpenAuth,
@@ -143,7 +147,8 @@ export function ProductCheckoutModal({
     if (method === 'wallet') return;
     const enabled = getEnabledPaymentMethods(settings, paymentMethods);
     if (!enabled.includes(method)) {
-      setMethod(enabled[0] || 'wallet');
+      const next = enabled[0] || 'wallet';
+      if (next !== method) setMethod(next);
     }
   }, [settings, paymentMethods, method]);
 

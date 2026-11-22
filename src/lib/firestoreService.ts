@@ -1296,7 +1296,7 @@ export async function completeWatchEarnSessionServer(params: {
     coinsRedeemed: Number(data.coinsRedeemed || 0),
     adsWatchedToday: Number(data.adsWatchedToday || 0),
     coinsEarnedToday: Number(data.coinsEarnedToday || 0),
-    dailyAdLimit: Number(data.dailyAdLimit || 5),
+    dailyAdLimit: Number(data.dailyAdLimit || 10),
     dailyCoinLimit: Number(data.dailyCoinLimit || 100),
     message: data.message || '',
   };
@@ -1341,15 +1341,19 @@ export interface WatchEarnSummaryPayload {
   coinsLifetimeEarned: number;
   coinsRedeemed: number;
   adsWatchedToday: number;
+  remainingAdsToday: number;
   coinsEarnedToday: number;
   dailyAdLimit: number;
   dailyCoinLimit: number;
   coinsPerAd: number;
   coinsPerBdt: number;
   minRedeemCoins: number;
+  resetTimezone: string;
+  watchedUnitIdsToday: string[];
   watchEarnEnabled: boolean;
   creditedSessions: Array<{
     sessionId: string;
+    unitId?: string;
     provider: string;
     providerEventId: string;
     coins: number;
@@ -1362,12 +1366,15 @@ const EMPTY_WATCH_EARN_SUMMARY: WatchEarnSummaryPayload = {
   coinsLifetimeEarned: 0,
   coinsRedeemed: 0,
   adsWatchedToday: 0,
+  remainingAdsToday: 10,
   coinsEarnedToday: 0,
-  dailyAdLimit: 5,
+  dailyAdLimit: 10,
   dailyCoinLimit: 100,
   coinsPerAd: 5,
   coinsPerBdt: 10,
   minRedeemCoins: 50,
+  resetTimezone: 'Asia/Dhaka',
+  watchedUnitIdsToday: [],
   watchEarnEnabled: true,
   creditedSessions: [],
 };
@@ -1383,17 +1390,25 @@ export async function getWatchEarnSummaryServer(): Promise<WatchEarnSummaryPaylo
       return EMPTY_WATCH_EARN_SUMMARY;
     }
     const data = (await resp.json().catch(() => ({}))) as Partial<WatchEarnSummaryPayload>;
+    const adsWatchedToday = Number(data.adsWatchedToday || 0);
+    const dailyAdLimit = Number(data.dailyAdLimit || 10);
     return {
       coinsAvailable: Number(data.coinsAvailable || 0),
       coinsLifetimeEarned: Number(data.coinsLifetimeEarned || 0),
       coinsRedeemed: Number(data.coinsRedeemed || 0),
-      adsWatchedToday: Number(data.adsWatchedToday || 0),
+      adsWatchedToday,
+      remainingAdsToday:
+        typeof data.remainingAdsToday === 'number'
+          ? data.remainingAdsToday
+          : Math.max(0, dailyAdLimit - adsWatchedToday),
       coinsEarnedToday: Number(data.coinsEarnedToday || 0),
-      dailyAdLimit: Number(data.dailyAdLimit || 5),
+      dailyAdLimit,
       dailyCoinLimit: Number(data.dailyCoinLimit || 100),
       coinsPerAd: Number(data.coinsPerAd || 5),
       coinsPerBdt: Number(data.coinsPerBdt || 10),
       minRedeemCoins: Number(data.minRedeemCoins || 50),
+      resetTimezone: data.resetTimezone || 'Asia/Dhaka',
+      watchedUnitIdsToday: Array.isArray(data.watchedUnitIdsToday) ? data.watchedUnitIdsToday : [],
       watchEarnEnabled: data.watchEarnEnabled !== false,
       creditedSessions: Array.isArray(data.creditedSessions) ? data.creditedSessions : [],
     };
@@ -2662,16 +2677,24 @@ export async function adminSaveManagedAdUnit(unit: {
   priority: number;
   rotationSeconds: number;
   supportsRewardedVerification?: boolean;
+  originalUrl?: string;
+  rawScriptHtml?: string;
+  label?: string;
+  labelBn?: string;
 }): Promise<void> {
   await saveCatalogOverride('managedAdUnits', unit.id, {
     id: unit.id,
     enabled: Boolean(unit.enabled),
-    placements: unit.placements.slice(0, 12),
+    placements: unit.placements.slice(0, 17),
     showOnMobile: Boolean(unit.showOnMobile),
     showOnDesktop: Boolean(unit.showOnDesktop),
     priority: Math.max(1, Math.min(999, Number(unit.priority) || 1)),
     rotationSeconds: Math.max(5, Math.min(300, Number(unit.rotationSeconds) || 20)),
     supportsRewardedVerification: Boolean(unit.supportsRewardedVerification),
+    ...(unit.originalUrl ? { originalUrl: unit.originalUrl.trim() } : {}),
+    ...(unit.rawScriptHtml ? { rawScriptHtml: unit.rawScriptHtml } : {}),
+    ...(unit.label ? { label: unit.label.trim() } : {}),
+    ...(unit.labelBn ? { labelBn: unit.labelBn.trim() } : {}),
   });
 }
 

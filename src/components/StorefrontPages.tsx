@@ -38,6 +38,10 @@ import { ProductVisualArtwork } from './BrandLogos';
 import { BannerSlotView } from './BannerSlotView';
 import { NativeAdRow } from './AutomaticAdEngine';
 
+const EMPTY_ADVERTISEMENTS: Advertisement[] = [];
+const EMPTY_AD_NETWORKS: AdNetworkConfig[] = [];
+const EMPTY_BANNERS: Banner[] = [];
+
 interface ProductCardProps {
   product: Product;
   lang: Language;
@@ -219,8 +223,8 @@ export function CategoryCatalogPage({
   categories,
   products,
   banners,
-  advertisements = [],
-  adNetworks = [],
+  advertisements = EMPTY_ADVERTISEMENTS,
+  adNetworks = EMPTY_AD_NETWORKS,
   settings,
   lang,
   initialSearch = '',
@@ -664,9 +668,9 @@ export function CategoryCatalogPage({
 export function OffersPage({
   coupons,
   products,
-  banners = [],
-  advertisements = [],
-  adNetworks = [],
+  banners = EMPTY_BANNERS,
+  advertisements = EMPTY_ADVERTISEMENTS,
+  adNetworks = EMPTY_AD_NETWORKS,
   settings,
   lang,
   onSelectProduct,

@@ -148,6 +148,10 @@ function getWithdrawalBadgeStyle(status: WithdrawalStatus): string {
   }
 }
 
+const EMPTY_AD_REWARD_TXS: AdRewardTransaction[] = [];
+const EMPTY_WITHDRAWALS: WithdrawalRequest[] = [];
+const EMPTY_PAYMENT_METHODS: PaymentMethodConfig[] = [];
+
 export function WalletAndAddMoney({
   initialTab,
   lang,
@@ -155,9 +159,9 @@ export function WalletAndAddMoney({
   profile,
   wallet,
   walletTxs,
-  adRewardTransactions = [],
-  withdrawals = [],
-  paymentMethods = [],
+  adRewardTransactions = EMPTY_AD_REWARD_TXS,
+  withdrawals = EMPTY_WITHDRAWALS,
+  paymentMethods = EMPTY_PAYMENT_METHODS,
   settings,
   onNavigate,
   onOpenAuth,
@@ -186,13 +190,15 @@ export function WalletAndAddMoney({
   useEffect(() => {
     const enabledMethods = getEnabledPaymentMethods(settings, paymentMethods);
     if (enabledMethods.length > 0 && !enabledMethods.includes(method)) {
-      setMethod(enabledMethods[0]);
+      const next = enabledMethods[0];
+      if (next !== method) setMethod(next);
     }
   }, [settings, paymentMethods, method]);
 
   useEffect(() => {
     if (withdrawalMethods.length > 0 && !withdrawalMethods.some((m) => m.code === withdrawMethod)) {
-      setWithdrawMethod(withdrawalMethods[0].code);
+      const next = withdrawalMethods[0].code;
+      if (next !== withdrawMethod) setWithdrawMethod(next);
     }
   }, [withdrawalMethods, withdrawMethod]);
 

@@ -17,6 +17,7 @@ import {
   resolveAdBrowserUrl,
   tryAcquireAdLaunchLock,
 } from '../lib/adNavigation';
+import { getDhakaDateString } from '../lib/adProviderConfig';
 
 interface AdPlayerSectionProps {
   ads: Advertisement[];
@@ -31,7 +32,7 @@ export function AdPlayerSection({
   lang,
   placementFilter = 'player',
 }: AdPlayerSectionProps) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getDhakaDateString();
 
   const activeAds = useMemo(() => {
     return ads

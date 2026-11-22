@@ -48,9 +48,16 @@ const statusListeners = new Set<() => void>();
 // Global duplicate script execution guard so identical ad script URLs never execute twice on the same page
 const activeScriptOwners = new Map<string, string>();
 const scriptOwnerListeners = new Set<() => void>();
+let statusNotifyScheduled = false;
+let ownerNotifyScheduled = false;
 
 function notifyScriptOwnersChanged(): void {
-  scriptOwnerListeners.forEach((fn) => fn());
+  if (ownerNotifyScheduled) return;
+  ownerNotifyScheduled = true;
+  queueMicrotask(() => {
+    ownerNotifyScheduled = false;
+    scriptOwnerListeners.forEach((fn) => fn());
+  });
 }
 
 function claimScriptSlotLock(scriptUrl: string, instanceKey: string): boolean {
@@ -88,12 +95,21 @@ export function reportManagedUnitStatus(
   status: ManagedAdUnitStatus,
   error?: string
 ): void {
+  const existing = runtimeUnitStatuses.get(unitId);
+  if (existing && existing.status === status && (existing.error || '') === (error || '')) {
+    return;
+  }
   runtimeUnitStatuses.set(unitId, {
     status,
     error,
     updatedAt: new Date().toISOString(),
   });
-  statusListeners.forEach((fn) => fn());
+  if (statusNotifyScheduled) return;
+  statusNotifyScheduled = true;
+  queueMicrotask(() => {
+    statusNotifyScheduled = false;
+    statusListeners.forEach((fn) => fn());
+  });
 }
 
 export function getManagedUnitStatusSnapshot(): Record<string, ManagedUnitRuntimeStatus> {
@@ -139,7 +155,6 @@ function buildSandboxedSrcDoc(
   const safeFormat = JSON.stringify(unit.format);
   const safeContainerId = JSON.stringify(unit.containerId || '');
 
-  // Escape raw </script> inside inline JSON just in case, while keeping unit.rawScriptHtml verbatim.
   return `<!doctype html>
 <html>
 <head>
@@ -163,10 +178,6 @@ function buildSandboxedSrcDoc(
     max-width: 100%;
   }
 </style>
-<script>
-window.onerror = function() { return true; };
-window.addEventListener('unhandledrejection', function(e) { if (e && e.preventDefault) e.preventDefault(); });
-</script>
 </head>
 <body>
 <div id="dh-isolated-banner-${unit.id}" data-banner-slot="${slot}" style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;">
@@ -178,9 +189,11 @@ ${unit.rawScriptHtml}
   var slot = ${safeSlot};
   var format = ${safeFormat};
   var containerId = ${safeContainerId};
+  var wrapId = 'dh-isolated-banner-' + unitId;
   var settled = false;
   var scriptLoadSuccess = false;
   var scriptLoadFailed = false;
+  var lastScriptErr = '';
 
   function send(status, err) {
     if (settled && status === 'loaded') return;
@@ -191,6 +204,14 @@ ${unit.rawScriptHtml}
       window.parent.postMessage({ type: 'dh_ad_unit_status', unitId: unitId, slot: slot, status: status, error: err || '' }, '*');
     } catch (e) {}
   }
+
+  window.onerror = function(msg) {
+    lastScriptErr = typeof msg === 'string' ? msg : 'Ad script runtime error';
+    return true;
+  };
+  window.addEventListener('unhandledrejection', function(e) {
+    if (e && e.preventDefault) e.preventDefault();
+  });
 
   // Attach onload/onerror hooks to injected external script tags without duplicating any script request
   var scripts = document.querySelectorAll('script[src]');
@@ -203,41 +224,69 @@ ${unit.rawScriptHtml}
     });
     scripts[s].addEventListener('error', function() {
       scriptLoadFailed = true;
-      send('blocked', 'External ad script failed to load or was blocked');
+      send('blocked', 'External ad script failed to load or was blocked (403/network/adblocker)');
     });
   }
 
   window.addEventListener('error', function(ev) {
     if (ev && ev.target && ev.target.tagName === 'SCRIPT') {
       scriptLoadFailed = true;
-      send('blocked', 'External ad script failed to load or was blocked');
+      send('blocked', 'External ad script failed to load or was blocked (403/network/adblocker)');
       return;
     }
   }, true);
+
+  function isRealVisibleElement(el) {
+    if (!el || !el.tagName) return false;
+    var tag = el.tagName.toUpperCase();
+    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'META' || tag === 'LINK') {
+      return false;
+    }
+    if (el.id === wrapId) return false;
+    if (tag === 'IMG') {
+      return Boolean(el.complete && el.naturalWidth > 8 && el.naturalHeight > 8);
+    }
+    if (tag === 'IFRAME') {
+      var ir = el.getBoundingClientRect();
+      return Boolean((el.src || el.srcdoc) && ir.width > 12 && ir.height > 12);
+    }
+    if (tag === 'CANVAS' || tag === 'OBJECT' || tag === 'SVG' || tag === 'INS' || tag === 'A') {
+      var mr = el.getBoundingClientRect();
+      return mr.width > 12 && mr.height > 12;
+    }
+    return false;
+  }
 
   function hasVisibleAdContent() {
     if (!document.body) return false;
     if (containerId) {
       var cEl = document.getElementById(containerId);
-      if (cEl && (cEl.children.length > 0 || (cEl.innerHTML && cEl.innerHTML.trim().length > 0))) {
-        return true;
+      if (cEl) {
+        var cKids = cEl.querySelectorAll('iframe, img, canvas, object, ins, a, div');
+        for (var k = 0; k < cKids.length; k++) {
+          if (isRealVisibleElement(cKids[k])) return true;
+          var kr = cKids[k].getBoundingClientRect();
+          if (cKids[k].tagName === 'DIV' && kr.width > 12 && kr.height > 12 && cKids[k].innerText && cKids[k].innerText.trim().length > 0) {
+            return true;
+          }
+        }
       }
     }
-    var iframes = document.body.querySelectorAll('iframe, img, canvas, object, ins, a');
-    for (var j = 0; j < iframes.length; j++) {
-      var el = iframes[j];
-      var rect = el.getBoundingClientRect();
-      if (rect.width > 12 && rect.height > 12) return true;
-      if (el.tagName === 'IFRAME' && (el.src || el.srcdoc)) return true;
+    var mediaNodes = document.body.querySelectorAll('iframe, img, canvas, object, ins, svg, a');
+    for (var j = 0; j < mediaNodes.length; j++) {
+      if (isRealVisibleElement(mediaNodes[j])) return true;
     }
-    var nodes = document.body.children;
-    for (var i = 0; i < nodes.length; i++) {
-      var node = nodes[i];
-      var tag = node.tagName;
-      if (tag && tag !== 'SCRIPT' && tag !== 'STYLE') {
-        var r = node.getBoundingClientRect();
-        if (r.width > 12 && r.height > 12 && (node.children.length > 0 || (node.innerHTML && node.innerHTML.trim().length > 0))) {
-          return true;
+    var wrap = document.getElementById(wrapId);
+    if (wrap) {
+      var innerChildren = wrap.children;
+      for (var c = 0; c < innerChildren.length; c++) {
+        var child = innerChildren[c];
+        var tag = child.tagName ? child.tagName.toUpperCase() : '';
+        if (tag !== 'SCRIPT' && tag !== 'STYLE' && child.id !== containerId) {
+          var cr = child.getBoundingClientRect();
+          if (cr.width > 12 && cr.height > 12 && (child.querySelector('iframe, img, a, ins') || (child.innerText && child.innerText.trim().length > 0))) {
+            return true;
+          }
         }
       }
     }
@@ -248,10 +297,15 @@ ${unit.rawScriptHtml}
     if (settled) return;
     if (hasVisibleAdContent()) {
       send('loaded', '');
-    } else if (scriptLoadSuccess && format === 'script_pop') {
+    } else if (scriptLoadSuccess && format === 'script_pop' && !scriptLoadFailed) {
       send('loaded', '');
-    } else if (scriptLoadFailed || isFinal) {
-      send('blocked', 'Ad script did not render or was blocked by network/adblocker');
+    } else if (scriptLoadFailed) {
+      send('blocked', lastScriptErr || 'External ad script failed to load or was blocked (403/network/adblocker)');
+    } else if (isFinal) {
+      send(
+        lastScriptErr ? 'error' : 'blocked',
+        lastScriptErr || 'Ad script did not render visible content (blocked or empty inventory)'
+      );
     }
   }
 
@@ -267,9 +321,9 @@ ${unit.rawScriptHtml}
     }
   } catch (e) {}
 
-  setTimeout(function() { inspectRendered(false); }, 800);
-  setTimeout(function() { inspectRendered(false); }, 2000);
-  setTimeout(function() { inspectRendered(false); }, 3400);
+  setTimeout(function() { inspectRendered(false); }, 900);
+  setTimeout(function() { inspectRendered(false); }, 2200);
+  setTimeout(function() { inspectRendered(false); }, 3500);
   setTimeout(function() { inspectRendered(true); }, 4800);
 })();
 </script>
@@ -311,11 +365,12 @@ export function AdUnitCardOrBanner({
 
   useEffect(() => {
     if (!isScriptBackedType || !unit.originalUrl) {
-      setDuplicateSkipped(false);
+      setDuplicateSkipped((prev) => (prev ? false : prev));
       return;
     }
     const acquired = claimScriptSlotLock(unit.originalUrl, instanceKey);
-    setDuplicateSkipped(!acquired);
+    const nextSkipped = !acquired;
+    setDuplicateSkipped((prev) => (prev === nextSkipped ? prev : nextSkipped));
     return () => {
       if (acquired) {
         releaseScriptSlotLock(unit.originalUrl, instanceKey);
@@ -337,7 +392,7 @@ export function AdUnitCardOrBanner({
     if (!el) return;
     const measure = () => {
       const w = Math.floor(el.getBoundingClientRect().width);
-      if (w > 0) setContainerWidth(w);
+      if (w > 0) setContainerWidth((prev) => (prev === w ? prev : w));
     };
     measure();
     if (typeof ResizeObserver !== 'undefined') {
@@ -358,13 +413,13 @@ export function AdUnitCardOrBanner({
 
   useEffect(() => {
     if (unit.format === 'direct_link' || duplicateSkipped) {
-      setStatus('loaded');
+      setStatus((prev) => (prev === 'loaded' ? prev : 'loaded'));
       reportManagedUnitStatus(unit.id, 'loaded');
       onStatusChange?.(unit.id, 'loaded');
       return;
     }
-    setStatus('loading');
-    setErrorReason('');
+    setStatus((prev) => (prev === 'loading' ? prev : 'loading'));
+    setErrorReason((prev) => (prev === '' ? prev : ''));
     reportManagedUnitStatus(unit.id, 'loading');
     onStatusChange?.(unit.id, 'loading');
 
@@ -378,10 +433,12 @@ export function AdUnitCardOrBanner({
       } | null;
       if (!data || data.type !== 'dh_ad_unit_status') return;
       if (data.unitId === unit.id && data.slot === slot && data.status) {
-        setStatus(data.status);
-        setErrorReason(data.error || '');
-        reportManagedUnitStatus(unit.id, data.status, data.error);
-        onStatusChange?.(unit.id, data.status, data.error);
+        const nextStatus = data.status;
+        const nextErr = data.error || '';
+        setStatus((prev) => (prev === nextStatus ? prev : nextStatus));
+        setErrorReason((prev) => (prev === nextErr ? prev : nextErr));
+        reportManagedUnitStatus(unit.id, nextStatus, data.error);
+        onStatusChange?.(unit.id, nextStatus, data.error);
       }
     };
     window.addEventListener('message', handler);
@@ -654,6 +711,7 @@ const SLOT_UNIT_PREFERENCE: Partial<Record<AdPlacementSlot, string[]>> = {
   in_page: ['UNIT_08', 'UNIT_03', 'UNIT_12', 'UNIT_16'],
   product_page: ['UNIT_05', 'UNIT_08', 'UNIT_03', 'UNIT_14'],
   dashboard: ['UNIT_07', 'UNIT_08', 'UNIT_13', 'UNIT_23'],
+  watch_earn: ['UNIT_07', 'UNIT_08', 'UNIT_05', 'UNIT_09'],
   footer: ['UNIT_07', 'UNIT_09', 'UNIT_21'],
   sidebar: ['UNIT_06', 'UNIT_25', 'UNIT_08'],
 };

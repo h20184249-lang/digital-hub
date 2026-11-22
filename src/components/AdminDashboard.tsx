@@ -136,6 +136,8 @@ type AdminSection =
   | 'backup'
   | 'storefront';
 
+const EMPTY_PAYMENT_METHODS: PaymentMethodConfig[] = [];
+
 export function AdminDashboard({
   lang,
   setLang,
@@ -150,7 +152,7 @@ export function AdminDashboard({
   advertisements,
   managedAdUnits,
   banners,
-  paymentMethods = [],
+  paymentMethods = EMPTY_PAYMENT_METHODS,
   settings,
 }: AdminDashboardProps) {
   const [section, setSection] = useState<AdminSection>('overview');

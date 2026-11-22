@@ -116,6 +116,19 @@ interface EffectiveSiteSettings {
   watchEarnMinRedeemCoins: number;
 }
 
+function getDhakaDateString(ms: number = Date.now()): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Dhaka',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(ms));
+  } catch {
+    return new Date(ms + 6 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
+}
+
 interface AttemptRow {
   attempt_key: string;
   attempts: number;
@@ -317,7 +330,7 @@ async function getGlobalSiteSettings(db: AppDatabase): Promise<EffectiveSiteSett
     watchEarnCoinsPerAd: Math.max(1, Math.floor(Number(raw.watchEarnCoinsPerAd ?? 5) || 5)),
     watchEarnCoinsPerBdt: Math.max(1, Number(raw.watchEarnCoinsPerBdt ?? 10) || 10),
     watchEarnDailyCoinLimit: Math.max(10, Math.floor(Number(raw.watchEarnDailyCoinLimit ?? 100) || 100)),
-    rewardedAdDailyLimit: Math.max(1, Math.floor(Number(raw.rewardedAdDailyLimit ?? 5) || 5)),
+    rewardedAdDailyLimit: Math.min(20, Math.max(1, Math.floor(Number(raw.rewardedAdDailyLimit ?? 10) || 10))),
     watchEarnMinRedeemCoins: Math.max(10, Math.floor(Number(raw.watchEarnMinRedeemCoins ?? 50) || 50)),
   };
 }
@@ -2743,9 +2756,10 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         return;
       }
       const now = Date.now();
-      const claimDate = new Date(now).toISOString().slice(0, 10);
+      const siteSettings = await getGlobalSiteSettings(db);
+      const claimDate = getDhakaDateString(now);
       const id = generateSecureId('rcl', 8);
-      const amountBdt = 2;
+      const amountBdt = Math.max(1, Number(siteSettings.rewardedAdEnabled ? 2 : 0) || 2);
       const payload = {
         id,
         userId: user.uid,
@@ -2768,7 +2782,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         claimId: id,
         amountBdt,
         dailyCount: 1,
-        dailyLimit: 5,
+        dailyLimit: siteSettings.rewardedAdDailyLimit,
         status: 'Pending Credit',
       });
     } catch (err) {
@@ -2781,7 +2795,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
   const WATCH_EARN_SESSION_TTL_MS = 10 * 60 * 1000;
 
   async function computeWatchEarnUserStats(db: AppDatabase, userId: string, siteSettings: EffectiveSiteSettings) {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = getDhakaDateString();
     const [bal, creditedRows] = await Promise.all([
       db.first<{
         coins_available: number;
@@ -2791,25 +2805,36 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         userId,
       ]),
       db.all<{ id: string; payload_json: string; updated_at: number }>(
-        `SELECT id, payload_json, updated_at FROM ad_viewing_sessions WHERE user_id = ? AND LOWER(status) = 'credited' ORDER BY updated_at DESC LIMIT 100`,
+        `SELECT id, payload_json, updated_at FROM ad_viewing_sessions WHERE user_id = ? AND LOWER(status) = 'credited' ORDER BY updated_at DESC LIMIT 200`,
         [userId]
       ),
     ]);
 
     let adsWatchedToday = 0;
     let coinsEarnedToday = 0;
+    const watchedUnitIdSet = new Set<string>();
     const creditedSessions = creditedRows.map((r) => {
       const obj = parseJsonSafe<Record<string, unknown>>(r.payload_json, {});
       const coins = Number(obj.coinsAwarded || 0);
       const creditedAtStr = String(
         obj.creditedAt || (r.updated_at ? new Date(r.updated_at).toISOString() : '')
       );
-      if (creditedAtStr.slice(0, 10) === todayStr) {
+      const verifiedMs = Number(obj.verifiedAt || r.updated_at || Date.parse(creditedAtStr) || 0);
+      const sessionDhakaDate =
+        typeof obj.dhakaDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(obj.dhakaDate)
+          ? obj.dhakaDate
+          : verifiedMs > 0
+            ? getDhakaDateString(verifiedMs)
+            : '';
+      if (sessionDhakaDate === todayStr) {
         adsWatchedToday += 1;
         coinsEarnedToday += coins;
+        const uidVal = String(obj.unitId || '').trim();
+        if (uidVal) watchedUnitIdSet.add(uidVal);
       }
       return {
         sessionId: String(obj.id || r.id || ''),
+        unitId: String(obj.unitId || ''),
         provider: String(obj.provider || ''),
         providerEventId: String(obj.providerEventId || ''),
         coins,
@@ -2817,17 +2842,23 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       };
     });
 
+    const watchedUnitIdsToday = Array.from(watchedUnitIdSet);
+    const remainingAdsToday = Math.max(0, siteSettings.rewardedAdDailyLimit - adsWatchedToday);
+
     return {
       coinsAvailable: Number(bal?.coins_available || 0),
       coinsLifetimeEarned: Number(bal?.coins_lifetime_earned || 0),
       coinsRedeemed: Number(bal?.coins_redeemed || 0),
       adsWatchedToday,
+      remainingAdsToday,
       coinsEarnedToday,
       dailyAdLimit: siteSettings.rewardedAdDailyLimit,
       dailyCoinLimit: siteSettings.watchEarnDailyCoinLimit,
       coinsPerAd: siteSettings.watchEarnCoinsPerAd,
       coinsPerBdt: siteSettings.watchEarnCoinsPerBdt,
       minRedeemCoins: siteSettings.watchEarnMinRedeemCoins,
+      resetTimezone: 'Asia/Dhaka',
+      watchedUnitIdsToday,
       watchEarnEnabled: siteSettings.watchEarnEnabled && siteSettings.rewardedAdEnabled && siteSettings.adsEnabled,
       creditedSessions: creditedSessions.slice(0, 50),
     };
@@ -2949,6 +2980,14 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       }
 
       const stats = await computeWatchEarnUserStats(db, user.uid, siteSettings);
+      if (stats.watchedUnitIdsToday.some((id) => id.toLowerCase() === unitId.toLowerCase())) {
+        res.status(409).json({
+          ok: false,
+          error:
+            'এই বিজ্ঞাপনটি আজ ইতিমধ্যে দেখা হয়েছে। প্রতিটি বিজ্ঞাপন প্রতিদিন একবারই দেখা যাবে (রিসেট: রাত ১২টা Asia/Dhaka)।',
+        });
+        return;
+      }
       if (stats.adsWatchedToday >= stats.dailyAdLimit) {
         res.status(429).json({
           ok: false,
@@ -3188,6 +3227,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       }
 
       const creditedAtIso = new Date(now).toISOString();
+      const dhakaDate = getDhakaDateString(now);
       const completedPayload = {
         ...existingObj,
         status: 'credited',
@@ -3195,6 +3235,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         failureReason: '',
         watchedDurationMs: elapsedMs,
         verifiedAt: now,
+        dhakaDate,
         creditedAt: creditedAtIso,
         updatedAt: now,
       };
@@ -6180,6 +6221,43 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           trending: Boolean(body.data.trending),
           visible: body.data.visible !== false,
           updatedAt: Number(body.data.updatedAt || now),
+        };
+      }
+
+      if (col === 'settings' && docId === 'global') {
+        payloadToSave = {
+          ...payloadToSave,
+          rewardedAdDailyLimit: Math.min(20, Math.max(1, Math.floor(Number(payloadToSave.rewardedAdDailyLimit ?? 10) || 10))),
+          watchEarnCoinsPerAd: Math.max(1, Math.floor(Number(payloadToSave.watchEarnCoinsPerAd ?? 5) || 5)),
+          watchEarnCoinsPerBdt: Math.max(1, Math.floor(Number(payloadToSave.watchEarnCoinsPerBdt ?? 10) || 10)),
+        };
+      }
+
+      if (col === 'managedAdUnits') {
+        const rawUrl = String(body.data.originalUrl || '').trim();
+        let safeUrl: string | undefined;
+        if (rawUrl) {
+          try {
+            const parsedUrl = new URL(rawUrl);
+            if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
+              res.status(400).json({ ok: false, error: 'Ad URL must start with https:// or http://.' });
+              return;
+            }
+            safeUrl = parsedUrl.toString().slice(0, 600);
+          } catch {
+            res.status(400).json({ ok: false, error: 'Invalid Ad URL format.' });
+            return;
+          }
+        }
+        payloadToSave = {
+          ...payloadToSave,
+          ...(safeUrl ? { originalUrl: safeUrl } : {}),
+          ...(typeof body.data.label === 'string' && body.data.label.trim()
+            ? { label: body.data.label.trim().slice(0, 140) }
+            : {}),
+          ...(typeof body.data.labelBn === 'string' && body.data.labelBn.trim()
+            ? { labelBn: body.data.labelBn.trim().slice(0, 140) }
+            : {}),
         };
       }
 

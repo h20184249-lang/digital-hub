@@ -1,7 +1,23 @@
 import { AdPlacementSlot, AdSlotCategory, ManagedAdUnitConfig } from '../types/marketplace';
 
 /**
- * Centralized 24-Unit Advertisement Provider Configuration for DIGITAL HUB.
+ * Returns YYYY-MM-DD in Asia/Dhaka (UTC+6) timezone for consistent daily reset enforcement.
+ */
+export function getDhakaDateString(ms: number = Date.now()): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Dhaka',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(ms));
+  } catch {
+    return new Date(ms + 6 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * Centralized 25-Unit Advertisement Provider Configuration for DIGITAL HUB.
  * Every script snippet, key, dimension, and URL is preserved verbatim as provided,
  * organized into all 7 dedicated slots (Main Ad, Reward Ad, Banner Ad, Small Banner,
  * Medium Banner, Large Banner, Additional Ads) alongside existing page placements.
@@ -100,7 +116,7 @@ export const DIGITAL_HUB_AD_PROVIDER_CONFIG: ManagedAdUnitConfig[] = [
     rawScriptHtml: `<script type="text/javascript">\n  atOptions = {\n    'key' : 'c4bf83d2d9461da3b65434ab9cb069b2',\n    'format' : 'iframe',\n    'height' : 60,\n    'width' : 468,\n    'params' : {}\n  };\n</script>\n<script type="text/javascript" src="https://bicea.org/22/c4bf83d2d9461da3b65434ab9cb069b2"></script>`,
     bannerKey: 'c4bf83d2d9461da3b65434ab9cb069b2',
     dimensions: { width: 468, height: 60 },
-    placements: ['banner_ad', 'home_main', 'product_page', 'top_header', 'available_ads'],
+    placements: ['banner_ad', 'home_main', 'product_page', 'top_header', 'watch_earn', 'available_ads'],
     enabled: true,
     showOnMobile: false,
     showOnDesktop: true,
@@ -142,7 +158,7 @@ export const DIGITAL_HUB_AD_PROVIDER_CONFIG: ManagedAdUnitConfig[] = [
     rawScriptHtml: `<script type="text/javascript">\n  atOptions = {\n    'key' : 'd52bffca0f57877e5c3484d841ec54f5',\n    'format' : 'iframe',\n    'height' : 50,\n    'width' : 320,\n    'params' : {}\n  };\n</script>\n<script type="text/javascript" src="https://bicea.org/22/d52bffca0f57877e5c3484d841ec54f5"></script>`,
     bannerKey: 'd52bffca0f57877e5c3484d841ec54f5',
     dimensions: { width: 320, height: 50 },
-    placements: ['small_banner', 'top_header', 'home_main', 'dashboard', 'footer', 'available_ads'],
+    placements: ['small_banner', 'top_header', 'home_main', 'dashboard', 'watch_earn', 'footer', 'available_ads'],
     enabled: true,
     showOnMobile: true,
     showOnDesktop: true,
@@ -163,7 +179,7 @@ export const DIGITAL_HUB_AD_PROVIDER_CONFIG: ManagedAdUnitConfig[] = [
     rawScriptHtml: `<script type="text/javascript">\n  atOptions = {\n    'key' : '2cd463fab01f3edc4d1f999b8de3f123',\n    'format' : 'iframe',\n    'height' : 250,\n    'width' : 300,\n    'params' : {}\n  };\n</script>\n<script type="text/javascript" src="https://bicea.org/22/2cd463fab01f3edc4d1f999b8de3f123"></script>`,
     bannerKey: '2cd463fab01f3edc4d1f999b8de3f123',
     dimensions: { width: 300, height: 250 },
-    placements: ['medium_banner', 'in_page', 'product_page', 'home_main', 'dashboard', 'sidebar', 'available_ads'],
+    placements: ['medium_banner', 'in_page', 'product_page', 'home_main', 'dashboard', 'watch_earn', 'sidebar', 'available_ads'],
     enabled: true,
     showOnMobile: true,
     showOnDesktop: true,
@@ -184,7 +200,7 @@ export const DIGITAL_HUB_AD_PROVIDER_CONFIG: ManagedAdUnitConfig[] = [
     rawScriptHtml: `<script type="text/javascript">\n  atOptions = {\n    'key' : '1fe50aa0dbf28f9adfec33dad03332ce',\n    'format' : 'iframe',\n    'height' : 90,\n    'width' : 728,\n    'params' : {}\n  };\n</script>\n<script type="text/javascript" src="https://bicea.org/22/1fe50aa0dbf28f9adfec33dad03332ce"></script>`,
     bannerKey: '1fe50aa0dbf28f9adfec33dad03332ce',
     dimensions: { width: 728, height: 90 },
-    placements: ['large_banner', 'top_header', 'home_main', 'footer', 'available_ads'],
+    placements: ['large_banner', 'top_header', 'home_main', 'watch_earn', 'footer', 'available_ads'],
     enabled: true,
     showOnMobile: false,
     showOnDesktop: true,
@@ -679,8 +695,23 @@ export function mergeAdUnitsWithOverrides(overrides: ManagedAdUnitConfig[]): Man
   return DIGITAL_HUB_AD_PROVIDER_CONFIG.map((base) => {
     const ov = overrideMap.get(base.id);
     if (!ov) return base;
+    const nextUrl =
+      typeof ov.originalUrl === 'string' && ov.originalUrl.trim() ? ov.originalUrl.trim() : base.originalUrl;
+    let nextRawScriptHtml =
+      typeof ov.rawScriptHtml === 'string' && ov.rawScriptHtml.trim() ? ov.rawScriptHtml : base.rawScriptHtml;
+    if (nextUrl !== base.originalUrl && (!ov.rawScriptHtml || !ov.rawScriptHtml.trim())) {
+      if (base.format === 'direct_link') {
+        nextRawScriptHtml = nextUrl;
+      } else if (base.rawScriptHtml.includes(base.originalUrl)) {
+        nextRawScriptHtml = base.rawScriptHtml.replace(base.originalUrl, nextUrl);
+      }
+    }
     return {
       ...base,
+      label: typeof ov.label === 'string' && ov.label.trim() ? ov.label.trim() : base.label,
+      labelBn: typeof ov.labelBn === 'string' && ov.labelBn.trim() ? ov.labelBn.trim() : base.labelBn,
+      originalUrl: nextUrl,
+      rawScriptHtml: nextRawScriptHtml,
       enabled: typeof ov.enabled === 'boolean' ? ov.enabled : base.enabled,
       placements: Array.isArray(ov.placements) && ov.placements.length > 0 ? ov.placements : base.placements,
       slotCategory: ov.slotCategory || base.slotCategory,

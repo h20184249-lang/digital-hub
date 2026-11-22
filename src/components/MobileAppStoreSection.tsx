@@ -270,7 +270,8 @@ export function MobileAppStoreSection({
   useEffect(() => {
     if (paymentMethod === 'wallet') return;
     if (!enabledManualMethods.includes(paymentMethod)) {
-      setPaymentMethod(enabledManualMethods[0] || 'wallet');
+      const next = enabledManualMethods[0] || 'wallet';
+      if (next !== paymentMethod) setPaymentMethod(next);
     }
   }, [enabledManualMethods, paymentMethod]);
 

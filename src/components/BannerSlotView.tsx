@@ -13,6 +13,7 @@ import { trackAdEvent } from '../lib/firestoreService';
 import { PublisherScriptSlot } from './AutomaticAdEngine';
 import { resolveStudioImage, STUDIO_IMAGES } from '../lib/studioAssets';
 import { resolveAdBrowserUrl, tryAcquireAdLaunchLock } from '../lib/adNavigation';
+import { getDhakaDateString } from '../lib/adProviderConfig';
 
 interface BannerSlotViewProps {
   slot: BannerSlot;
@@ -23,15 +24,17 @@ interface BannerSlotViewProps {
   className?: string;
 }
 
+const EMPTY_AD_NETWORKS: AdNetworkConfig[] = [];
+
 export function BannerSlotView({
   slot,
   banners,
-  adNetworks = [],
+  adNetworks = EMPTY_AD_NETWORKS,
   adsEnabled,
   lang,
   className = '',
 }: BannerSlotViewProps) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getDhakaDateString();
 
   const slotBanners = useMemo(() => {
     const seenUrls = new Set<string>();

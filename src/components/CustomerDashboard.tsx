@@ -88,6 +88,7 @@ import { BannerSlotView } from './BannerSlotView';
 import { NativeAdRow } from './AutomaticAdEngine';
 import { ManagedPlacementSlot } from './AdUnitFrame';
 import { PaymentProviderLogo } from './BrandLogos';
+import { getDhakaDateString } from '../lib/adProviderConfig';
 
 interface CustomerDashboardProps {
   initialTab?:
@@ -131,6 +132,17 @@ interface CustomerDashboardProps {
   onLogout: () => Promise<void>;
 }
 
+const EMPTY_WALLET_TXS: WalletTransaction[] = [];
+const EMPTY_AD_REWARD_TXS: AdRewardTransaction[] = [];
+const EMPTY_STRING_IDS: string[] = [];
+const EMPTY_MOBILE_APPS: MobileAppItem[] = [];
+const EMPTY_WITHDRAWALS: WithdrawalRequest[] = [];
+const EMPTY_REWARD_CLAIMS: RewardedAdClaim[] = [];
+const EMPTY_ANNOUNCEMENTS: Announcement[] = [];
+const EMPTY_ADVERTISEMENTS: Advertisement[] = [];
+const EMPTY_AD_NETWORKS: AdNetworkConfig[] = [];
+const EMPTY_MANAGED_AD_UNITS: ManagedAdUnitConfig[] = [];
+
 export function CustomerDashboard({
   initialTab = 'overview',
   lang,
@@ -138,24 +150,24 @@ export function CustomerDashboard({
   user,
   profile,
   wallet,
-  walletTxs = [],
-  adRewardTransactions = [],
-  favoriteAppIds = [],
+  walletTxs = EMPTY_WALLET_TXS,
+  adRewardTransactions = EMPTY_AD_REWARD_TXS,
+  favoriteAppIds = EMPTY_STRING_IDS,
   totalDownloads = 0,
-  mobileApps = [],
+  mobileApps = EMPTY_MOBILE_APPS,
   orders,
   payments,
   referrals,
-  withdrawals = [],
-  rewardClaims = [],
-  announcements = [],
+  withdrawals = EMPTY_WITHDRAWALS,
+  rewardClaims = EMPTY_REWARD_CLAIMS,
+  announcements = EMPTY_ANNOUNCEMENTS,
   coupons,
   notifications,
   tickets,
   banners,
-  advertisements = [],
-  adNetworks = [],
-  managedAdUnits = [],
+  advertisements = EMPTY_ADVERTISEMENTS,
+  adNetworks = EMPTY_AD_NETWORKS,
+  managedAdUnits = EMPTY_MANAGED_AD_UNITS,
   settings,
   isAdmin,
   onNavigate,
@@ -1410,8 +1422,8 @@ export function CustomerDashboard({
                 </h2>
                 <p className="text-xs text-[#777777]">
                   {lang === 'bn'
-                    ? `প্রতি ভেরিফায়েড রিওয়ার্ড ক্লেইমে ৳${settings.rewardedAdAmountBdt ?? 2} · দৈনিক সীমা: ${settings.rewardedAdDailyLimit ?? 5}টি · কুলডাউন: ${settings.rewardedAdCooldownMinutes ?? 5} মিনিট। (Google AdSense কখনোই রিওয়ার্ডেড হিসেবে ব্যবহার করা হয় না)`
-                    : `Earn ৳${settings.rewardedAdAmountBdt ?? 2} per verified incentivized ad claim · Daily cap: ${settings.rewardedAdDailyLimit ?? 5} · Cooldown: ${settings.rewardedAdCooldownMinutes ?? 5}m. (Google AdSense is strictly excluded from incentivized clicks)`}
+                    ? `প্রতি ভেরিফায়েড রিওয়ার্ড ক্লেইমে ৳${settings.rewardedAdAmountBdt ?? 2} · দৈনিক সীমা: ${settings.rewardedAdDailyLimit ?? 10}টি · কুলডাউন: ${settings.rewardedAdCooldownMinutes ?? 5} মিনিট। (Google AdSense কখনোই রিওয়ার্ডেড হিসেবে ব্যবহার করা হয় না)`
+                    : `Earn ৳${settings.rewardedAdAmountBdt ?? 2} per verified incentivized ad claim · Daily cap: ${settings.rewardedAdDailyLimit ?? 10} · Cooldown: ${settings.rewardedAdCooldownMinutes ?? 5}m. (Google AdSense is strictly excluded from incentivized clicks)`}
                 </p>
               </div>
               <button
@@ -1438,9 +1450,9 @@ export function CustomerDashboard({
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {incentivizedNetworks.map((net) => {
-                  const todayStr = new Date().toISOString().slice(0, 10);
+                  const todayStr = getDhakaDateString();
                   const todayCount = rewardClaims.filter((c) => c.claimDate === todayStr && c.status !== 'Rejected').length;
-                  const limit = settings.rewardedAdDailyLimit ?? 5;
+                  const limit = settings.rewardedAdDailyLimit ?? 10;
                   return (
                     <div
                       key={net.id}

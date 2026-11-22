@@ -63,6 +63,8 @@ interface CartDrawerProps {
   onOrderSuccess: () => void;
 }
 
+const EMPTY_PAYMENT_METHODS: PaymentMethodConfig[] = [];
+
 export function CartDrawer({
   open,
   onClose,
@@ -72,7 +74,7 @@ export function CartDrawer({
   onClearCart,
   coupons,
   settings,
-  paymentMethods = [],
+  paymentMethods = EMPTY_PAYMENT_METHODS,
   lang,
   user,
   profile,
@@ -100,7 +102,8 @@ export function CartDrawer({
     if (method === 'wallet') return;
     const enabled = getEnabledPaymentMethods(settings, paymentMethods);
     if (!enabled.includes(method)) {
-      setMethod(enabled[0] || 'wallet');
+      const next = enabled[0] || 'wallet';
+      if (next !== method) setMethod(next);
     }
   }, [settings, paymentMethods, method]);
 

@@ -830,13 +830,17 @@ export function AdminSettingsPanel({
             />
           </div>
           <div>
-            <label className="block font-bold mb-1">Daily Ad Limit</label>
+            <label className="block font-bold mb-1">Daily Ad Limit (Max 20)</label>
             <input
               type="number"
               min={1}
-              value={draft.rewardedAdDailyLimit ?? 5}
+              max={20}
+              value={draft.rewardedAdDailyLimit ?? 10}
               onChange={(e) =>
-                setDraft({ ...draft, rewardedAdDailyLimit: Math.max(1, Number(e.target.value) || 5) })
+                setDraft({
+                  ...draft,
+                  rewardedAdDailyLimit: Math.min(20, Math.max(1, Number(e.target.value) || 10)),
+                })
               }
               className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
             />

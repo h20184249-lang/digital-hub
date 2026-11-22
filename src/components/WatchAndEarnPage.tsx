@@ -35,10 +35,12 @@ import {
   WatchEarnSummaryPayload,
 } from '../lib/firestoreService';
 import { resolveAdBrowserUrl } from '../lib/adNavigation';
+import { getDhakaDateString } from '../lib/adProviderConfig';
 import { ManagedPlacementSlot } from './AdUnitFrame';
 import {
   ActiveAdSessionStatusPanel,
   buildWatchableAdItems,
+  loadWatchedUnitIdsToday,
   useExternalWatchAdController,
   WatchRewardCompletionResult,
 } from './WatchEarnWidgets';
@@ -58,15 +60,18 @@ interface WatchAndEarnPageProps {
   onOpenAuth: () => void;
 }
 
+const EMPTY_ADVERTISEMENTS: Advertisement[] = [];
+const EMPTY_AD_NETWORKS: AdNetworkConfig[] = [];
+
 export function WatchAndEarnPage({
   lang,
   user,
   profile,
   wallet,
   settings,
-  advertisements = [],
+  advertisements = EMPTY_ADVERTISEMENTS,
   managedAdUnits,
-  adNetworks = [],
+  adNetworks = EMPTY_AD_NETWORKS,
   viewingSessions,
   rewardTransactions,
   onNavigate,
@@ -77,15 +82,19 @@ export function WatchAndEarnPage({
     coinsLifetimeEarned: 0,
     coinsRedeemed: 0,
     adsWatchedToday: 0,
+    remainingAdsToday: Math.min(20, Math.max(1, settings.rewardedAdDailyLimit ?? 10)),
     coinsEarnedToday: 0,
-    dailyAdLimit: Math.max(1, settings.rewardedAdDailyLimit ?? 5),
+    dailyAdLimit: Math.min(20, Math.max(1, settings.rewardedAdDailyLimit ?? 10)),
     dailyCoinLimit: Math.max(10, settings.watchEarnDailyCoinLimit ?? 100),
     coinsPerAd: Math.max(1, settings.watchEarnCoinsPerAd ?? 5),
     coinsPerBdt: Math.max(1, settings.watchEarnCoinsPerBdt ?? 10),
     minRedeemCoins: Math.max(10, settings.watchEarnMinRedeemCoins ?? 50),
+    resetTimezone: 'Asia/Dhaka',
+    watchedUnitIdsToday: [],
     watchEarnEnabled: settings.watchEarnEnabled !== false,
     creditedSessions: [],
   });
+  const [adFilter, setAdFilter] = useState<'all' | 'available' | 'completed'>('all');
   const [busyVerify, setBusyVerify] = useState(false);
   const [redeemAmount, setRedeemAmount] = useState('');
   const [busyRedeem, setBusyRedeem] = useState(false);
@@ -105,7 +114,7 @@ export function WatchAndEarnPage({
     refreshServerSummary();
   }, [user?.uid]);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getDhakaDateString();
 
   const creditedSessionMap = useMemo(() => {
     const map = new Map<string, { coins: number; providerEventId: string }>();
@@ -137,18 +146,19 @@ export function WatchAndEarnPage({
       reconciledViewingSessions.filter((s) => {
         if (s.status !== 'credited') return false;
         const ms = getTimeMs(s.createdAt);
-        return ms > 0 && new Date(ms).toISOString().slice(0, 10) === todayStr;
+        return ms > 0 && getDhakaDateString(ms) === todayStr;
       }),
     [reconciledViewingSessions, todayStr]
   );
 
-  const dailyAdLimit = Math.max(1, serverSummary.dailyAdLimit || settings.rewardedAdDailyLimit || 5);
+  const dailyAdLimit = Math.min(20, Math.max(1, serverSummary.dailyAdLimit || settings.rewardedAdDailyLimit || 10));
   const dailyCoinLimit = Math.max(10, serverSummary.dailyCoinLimit || settings.watchEarnDailyCoinLimit || 100);
   const coinsPerAd = Math.max(1, serverSummary.coinsPerAd || settings.watchEarnCoinsPerAd || 5);
   const coinsPerBdt = Math.max(1, serverSummary.coinsPerBdt || settings.watchEarnCoinsPerBdt || 10);
   const minRedeemCoins = Math.max(10, serverSummary.minRedeemCoins || settings.watchEarnMinRedeemCoins || 50);
 
   const adsWatchedToday = Math.max(todayCredited.length, serverSummary.adsWatchedToday || 0);
+  const remainingAdsToday = Math.max(0, dailyAdLimit - adsWatchedToday);
   const coinsEarnedToday = Math.max(
     todayCredited.reduce((s, x) => s + (x.coinsAwarded || 0), 0),
     serverSummary.coinsEarnedToday || 0
@@ -160,6 +170,31 @@ export function WatchAndEarnPage({
     settings.watchEarnEnabled !== false &&
     settings.rewardedAdEnabled !== false;
   const canWatchMore = adsWatchedToday < dailyAdLimit && coinsEarnedToday + coinsPerAd <= dailyCoinLimit;
+
+  const watchedTodaySet = useMemo(() => {
+    const set = new Set<string>();
+    (serverSummary.watchedUnitIdsToday || []).forEach((id) => set.add(id.toLowerCase()));
+    todayCredited.forEach((s) => {
+      if (s.unitId) set.add(s.unitId.toLowerCase());
+    });
+    loadWatchedUnitIdsToday(user?.uid).forEach((id) => set.add(id.toLowerCase()));
+    return set;
+  }, [serverSummary.watchedUnitIdsToday, todayCredited, user?.uid, adFilter]);
+
+  const availableAdsList = useMemo(
+    () => watchableAds.filter((a) => !watchedTodaySet.has(a.unitId.toLowerCase())),
+    [watchableAds, watchedTodaySet]
+  );
+  const completedAdsList = useMemo(
+    () => watchableAds.filter((a) => watchedTodaySet.has(a.unitId.toLowerCase())),
+    [watchableAds, watchedTodaySet]
+  );
+  const visibleWatchableAds =
+    adFilter === 'available'
+      ? availableAdsList
+      : adFilter === 'completed'
+        ? completedAdsList
+        : watchableAds;
 
   const handleRewardCredited = (res: WatchRewardCompletionResult) => {
     setServerSummary((prev) => ({
@@ -284,35 +319,44 @@ export function WatchAndEarnPage({
           </div>
         </div>
 
-        {/* 5 Core Metrics Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
+        {/* 6 Core Watch & Earn Status Cards (PART 2) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
           <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
             <p className="text-[11px] text-white/70 truncate">
-              {lang === 'bn' ? 'উপলব্ধ বিজ্ঞাপন' : 'External Ad Links'}
+              {lang === 'bn' ? 'আজ সম্পন্ন বিজ্ঞাপন' : "Today's Completed"}
             </p>
-            <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-[#FF9B19] mt-0.5">
-              {watchableAds.length}
+            <p className="text-xl sm:text-2xl font-extrabold font-mono-num mt-0.5">
+              {adsWatchedToday}
             </p>
           </div>
           <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
             <p className="text-[11px] text-white/70 truncate">
-              {lang === 'bn' ? 'আজকে দেখা হয়েছে' : 'Ads Watched Today'}
+              {lang === 'bn' ? 'দৈনিক বিজ্ঞাপন সীমা' : 'Daily Ads Limit'}
             </p>
-            <p className="text-xl sm:text-2xl font-extrabold font-mono-num mt-0.5">
+            <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-[#FF9B19] mt-0.5">
               {adsWatchedToday} / {dailyAdLimit}
             </p>
           </div>
           <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
             <p className="text-[11px] text-white/70 truncate">
-              {lang === 'bn' ? 'মোট অর্জিত কয়েন' : 'Total Coins Earned'}
+              {lang === 'bn' ? 'বাকি বিজ্ঞাপন (আজ)' : 'Remaining Ads'}
             </p>
-            <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-emerald-400 mt-0.5">
-              {totalCoinsEarned}
+            <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-sky-300 mt-0.5">
+              {remainingAdsToday}
             </p>
           </div>
           <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
             <p className="text-[11px] text-white/70 truncate">
-              {lang === 'bn' ? 'বর্তমান কয়েন ব্যালেন্স' : 'Current Coin Balance'}
+              {lang === 'bn' ? 'আজকের অর্জিত কয়েন' : 'Coins Earned Today'}
+            </p>
+            <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-emerald-400 mt-0.5">
+              +{coinsEarnedToday}
+              <span className="text-[11px] font-normal text-white/70 ml-1">/ {dailyCoinLimit}</span>
+            </p>
+          </div>
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
+            <p className="text-[11px] text-white/70 truncate">
+              {lang === 'bn' ? 'বর্তমান কয়েন ব্যালেন্স' : 'Coin Balance'}
             </p>
             <p className="text-xl sm:text-2xl font-extrabold font-mono-num text-[#FACC15] mt-0.5">
               {currentCoinBalance}
@@ -321,15 +365,29 @@ export function WatchAndEarnPage({
               </span>
             </p>
           </div>
-          <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 col-span-2 sm:col-span-1 min-w-0">
+          <div className="p-3 sm:p-3.5 rounded-2xl bg-white/10 border border-white/10 min-w-0">
             <p className="text-[11px] text-white/70 truncate">
-              {lang === 'bn' ? 'দৈনিক আয়ের সীমা' : 'Daily Coin Limit'}
+              {lang === 'bn' ? 'উপলব্ধ / সম্পন্ন অ্যাড' : 'Available / Done'}
             </p>
             <p className="text-xl sm:text-2xl font-extrabold font-mono-num mt-0.5">
-              {coinsEarnedToday} / {dailyCoinLimit}
+              <span className="text-[#FF9B19]">{availableAdsList.length}</span>
+              <span className="text-white/50 mx-1">/</span>
+              <span className="text-emerald-300">{completedAdsList.length}</span>
             </p>
           </div>
         </div>
+        <p className="text-[11px] text-white/70 flex flex-wrap items-center justify-between gap-2">
+          <span>
+            {lang === 'bn'
+              ? `দৈনিক রিসেট সময়: রাত ১২:০০ (Asia/Dhaka) · মোট আজীবন আয়: ${totalCoinsEarned} কয়েন`
+              : `Daily limit resets at 00:00 (Asia/Dhaka) · Lifetime earned: ${totalCoinsEarned} coins`}
+          </span>
+          <span className="font-mono-num text-[#FF9B19]">
+            {lang === 'bn'
+              ? `Today: ${adsWatchedToday} / ${dailyAdLimit} Ads · Remaining: ${remainingAdsToday} Ads · Coins Earned: ${coinsEarnedToday}`
+              : `Today: ${adsWatchedToday} / ${dailyAdLimit} Ads · Remaining: ${remainingAdsToday} Ads · Coins Earned: ${coinsEarnedToday}`}
+          </span>
+        </p>
       </section>
 
       {feedback && (
@@ -430,117 +488,194 @@ export function WatchAndEarnPage({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {watchableAds.map((item) => {
-                  const launch = resolveAdBrowserUrl(item.targetUrl);
-                  const isCurrentActive = controller.activeStep?.unitId === item.unitId;
-                  const isLockedByOther =
-                    controller.hasBlockingActiveStep && !isCurrentActive;
-                  const blockedReason =
-                    !user
-                      ? 'auth'
-                      : profile?.status === 'suspended'
-                        ? 'suspended'
-                        : isLockedByOther
-                          ? 'locked'
-                          : isCurrentActive && controller.hasBlockingActiveStep
-                            ? 'active'
-                            : item.rewardApproved && !canWatchMore
-                              ? 'limit'
-                              : null;
-
-                  return (
-                    <div
-                      key={item.id}
-                      className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between gap-3 ${
-                        isCurrentActive
-                          ? 'bg-[#FFF7EE] dark:bg-orange-500/15 border-[#FF8500] shadow-xs'
-                          : 'bg-[#F3F6FF] dark:bg-slate-800/80 border-[#E6ECFA] dark:border-slate-700'
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      ['all', lang === 'bn' ? `সব বিজ্ঞাপন (${watchableAds.length})` : `All Ads (${watchableAds.length})`],
+                      ['available', lang === 'bn' ? `উপলব্ধ (${availableAdsList.length})` : `Available (${availableAdsList.length})`],
+                      ['completed', lang === 'bn' ? `আজ সম্পন্ন (${completedAdsList.length})` : `Completed Today (${completedAdsList.length})`],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setAdFilter(key)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${
+                        adFilter === key
+                          ? 'dh-orange-gradient text-white border-[#FF8500]'
+                          : 'bg-[#F3F6FF] dark:bg-slate-800 border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-200'
                       }`}
                     >
-                      <div className="space-y-1 min-w-0">
-                        <div className="flex flex-wrap items-center justify-between gap-1.5">
-                          <span className="text-[10px] font-mono-num font-bold px-1.5 py-0.5 rounded bg-[#172033] text-white">
-                            {item.unitId} · {item.provider}
-                          </span>
-                          {item.rewardApproved ? (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/60 text-[#16A34A] dark:text-emerald-300">
-                              5s = +{coinsPerAd} {lang === 'bn' ? 'কয়েন' : 'Coins'}
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-[11px] text-[#777777] dark:text-slate-400">
+                  {lang === 'bn' ? 'প্রতিটি বিজ্ঞাপন দিনে একবার' : 'One view per ad per day'}
+                </span>
+              </div>
+
+              {visibleWatchableAds.length === 0 ? (
+                <div className="p-6 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 text-center text-xs text-[#777777] dark:text-slate-300">
+                  {adFilter === 'available'
+                    ? lang === 'bn'
+                      ? 'আজকের সব বিজ্ঞাপন ইতিমধ্যে সম্পন্ন হয়েছে! আগামীকাল (রাত ১২টা Asia/Dhaka) নতুন বিজ্ঞাপন আনলক হবে।'
+                      : 'All available ads have been completed today! New ads unlock at 00:00 (Asia/Dhaka).'
+                    : lang === 'bn'
+                      ? 'এই তালিকায় কোনো বিজ্ঞাপন নেই।'
+                      : 'No advertisements match this filter yet.'}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {visibleWatchableAds.map((item) => {
+                    const launch = resolveAdBrowserUrl(item.targetUrl);
+                    const isCurrentActive = controller.activeStep?.unitId === item.unitId;
+                    const isWatchedToday = watchedTodaySet.has(item.unitId.toLowerCase());
+                    const isLockedByOther =
+                      controller.hasBlockingActiveStep && !isCurrentActive;
+                    const blockedReason =
+                      !user
+                        ? 'auth'
+                        : profile?.status === 'suspended'
+                          ? 'suspended'
+                          : isWatchedToday
+                            ? 'watched_today'
+                            : isLockedByOther
+                              ? 'locked'
+                              : isCurrentActive && controller.hasBlockingActiveStep
+                                ? 'active'
+                                : item.rewardApproved && !canWatchMore
+                                  ? 'limit'
+                                  : null;
+
+                    const statusBadgeText = isWatchedToday
+                      ? lang === 'bn'
+                        ? 'সম্পন্ন (আজ)'
+                        : 'Completed Today'
+                      : isCurrentActive && controller.hasBlockingActiveStep
+                        ? lang === 'bn'
+                          ? 'চলমান'
+                          : 'Active Step'
+                        : item.rewardApproved && !canWatchMore
+                          ? lang === 'bn'
+                            ? 'সীমা পূর্ণ'
+                            : 'Limit Reached'
+                          : item.rewardApproved
+                            ? `5s = +${coinsPerAd} ${lang === 'bn' ? 'কয়েন' : 'Coins'}`
+                            : lang === 'bn'
+                              ? 'উপলব্ধ · ডিসপ্লে'
+                              : 'Available · Display';
+
+                    return (
+                      <div
+                        key={item.id}
+                        className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between gap-3 ${
+                          isWatchedToday
+                            ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60'
+                            : isCurrentActive
+                              ? 'bg-[#FFF7EE] dark:bg-orange-500/15 border-[#FF8500] shadow-xs'
+                              : 'bg-[#F3F6FF] dark:bg-slate-800/80 border-[#E6ECFA] dark:border-slate-700'
+                        }`}
+                      >
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex flex-wrap items-center justify-between gap-1.5">
+                            <span className="text-[10px] font-mono-num font-bold px-1.5 py-0.5 rounded bg-[#172033] text-white">
+                              {item.unitId} · {item.provider}
                             </span>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                isWatchedToday
+                                  ? 'bg-emerald-100 dark:bg-emerald-950/60 text-[#16A34A] dark:text-emerald-300'
+                                  : item.rewardApproved
+                                    ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300'
+                                    : 'bg-slate-200/80 dark:bg-slate-700 text-[#555555] dark:text-slate-300'
+                              }`}
+                            >
+                              {statusBadgeText}
+                            </span>
+                          </div>
+                          <p className="text-xs sm:text-sm font-bold text-[#172033] dark:text-slate-100 truncate">
+                            {lang === 'bn' ? item.titleBn : item.titleEn}
+                          </p>
+                          <p className="text-[11px] text-[#777777] dark:text-slate-400 truncate font-mono-num">
+                            {item.targetUrl}
+                          </p>
+                        </div>
+
+                        <div>
+                          {!user ? (
+                            <button
+                              type="button"
+                              onClick={onOpenAuth}
+                              className="w-full py-2 px-3 rounded-xl bg-[#172033] text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                            >
+                              <Lock className="w-3.5 h-3.5" />
+                              <span>{lang === 'bn' ? 'সাইন ইন করে Open Ad' : 'Sign In to Open Ad'}</span>
+                            </button>
+                          ) : blockedReason || !launch.ok ? (
+                            <button
+                              type="button"
+                              disabled
+                              className={`w-full py-2 px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-not-allowed ${
+                                blockedReason === 'watched_today'
+                                  ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                                  : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 opacity-75'
+                              }`}
+                            >
+                              {blockedReason === 'watched_today' ? (
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              ) : (
+                                <Lock className="w-3.5 h-3.5" />
+                              )}
+                              <span>
+                                {blockedReason === 'watched_today'
+                                  ? lang === 'bn'
+                                    ? 'আজ ইতিমধ্যে দেখা হয়েছে'
+                                    : 'Completed Today (1/1)'
+                                  : blockedReason === 'active'
+                                    ? lang === 'bn'
+                                      ? 'উপরের সেশন সম্পন্ন করুন'
+                                      : 'Complete Active Session Above'
+                                    : blockedReason === 'locked'
+                                      ? lang === 'bn'
+                                        ? 'আগের ধাপ শেষ করুন'
+                                        : 'Finish Previous Ad First'
+                                      : blockedReason === 'limit'
+                                        ? lang === 'bn'
+                                          ? 'আজকের সীমা পূর্ণ'
+                                          : 'Daily Limit Reached'
+                                        : lang === 'bn'
+                                          ? 'অনুপলব্ধ'
+                                          : 'Unavailable'}
+                              </span>
+                            </button>
                           ) : (
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-200/80 dark:bg-slate-700 text-[#555555] dark:text-slate-300">
-                              {lang === 'bn' ? 'ডিসপ্লে লিংক' : 'Display Only'}
-                            </span>
+                            <a
+                              href={launch.href}
+                              target="_blank"
+                              rel="noopener noreferrer nofollow"
+                              onClick={(e) => controller.handleOpenExternalAd(e, item, lang)}
+                              className="w-full py-2.5 px-3 rounded-xl dh-orange-gradient text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5 shadow-xs hover:opacity-95 cursor-pointer"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              <span>
+                                {item.rewardApproved
+                                  ? lang === 'bn'
+                                    ? `Open Ad (+${coinsPerAd} কয়েন)`
+                                    : `Open Ad (+${coinsPerAd} Coins)`
+                                  : lang === 'bn'
+                                    ? 'Open Ad (নতুন ট্যাব)'
+                                    : 'Open Ad'}
+                              </span>
+                            </a>
                           )}
                         </div>
-                        <p className="text-xs sm:text-sm font-bold text-[#172033] dark:text-slate-100 truncate">
-                          {lang === 'bn' ? item.titleBn : item.titleEn}
-                        </p>
-                        <p className="text-[11px] text-[#777777] dark:text-slate-400 truncate font-mono-num">
-                          {item.targetUrl}
-                        </p>
                       </div>
-
-                      <div>
-                        {!user ? (
-                          <button
-                            type="button"
-                            onClick={onOpenAuth}
-                            className="w-full py-2 px-3 rounded-xl bg-[#172033] text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer"
-                          >
-                            <Lock className="w-3.5 h-3.5" />
-                            <span>{lang === 'bn' ? 'সাইন ইন করে Open Ad' : 'Sign In to Open Ad'}</span>
-                          </button>
-                        ) : blockedReason || !launch.ok ? (
-                          <button
-                            type="button"
-                            disabled
-                            className="w-full py-2 px-3 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-bold inline-flex items-center justify-center gap-1.5 opacity-75 cursor-not-allowed"
-                          >
-                            <Lock className="w-3.5 h-3.5" />
-                            <span>
-                              {blockedReason === 'active'
-                                ? lang === 'bn'
-                                  ? 'উপরের সেশন সম্পন্ন করুন'
-                                  : 'Complete Active Session Above'
-                                : blockedReason === 'locked'
-                                  ? lang === 'bn'
-                                    ? 'আগের ধাপ শেষ করুন'
-                                    : 'Finish Previous Ad First'
-                                  : blockedReason === 'limit'
-                                    ? lang === 'bn'
-                                      ? 'আজকের সীমা পূর্ণ'
-                                      : 'Daily Limit Reached'
-                                    : lang === 'bn'
-                                      ? 'অনুপলব্ধ'
-                                      : 'Unavailable'}
-                            </span>
-                          </button>
-                        ) : (
-                          <a
-                            href={launch.href}
-                            target="_blank"
-                            rel="noopener noreferrer nofollow"
-                            onClick={(e) => controller.handleOpenExternalAd(e, item, lang)}
-                            className="w-full py-2.5 px-3 rounded-xl dh-orange-gradient text-white text-xs font-extrabold inline-flex items-center justify-center gap-1.5 shadow-xs hover:opacity-95 cursor-pointer"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            <span>
-                              {item.rewardApproved
-                                ? lang === 'bn'
-                                  ? `Open Ad (+${coinsPerAd} কয়েন)`
-                                  : `Open Ad (+${coinsPerAd} Coins)`
-                                : lang === 'bn'
-                                  ? 'Open Ad (নতুন ট্যাব)'
-                                  : 'Open Ad'}
-                            </span>
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </>
           )}
         </div>

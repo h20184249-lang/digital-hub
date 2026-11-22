@@ -40,6 +40,7 @@ import {
   resolveAdBrowserUrl,
   tryAcquireAdLaunchLock,
 } from '../lib/adNavigation';
+import { getDhakaDateString } from '../lib/adProviderConfig';
 
 export interface WatchableAdItem {
   id: string;
@@ -100,8 +101,35 @@ export interface PersistedExternalAdStep {
 }
 
 const STEP_STORAGE_PREFIX = 'dh_ext_ad_step_v2_';
+const WATCHED_TODAY_PREFIX = 'dh_watched_ads_day_';
 const STEP_EVENT_NAME = 'dh-ext-ad-step-updated';
 const STEP_TTL_MS = 15 * 60 * 1000;
+
+export function loadWatchedUnitIdsToday(uid?: string): string[] {
+  if (!uid || typeof window === 'undefined') return [];
+  try {
+    const key = `${WATCHED_TODAY_PREFIX}${uid}_${getDhakaDateString()}`;
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function markWatchedUnitIdToday(uid: string, unitId: string): void {
+  if (!uid || !unitId || typeof window === 'undefined') return;
+  try {
+    const key = `${WATCHED_TODAY_PREFIX}${uid}_${getDhakaDateString()}`;
+    const cur = new Set(loadWatchedUnitIdsToday(uid));
+    cur.add(unitId);
+    window.localStorage.setItem(key, JSON.stringify(Array.from(cur)));
+    window.dispatchEvent(new CustomEvent(STEP_EVENT_NAME, { detail: { uid } }));
+  } catch {
+    // Non-fatal
+  }
+}
 
 function getStepStorageKey(uid: string): string {
   return `${STEP_STORAGE_PREFIX}${uid}`;
@@ -150,12 +178,14 @@ function getHostnameLabel(url: string): string {
  * Builds Watch Ad items strictly from the user's real external ad URLs
  * (managed direct links & external advertisements). Zero demo or internal URLs.
  */
+const EMPTY_AD_NETWORKS: AdNetworkConfig[] = [];
+
 export function buildWatchableAdItems(
   advertisements: Advertisement[],
   managedAdUnits: ManagedAdUnitConfig[],
-  adNetworks: AdNetworkConfig[] = []
+  adNetworks: AdNetworkConfig[] = EMPTY_AD_NETWORKS
 ): WatchableAdItem[] {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getDhakaDateString();
   const items: WatchableAdItem[] = [];
   const seenUrls = new Set<string>();
   const seenUnitIds = new Set<string>();
@@ -447,8 +477,9 @@ export function useExternalWatchAdController({
   const handleClaimOrFinishStep = async (lang: Language) => {
     if (!uid || !activeStep || claimLockRef.current) return;
 
-    // Unapproved display-only link step completion (0 coins, unlocks next ad cleanly)
+    // Unapproved display-only link step completion (0 coins, locks ad for today & unlocks next ad)
     if (!activeStep.rewardApproved) {
+      markWatchedUnitIdToday(uid, activeStep.unitId);
       updateStep({
         ...activeStep,
         phase: 'credited',
@@ -460,13 +491,13 @@ export function useExternalWatchAdController({
           coinsRedeemed: 0,
           adsWatchedToday: 0,
           coinsEarnedToday: 0,
-          dailyAdLimit: 5,
+          dailyAdLimit: 10,
           dailyCoinLimit: 100,
           bdtEquivalent: 0,
           message:
             lang === 'bn'
-              ? 'ধাপ সম্পন্ন হয়েছে। নেটওয়ার্ক পলিসি অনুমোদিত না থাকায় কয়েন যোগ হয়নি।'
-              : 'Step completed. No coins credited because network policy has not approved rewards.',
+              ? 'ধাপ সম্পন্ন হয়েছে। এই বিজ্ঞাপনটি আজকের জন্য সম্পন্ন — পরের বিজ্ঞাপন খুলুন।'
+              : 'Step completed. This ad is marked done for today — you can open the next ad.',
         },
       });
       return;
@@ -512,6 +543,7 @@ export function useExternalWatchAdController({
         phase: 'credited',
         creditResult: result,
       });
+      markWatchedUnitIdToday(uid, activeStep.unitId);
       onCredited?.(result);
     } catch (err) {
       updateStep({
@@ -551,6 +583,7 @@ export function useExternalWatchAdController({
           message: check.message,
         };
         updateStep({ ...activeStep, phase: 'credited', creditResult: result });
+        markWatchedUnitIdToday(uid, activeStep.unitId);
         onCredited?.(result);
       } else {
         updateStep({ ...activeStep, errorMessage: check.message });
@@ -877,7 +910,7 @@ export function WatchEarnHomeBanner({
   settings,
   advertisements,
   managedAdUnits,
-  adNetworks = [],
+  adNetworks = EMPTY_AD_NETWORKS,
   onNavigate,
   onOpenAuth,
   onToast,
@@ -905,10 +938,17 @@ export function WatchEarnHomeBanner({
 
   const coinsPerAd = summary?.coinsPerAd || Math.max(1, settings.watchEarnCoinsPerAd ?? 5);
   const coinsPerBdt = summary?.coinsPerBdt || Math.max(1, settings.watchEarnCoinsPerBdt ?? 10);
-  const dailyAdLimit = summary?.dailyAdLimit || Math.max(1, settings.rewardedAdDailyLimit ?? 5);
+  const dailyAdLimit = summary?.dailyAdLimit || Math.min(20, Math.max(1, settings.rewardedAdDailyLimit ?? 10));
   const adsWatchedToday = summary?.adsWatchedToday ?? 0;
   const currentCoins = Math.max(wallet?.coinsAvailable ?? 0, summary?.coinsAvailable ?? 0);
   const canWatchMore = adsWatchedToday < dailyAdLimit;
+
+  const watchedTodaySet = useMemo(() => {
+    const set = new Set<string>();
+    (summary?.watchedUnitIdsToday || []).forEach((id) => set.add(id.toLowerCase()));
+    loadWatchedUnitIdsToday(user?.uid).forEach((id) => set.add(id.toLowerCase()));
+    return set;
+  }, [summary?.watchedUnitIdsToday, user?.uid, adCursor]);
 
   const controller = useExternalWatchAdController({
     uid: user?.uid,
@@ -923,12 +963,15 @@ export function WatchEarnHomeBanner({
             coinsLifetimeEarned: 0,
             coinsRedeemed: 0,
             adsWatchedToday: 0,
+            remainingAdsToday: Math.max(0, dailyAdLimit - res.adsWatchedToday),
             coinsEarnedToday: 0,
             dailyAdLimit,
             dailyCoinLimit: settings.watchEarnDailyCoinLimit ?? 100,
             coinsPerAd,
             coinsPerBdt,
             minRedeemCoins: settings.watchEarnMinRedeemCoins ?? 50,
+            resetTimezone: 'Asia/Dhaka',
+            watchedUnitIdsToday: [],
             watchEarnEnabled: true,
             creditedSessions: [],
           }),
@@ -936,6 +979,7 @@ export function WatchEarnHomeBanner({
           coinsLifetimeEarned: res.coinsLifetimeEarned,
           coinsRedeemed: res.coinsRedeemed,
           adsWatchedToday: res.adsWatchedToday,
+          remainingAdsToday: Math.max(0, res.dailyAdLimit - res.adsWatchedToday),
           coinsEarnedToday: res.coinsEarnedToday,
           dailyAdLimit: res.dailyAdLimit,
           dailyCoinLimit: res.dailyCoinLimit,
@@ -951,7 +995,8 @@ export function WatchEarnHomeBanner({
 
   if (!watchEarnEnabled) return null;
 
-  const nextAd = watchableAds.length > 0 ? watchableAds[adCursor % watchableAds.length] : null;
+  const unwatchedAds = watchableAds.filter((a) => !watchedTodaySet.has(a.unitId.toLowerCase()));
+  const nextAd = unwatchedAds.length > 0 ? unwatchedAds[adCursor % unwatchedAds.length] : null;
   const nextLaunch = nextAd ? resolveAdBrowserUrl(nextAd.targetUrl) : null;
   const hasRewardApprovedAds = watchableAds.some((a) => a.rewardApproved);
 

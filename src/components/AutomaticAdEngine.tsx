@@ -4,6 +4,7 @@ import { AdNetworkConfig, Advertisement, BannerSlot, Language } from '../types/m
 import { trackAdEvent } from '../lib/firestoreService';
 import { resolveStudioImage, STUDIO_IMAGES } from '../lib/studioAssets';
 import { isValidExternalAdUrl, resolveAdBrowserUrl, tryAcquireAdLaunchLock } from '../lib/adNavigation';
+import { getDhakaDateString } from '../lib/adProviderConfig';
 
 const FORBIDDEN_DIRECT_AD_HOSTS = /(asiafilm\.org\/4\/|auctionr\.org\/4\/|arwf\.org\/4\/|bicea\.org\/22\/)/i;
 const EMPTY_AD_NETWORKS: AdNetworkConfig[] = [];
@@ -143,7 +144,7 @@ export function NativeAdRow({
   maxCards = 3,
   excludeAdCodes = EMPTY_EXCLUDE_CODES,
 }: NativeAdRowProps) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getDhakaDateString();
 
   const eligibleAds = useMemo(() => {
     const dedupUrls = new Set<string>();
@@ -314,7 +315,7 @@ export function SocialBarWidget({
   const trackedRef = useRef<Set<string>>(new Set());
 
   const socialAds = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getDhakaDateString();
     return advertisements
       .filter((a) => {
         if (!a.enabled) return false;
