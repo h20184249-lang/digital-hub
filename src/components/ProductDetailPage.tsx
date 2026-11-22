@@ -47,6 +47,7 @@ import {
   compressImageToDataUrl,
   submitOrderWithManualPayment,
   submitOrderWithWalletBalance,
+  trackContentView,
   validateTransactionIdServer,
 } from '../lib/firestoreService';
 import {
@@ -123,6 +124,18 @@ export function ProductDetailPage({
   onOpenAuth,
   onOrderSuccess,
 }: ProductDetailPageProps) {
+  const lastTrackedProductRef = useRef('');
+  useEffect(() => {
+    if (!product?.id || lastTrackedProductRef.current === product.id) return;
+    lastTrackedProductRef.current = product.id;
+    trackContentView({
+      contentId: product.id,
+      contentType: 'service',
+      contentCategory: product.categoryId,
+      pagePath: `/product/${product.id}`,
+    });
+  }, [product?.id, product?.categoryId]);
+
   const packages = useMemo(() => getNormalizedPackages(product), [product]);
   const [selectedPackage, setSelectedPackage] = useState<ProductPackage | null>(
     () => getFirstAvailablePackage(product) || packages[0] || null

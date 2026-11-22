@@ -2,16 +2,16 @@ import { useState } from 'react';
 import {
   ChevronDown,
   Film,
+  Gamepad2,
   Globe,
   Headphones,
   Home,
   LayoutGrid,
   Megaphone,
   Moon,
-  PackageCheck,
-  Plus,
   Shield,
   ShoppingCart,
+  Smartphone,
   Sun,
   Tag,
   User as UserIcon,
@@ -70,6 +70,7 @@ export function Navbar({
   const categoryRoutes: { id: AppRoute; label: string }[] = [
     { id: 'services', label: t(lang, 'navServices') },
     { id: 'gaming-store', label: t(lang, 'navGaming') },
+    { id: 'games-store', label: lang === 'bn' ? 'গেমস হাব ও প্লে' : 'Games Hub' },
     { id: 'gift-cards', label: t(lang, 'navGiftCards') },
     { id: 'streaming-store', label: t(lang, 'navStreaming') },
     { id: 'telegram-store', label: t(lang, 'navTelegram') },
@@ -83,7 +84,9 @@ export function Navbar({
     { id: 'social-media', label: t(lang, 'navSocial') },
   ];
 
-  const isCategoryRoute = categoryRoutes.some((c) => c.id === route);
+  const isCategoryRoute = categoryRoutes.some(
+    (c) => c.id === route && c.id !== 'mobile-apps' && c.id !== 'games-store'
+  );
 
   const go = (target: AppRoute) => {
     setRoute(target);
@@ -117,11 +120,11 @@ export function Navbar({
           </button>
 
           {/* Desktop Primary Nav */}
-          <nav className="hidden lg:flex items-center gap-1 relative">
+          <nav className="hidden lg:flex items-center gap-0.5 xl:gap-1 relative">
             <button
               type="button"
               onClick={() => go('home')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-colors ${
+              className={`px-2.5 xl:px-3 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-colors ${
                 route === 'home'
                   ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
                   : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
@@ -130,11 +133,37 @@ export function Navbar({
               {t(lang, 'navHome')}
             </button>
 
+            <button
+              type="button"
+              onClick={() => go('mobile-apps')}
+              className={`px-2.5 xl:px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                route === 'mobile-apps'
+                  ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
+                  : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
+              }`}
+            >
+              <Smartphone className="w-4 h-4 text-[#FF8500]" />
+              {lang === 'bn' ? 'অ্যাপস' : 'Apps'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => go('games-store')}
+              className={`px-2.5 xl:px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                route === 'games-store'
+                  ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
+                  : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
+              }`}
+            >
+              <Gamepad2 className="w-4 h-4 text-[#FF8500]" />
+              {lang === 'bn' ? 'গেমস' : 'Games'}
+            </button>
+
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setCatMenuOpen((prev) => !prev)}
-                className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                className={`px-2.5 xl:px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
                   isCategoryRoute
                     ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
                     : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
@@ -171,7 +200,7 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('offers')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+              className={`px-2.5 xl:px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
                 route === 'offers'
                   ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
                   : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
@@ -184,7 +213,7 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('watch-earn')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+              className={`px-2.5 xl:px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
                 route === 'watch-earn'
                   ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
                   : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
@@ -197,7 +226,7 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('ads')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+              className={`hidden xl:flex px-2.5 py-2 rounded-xl text-sm font-semibold items-center gap-1.5 whitespace-nowrap transition-colors ${
                 route === 'ads'
                   ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
                   : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
@@ -210,7 +239,7 @@ export function Navbar({
             <button
               type="button"
               onClick={() => go('support')}
-              className={`px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+              className={`px-2.5 xl:px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
                 route === 'support'
                   ? 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500]'
                   : 'text-[#172033] dark:text-slate-200 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
@@ -224,7 +253,7 @@ export function Navbar({
               <button
                 type="button"
                 onClick={() => go('admin')}
-                className={`px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                className={`px-2.5 xl:px-3 py-2 rounded-xl text-sm font-bold flex items-center gap-1.5 whitespace-nowrap transition-colors ${
                   route === 'admin'
                     ? 'bg-[#172033] dark:bg-[#FF8500] text-white'
                     : 'bg-[#FFF3E5] dark:bg-orange-500/15 text-[#FF8500] hover:bg-[#FF8500] hover:text-white'
@@ -338,7 +367,7 @@ export function Navbar({
         </div>
       </header>
 
-      {/* Mobile 5-Tab Bottom Navigation */}
+      {/* Mobile 5-Tab Bottom Navigation: Home | Apps | Games | Services | Profile */}
       <nav
         aria-label="Mobile Navigation"
         className="lg:hidden fixed bottom-0 inset-x-0 z-40 w-full max-w-full bg-white dark:bg-slate-900 border-t border-[#E6ECFA] dark:border-slate-800 shadow-[0_-6px_24px_rgba(23,32,51,0.08)] px-1.5 h-16 flex items-center justify-around"
@@ -356,52 +385,48 @@ export function Navbar({
 
         <button
           type="button"
-          onClick={() => go('orders')}
+          onClick={() => go('mobile-apps')}
           className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 text-[10px] sm:text-[11px] font-semibold ${
-            route === 'orders' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
+            route === 'mobile-apps' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
-          <PackageCheck className="w-5 h-5" />
-          <span className="truncate max-w-full px-0.5">{t(lang, 'navOrders')}</span>
+          <Smartphone className="w-5 h-5" />
+          <span className="truncate max-w-full px-0.5">{lang === 'bn' ? 'অ্যাপস' : 'Apps'}</span>
         </button>
 
         <button
           type="button"
-          onClick={() => go('add-money')}
-          className="relative -top-3.5 flex-1 min-w-0 flex flex-col items-center justify-center"
+          onClick={() => go('games-store')}
+          className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 text-[10px] sm:text-[11px] font-semibold ${
+            route === 'games-store' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
+          }`}
         >
-          <span className="w-12 h-12 rounded-full dh-orange-gradient text-white flex items-center justify-center shadow-lg border-4 border-white dark:border-slate-900">
-            <Plus className="w-6 h-6" />
-          </span>
-          <span
-            className={`mt-0.5 text-[10px] font-bold truncate max-w-full ${
-              route === 'add-money' ? 'text-[#FF8500]' : 'text-[#172033] dark:text-slate-200'
-            }`}
-          >
-            {t(lang, 'navAddMoney')}
-          </span>
+          <Gamepad2 className="w-5 h-5" />
+          <span className="truncate max-w-full px-0.5">{lang === 'bn' ? 'গেমস' : 'Games'}</span>
         </button>
 
         <button
           type="button"
-          onClick={() => go('wallet')}
+          onClick={() => go('services')}
           className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 text-[10px] sm:text-[11px] font-semibold ${
-            route === 'wallet' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
+            isCategoryRoute ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
           }`}
         >
-          <Wallet className="w-5 h-5" />
-          <span className="truncate max-w-full px-0.5">{t(lang, 'navWallet')}</span>
+          <LayoutGrid className="w-5 h-5" />
+          <span className="truncate max-w-full px-0.5">{lang === 'bn' ? 'সার্ভিস' : 'Services'}</span>
         </button>
 
         <button
           type="button"
           onClick={() => (user ? go(isAdmin && route === 'account' ? 'admin' : 'account') : onOpenAuth())}
           className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 text-[10px] sm:text-[11px] font-semibold relative ${
-            route === 'account' || route === 'admin' ? 'text-[#FF8500]' : 'text-[#777777] dark:text-slate-400'
+            route === 'account' || route === 'orders' || route === 'wallet' || route === 'add-money' || route === 'admin'
+              ? 'text-[#FF8500]'
+              : 'text-[#777777] dark:text-slate-400'
           }`}
         >
           <UserIcon className="w-5 h-5" />
-          <span className="truncate max-w-full px-0.5">{t(lang, 'navAccount')}</span>
+          <span className="truncate max-w-full px-0.5">{lang === 'bn' ? 'প্রোফাইল' : 'Profile'}</span>
           {unreadNotifications > 0 && (
             <span
               aria-label={`${unreadNotifications} unread notifications`}

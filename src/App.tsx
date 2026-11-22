@@ -41,6 +41,9 @@ import {
   CartItem,
   Category,
   Coupon,
+  DownloadHistoryItem,
+  GameItem,
+  HomepageSectionConfig,
   Language,
   ManagedAdUnitConfig,
   Order,
@@ -68,6 +71,7 @@ import {
   subscribeCategories,
   subscribeCoupons,
   subscribeDashboardInvalidation,
+  subscribeGames,
   subscribeManagedAdUnits,
   subscribeMobileApps,
   subscribePaymentMethods,
@@ -81,11 +85,13 @@ import {
   DEFAULT_BANNERS,
   DEFAULT_CATEGORIES,
   DEFAULT_COUPONS,
+  DEFAULT_HOMEPAGE_SECTIONS,
   DEFAULT_PRODUCTS,
   DEFAULT_SITE_SETTINGS,
   STUDIO_IMAGES,
 } from './lib/seedData';
 import { mergeAdUnitsWithOverrides } from './lib/adProviderConfig';
+import { DEFAULT_GAMES_CATALOG } from './lib/gamesCatalog';
 import { MOBILE_APPS_CATALOG, type MobileAppItem } from './lib/mobileAppsCatalog';
 import { t } from './lib/i18n';
 import { useOnlineStatus, useSwUpdatePrompt } from './hooks/usePWAInstall';
@@ -103,6 +109,7 @@ import { DigitalHubLogo } from './components/DigitalHubLogo';
 import { MobileAppDownloadCard } from './components/MobileAppDownloadCard';
 import { CapCutRechargeSection } from './components/CapCutRechargeSection';
 import { MobileAppStoreSection } from './components/MobileAppStoreSection';
+import { GamesStoreSection } from './components/GamesStoreSection';
 import { CategoryCatalogPage, ProductCard } from './components/StorefrontPages';
 import { ServiceBrandLogo } from './components/BrandLogos';
 import {
@@ -171,7 +178,8 @@ export default function App() {
   const [route, setRoute] = useState<AppRoute>(() => {
     if (new URLSearchParams(window.location.search).get('product')) return 'product-detail';
     if (window.location.pathname === '/watch-earn') return 'watch-earn';
-    if (window.location.pathname === '/mobile-apps') return 'mobile-apps';
+    if (window.location.pathname === '/mobile-apps' || window.location.pathname === '/apps') return 'mobile-apps';
+    if (window.location.pathname === '/games' || window.location.pathname === '/games-store') return 'games-store';
     return 'home';
   });
   const [previousRoute, setPreviousRoute] = useState<AppRoute>('services');
@@ -214,7 +222,9 @@ export default function App() {
   const [adRewardTransactions, setAdRewardTransactions] = useState<AdRewardTransaction[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [mobileApps, setMobileApps] = useState<MobileAppItem[]>(() => [...MOBILE_APPS_CATALOG]);
+  const [games, setGames] = useState<GameItem[]>(() => [...DEFAULT_GAMES_CATALOG]);
   const [favoriteAppIds, setFavoriteAppIds] = useState<string[]>([]);
+  const [downloadHistory, setDownloadHistory] = useState<DownloadHistoryItem[]>([]);
   const [totalDownloads, setTotalDownloads] = useState<number>(0);
   const [analyticsOptOut, setAnalyticsOptOut] = useState<boolean>(() => {
     try {
@@ -301,6 +311,7 @@ export default function App() {
     const u10 = subscribeAnnouncements(setAnnouncements);
     const u11 = subscribePaymentMethods(setPaymentMethods);
     const u12 = subscribeMobileApps(setMobileApps, false);
+    const u13 = subscribeGames(setGames, false);
     return () => {
       u1();
       u2();
@@ -314,6 +325,7 @@ export default function App() {
       u10();
       u11();
       u12();
+      u13();
     };
   }, []);
 
@@ -331,6 +343,14 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
+
+  useEffect(() => {
+    const color = settings.accentColor;
+    if (color && /^#[0-9a-fA-F]{6}$/.test(color)) {
+      document.documentElement.style.setProperty('--dh-orange', color);
+      document.documentElement.style.setProperty('--dh-orange-light', color);
+    }
+  }, [settings.accentColor]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
@@ -379,6 +399,7 @@ export default function App() {
     setViewingSessions([]);
     setAdRewardTransactions([]);
     setFavoriteAppIds([]);
+    setDownloadHistory([]);
     setTotalDownloads(0);
   }, []);
 
@@ -411,6 +432,7 @@ export default function App() {
     setViewingSessions(data.viewingSessions || []);
     setAdRewardTransactions(data.adRewardTransactions || []);
     setFavoriteAppIds(Array.isArray(data.favoriteAppIds) ? data.favoriteAppIds : []);
+    setDownloadHistory(Array.isArray(data.downloadHistory) ? data.downloadHistory : []);
     setTotalDownloads(Number(data.totalDownloads || 0));
     if (Array.isArray(data.announcements)) {
       setAnnouncements(data.announcements);
@@ -511,6 +533,7 @@ export default function App() {
       'telegram-stars': `Telegram Stars — ${brand}`,
       'ai-marketplace': `AI Tools Marketplace — ${brand}`,
       'mobile-apps': `Mobile App Store — ${brand}`,
+      'games-store': `Games Store — ${brand}`,
       'software-store': `Software Store — ${brand}`,
       'digital-products': `Digital Products — ${brand}`,
       'graphic-design': `Graphic Design Services — ${brand}`,
@@ -546,7 +569,11 @@ export default function App() {
         ? `/product/${detailProductId}`
         : route === 'home'
           ? '/'
-          : `/${route}`;
+          : route === 'mobile-apps'
+            ? '/apps'
+            : route === 'games-store'
+              ? '/games'
+              : `/${route}`;
     let refHost = '';
     try {
       if (document.referrer) refHost = new URL(document.referrer).hostname;
@@ -565,6 +592,16 @@ export default function App() {
       deviceType,
       referrerHost: refHost,
     });
+    if (route === 'home') {
+      void trackAnalyticsEvent({
+        visitorId,
+        sessionId,
+        eventType: 'homepage_view',
+        pagePath: '/',
+        deviceType,
+        referrerHost: refHost,
+      });
+    }
 
     const hb = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
@@ -739,6 +776,17 @@ export default function App() {
     'graphic-design',
     'social-media',
   ].includes(route);
+
+  const orderedHomepageSections = useMemo(() => {
+    const configured =
+      Array.isArray(settings.homepageSections) && settings.homepageSections.length > 0
+        ? settings.homepageSections
+        : DEFAULT_HOMEPAGE_SECTIONS;
+    const byId = new Map<string, HomepageSectionConfig>();
+    DEFAULT_HOMEPAGE_SECTIONS.forEach((sec) => byId.set(sec.id, sec));
+    configured.forEach((sec) => byId.set(sec.id, sec));
+    return Array.from(byId.values()).sort((a, b) => a.order - b.order);
+  }, [settings.homepageSections]);
 
   const isMaintenanceBlocked = Boolean(settings.maintenanceMode && !isAdmin);
 
@@ -918,631 +966,689 @@ export default function App() {
         {route === 'home' && (
           <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
             <div className="min-w-0 space-y-6 sm:space-y-8">
-            {/* 1. Hero Carousel + Integrated Quick Search */}
-            <section className="space-y-3">
-              <div className="relative rounded-3xl overflow-hidden shadow-lg bg-[#172033] min-h-[220px] sm:min-h-[280px] flex items-center">
-                <img
-                  src={activeSlide.image}
-                  alt={activeSlide.title}
-                  onError={(e) => {
-                    e.currentTarget.src = STUDIO_IMAGES.hero;
-                  }}
-                  className="absolute inset-0 w-full h-full object-cover opacity-55"
-                />
-                <div className="absolute inset-0 bg-gradient-to-r from-[#172033] via-[#172033]/85 to-[#172033]/40" />
+              {orderedHomepageSections
+                .filter((sec) => sec.visible)
+                .map((sec) => {
+                  switch (sec.id) {
+                    case 'hero':
+                      return (
+                        <section key="hero" className="space-y-3">
+                          <div className="relative rounded-3xl overflow-hidden shadow-lg bg-[#172033] min-h-[220px] sm:min-h-[280px] flex items-center">
+                            <img
+                              src={activeSlide.image}
+                              alt={activeSlide.title}
+                              onError={(e) => {
+                                e.currentTarget.src = STUDIO_IMAGES.hero;
+                              }}
+                              className="absolute inset-0 w-full h-full object-cover opacity-55"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-r from-[#172033] via-[#172033]/85 to-[#172033]/40" />
 
-                <div className="relative z-10 w-full p-5 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5">
-                  <div className="max-w-xl space-y-2.5">
-                    <span className="inline-block px-2.5 py-0.5 rounded-md bg-[#FF8500] text-white text-[11px] font-extrabold tracking-wide">
-                      {activeSlide.badge}
-                    </span>
-                    <h1 className="text-xl sm:text-3xl font-extrabold text-white leading-tight">
-                      {activeSlide.title}
-                    </h1>
-                    <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
-                      {activeSlide.subtitle}
-                    </p>
-                    <div className="pt-1 flex flex-wrap items-center gap-2.5">
-                      <button
-                        type="button"
-                        onClick={() => setRoute(activeSlide.ctaRoute)}
-                        className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
-                      >
-                        <span>{t(lang, 'shopNow')}</span>
-                        <ArrowRight className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRoute('add-money')}
-                        className="px-4 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs sm:text-sm font-bold backdrop-blur-xs"
-                      >
-                        + {t(lang, 'navAddMoney')}
-                      </button>
-                    </div>
-                  </div>
+                            <div className="relative z-10 w-full p-5 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5">
+                              <div className="max-w-xl space-y-2.5">
+                                <span className="inline-block px-2.5 py-0.5 rounded-md bg-[#FF8500] text-white text-[11px] font-extrabold tracking-wide">
+                                  {activeSlide.badge}
+                                </span>
+                                <h1 className="text-xl sm:text-3xl font-extrabold text-white leading-tight">
+                                  {activeSlide.title}
+                                </h1>
+                                <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
+                                  {activeSlide.subtitle}
+                                </p>
+                                <div className="pt-1 flex flex-wrap items-center gap-2.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setRoute(activeSlide.ctaRoute)}
+                                    className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
+                                  >
+                                    <span>{t(lang, 'shopNow')}</span>
+                                    <ArrowRight className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setRoute('add-money')}
+                                    className="px-4 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs sm:text-sm font-bold backdrop-blur-xs"
+                                  >
+                                    + {t(lang, 'navAddMoney')}
+                                  </button>
+                                </div>
+                              </div>
 
-                  <ul className="hidden md:flex flex-col gap-1.5 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15 text-xs text-white font-semibold shrink-0">
-                    {[
-                      lang === 'bn' ? 'ফ্রি ফায়ার, PUBG, MLBB ও Valorant' : 'Free Fire, PUBG, MLBB & Valorant',
-                      lang === 'bn' ? 'Netflix, Spotify, YouTube ও Chorki' : 'Netflix, Spotify, YouTube & Chorki',
-                      lang === 'bn' ? 'টেলিগ্রাম প্রিমিয়াম, স্টার্স ও ভিআইপি' : 'Telegram Premium, Stars & VIP',
-                      lang === 'bn' ? 'যাচাইকৃত বিকাশ, নগদ ও রকেট পেমেন্ট' : 'Verified bKash, Nagad & Rocket',
-                    ].map((line) => (
-                      <li key={line} className="flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-[#FACC15] shrink-0" />
-                        <span>{line}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
+                              <ul className="hidden md:flex flex-col gap-1.5 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15 text-xs text-white font-semibold shrink-0">
+                                {[
+                                  lang === 'bn' ? 'ফ্রি ফায়ার, PUBG, MLBB ও Valorant' : 'Free Fire, PUBG, MLBB & Valorant',
+                                  lang === 'bn' ? 'Netflix, Spotify, YouTube ও Chorki' : 'Netflix, Spotify, YouTube & Chorki',
+                                  lang === 'bn' ? 'টেলিগ্রাম প্রিমিয়াম, স্টার্স ও ভিআইপি' : 'Telegram Premium, Stars & VIP',
+                                  lang === 'bn' ? 'যাচাইকৃত বিকাশ, নগদ ও রকেট পেমেন্ট' : 'Verified bKash, Nagad & Rocket',
+                                ].map((line) => (
+                                  <li key={line} className="flex items-center gap-2">
+                                    <CheckCircle2 className="w-4 h-4 text-[#FACC15] shrink-0" />
+                                    <span>{line}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
 
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-                <form onSubmit={handleHomeSearchSubmit} className="relative w-full sm:max-w-md">
-                  <Search className="w-4 h-4 text-[#777777] absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={homeSearch}
-                    onChange={(e) => setHomeSearch(e.target.value)}
-                    placeholder={t(lang, 'searchPlaceholder')}
-                    className="w-full pl-10 pr-24 py-2.5 rounded-2xl bg-white border border-[#E6ECFA] text-xs sm:text-sm shadow-xs focus:outline-none focus:border-[#FF8500]"
-                  />
-                  <button
-                    type="submit"
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 px-3.5 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold"
-                  >
-                    {lang === 'bn' ? 'খুঁজুন' : 'Search'}
-                  </button>
-                </form>
+                          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                            <form onSubmit={handleHomeSearchSubmit} className="relative w-full sm:max-w-md">
+                              <Search className="w-4 h-4 text-[#777777] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                              <input
+                                type="text"
+                                value={homeSearch}
+                                onChange={(e) => setHomeSearch(e.target.value)}
+                                placeholder={t(lang, 'searchPlaceholder')}
+                                className="w-full pl-10 pr-24 py-2.5 rounded-2xl bg-white border border-[#E6ECFA] text-xs sm:text-sm shadow-xs focus:outline-none focus:border-[#FF8500]"
+                              />
+                              <button
+                                type="submit"
+                                className="absolute right-1.5 top-1/2 -translate-y-1/2 px-3.5 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold"
+                              >
+                                {lang === 'bn' ? 'খুঁজুন' : 'Search'}
+                              </button>
+                            </form>
 
-                <div className="flex justify-center gap-1.5">
-                  {heroSlides.map((s, idx) => (
-                    <button
-                      key={s.badge}
-                      type="button"
-                      onClick={() => setHeroSlide(idx)}
-                      aria-label={`Slide ${idx + 1}`}
-                      className={`h-1.5 rounded-full transition-all ${
-                        heroSlide === idx ? 'w-6 bg-[#FF8500]' : 'w-2.5 bg-gray-300'
-                      }`}
-                    />
-                  ))}
-                </div>
-              </div>
-            </section>
+                            <div className="flex justify-center gap-1.5">
+                              {heroSlides.map((s, idx) => (
+                                <button
+                                  key={s.badge}
+                                  type="button"
+                                  onClick={() => setHeroSlide(idx)}
+                                  aria-label={`Slide ${idx + 1}`}
+                                  className={`h-1.5 rounded-full transition-all ${
+                                    heroSlide === idx ? 'w-6 bg-[#FF8500]' : 'w-2.5 bg-gray-300'
+                                  }`}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </section>
+                      );
 
-            {/* 2. Quick-Access 8 Service Category Tiles */}
-            <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 sm:gap-2.5">
-              {quickButtons.map((btn) => {
-                const Icon = btn.icon;
-                return (
-                  <button
-                    key={btn.route}
-                    type="button"
-                    onClick={() => setRoute(btn.route)}
-                    className="dh-orange-gradient text-white rounded-2xl px-2.5 py-3 flex items-center gap-2 shadow-sm hover:opacity-95 transition-opacity text-left"
-                  >
-                    <span className="w-8 h-8 rounded-full bg-white text-[#FF8500] flex items-center justify-center shrink-0 shadow-xs">
-                      <Icon className="w-4 h-4" />
-                    </span>
-                    <span className="text-[11px] font-bold leading-tight line-clamp-2">
-                      {btn.label}
-                    </span>
-                  </button>
-                );
-              })}
-            </section>
+                    case 'quick_categories':
+                      return (
+                        <section key="quick_categories" className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 sm:gap-2.5">
+                          {quickButtons.map((btn) => {
+                            const Icon = btn.icon;
+                            return (
+                              <button
+                                key={btn.route}
+                                type="button"
+                                onClick={() => setRoute(btn.route)}
+                                className="dh-orange-gradient text-white rounded-2xl px-2.5 py-3 flex items-center gap-2 shadow-sm hover:opacity-95 transition-opacity text-left"
+                              >
+                                <span className="w-8 h-8 rounded-full bg-white text-[#FF8500] flex items-center justify-center shrink-0 shadow-xs">
+                                  <Icon className="w-4 h-4" />
+                                </span>
+                                <span className="text-[11px] font-bold leading-tight line-clamp-2">
+                                  {btn.label}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </section>
+                      );
 
-            {/* 2B. Complete 23 Catalog Categories Directory */}
-            <section className="dh-card rounded-3xl p-4 sm:p-5 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <LayoutGrid className="w-4 h-4 text-[#FF8500]" />
-                  <h2 className="text-sm sm:text-base font-extrabold text-[#172033]">
-                    {lang === 'bn' ? 'সকল ২৩টি সার্ভিস ক্যাটাগরি' : 'Browse All 23 Catalog Categories'}
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => openCatalogSection('')}
-                  className="text-xs font-bold text-[#FF8500] hover:underline flex items-center gap-0.5"
-                >
-                  <span>{t(lang, 'viewAll')}</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                {CATALOG_23_CATEGORIES.map((sec) => {
-                  const matchedProds = products.filter(
-                    (p) => p.active && getProductCatalogSectionId(p) === sec.id
-                  );
-                  const pkgTotal = matchedProds.reduce(
-                    (sum, p) => sum + Math.max(1, p.packages?.length || 1),
-                    0
-                  );
-                  return (
-                    <button
-                      key={sec.id}
-                      type="button"
-                      onClick={() => openCatalogSection(sec.id)}
-                      className="flex items-center gap-2 p-2 rounded-2xl bg-[#F3F6FF] hover:bg-[#FFF3E5] border border-[#E6ECFA] hover:border-[#FF8500]/50 transition-colors text-left group"
-                    >
-                      <ServiceBrandLogo brandKey={sec.brandKey} size={32} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-bold text-[#172033] group-hover:text-[#FF8500] leading-tight line-clamp-2">
-                          {lang === 'bn' ? sec.shortBn : sec.shortEn}
-                        </p>
-                        {pkgTotal > 0 && (
-                          <p className="text-[10px] font-mono-num text-[#777777]">
-                            {pkgTotal} {lang === 'bn' ? 'প্যাক' : 'packs'}
-                          </p>
-                        )}
-                      </div>
-                    </button>
-                  );
+                    case 'browse_23':
+                      return (
+                        <section key="browse_23" className="dh-card rounded-3xl p-4 sm:p-5 space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <LayoutGrid className="w-4 h-4 text-[#FF8500]" />
+                              <h2 className="text-sm sm:text-base font-extrabold text-[#172033]">
+                                {lang === 'bn' ? 'সকল ২৩টি সার্ভিস ক্যাটাগরি' : 'Browse All 23 Catalog Categories'}
+                              </h2>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => openCatalogSection('')}
+                              className="text-xs font-bold text-[#FF8500] hover:underline flex items-center gap-0.5"
+                            >
+                              <span>{t(lang, 'viewAll')}</span>
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                            {CATALOG_23_CATEGORIES.map((cSec) => {
+                              const matchedProds = products.filter(
+                                (p) => p.active && getProductCatalogSectionId(p) === cSec.id
+                              );
+                              const pkgTotal = matchedProds.reduce(
+                                (sum, p) => sum + Math.max(1, p.packages?.length || 1),
+                                0
+                              );
+                              return (
+                                <button
+                                  key={cSec.id}
+                                  type="button"
+                                  onClick={() => openCatalogSection(cSec.id)}
+                                  className="flex items-center gap-2 p-2 rounded-2xl bg-[#F3F6FF] hover:bg-[#FFF3E5] border border-[#E6ECFA] hover:border-[#FF8500]/50 transition-colors text-left group"
+                                >
+                                  <ServiceBrandLogo brandKey={cSec.brandKey} size={32} />
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-[11px] font-bold text-[#172033] group-hover:text-[#FF8500] leading-tight line-clamp-2">
+                                      {lang === 'bn' ? cSec.shortBn : cSec.shortEn}
+                                    </p>
+                                    {pkgTotal > 0 && (
+                                      <p className="text-[10px] font-mono-num text-[#777777]">
+                                        {pkgTotal} {lang === 'bn' ? 'প্যাক' : 'packs'}
+                                      </p>
+                                    )}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      );
+
+                    case 'pwa_card':
+                      return <MobileAppDownloadCard key="pwa_card" lang={lang} siteName={settings.siteName} />;
+
+                    case 'watch_earn':
+                      return (
+                        <div key="watch_earn" className="space-y-6">
+                          <WatchEarnHomeBanner
+                            lang={lang}
+                            user={user}
+                            profile={profile}
+                            wallet={wallet}
+                            settings={settings}
+                            advertisements={advertisements}
+                            managedAdUnits={managedAdUnits}
+                            adNetworks={adNetworks}
+                            onNavigate={setRoute}
+                            onOpenAuth={() => {
+                              setAuthInitialMode('login');
+                              setAuthModalOpen(true);
+                            }}
+                            onToast={showToast}
+                          />
+                          <BannerSlotView
+                            slot="home_top"
+                            banners={banners}
+                            adNetworks={adNetworks}
+                            adsEnabled={settings.adsEnabled}
+                            lang={lang}
+                          />
+                          <ManagedPlacementSlot
+                            placement="home_main"
+                            units={managedAdUnits}
+                            adsEnabled={settings.adsEnabled}
+                            lang={lang}
+                          />
+                        </div>
+                      );
+
+                    case 'capcut_recharge':
+                      return (
+                        <CapCutRechargeSection
+                          key="capcut_recharge"
+                          products={products}
+                          lang={lang}
+                          onOrderPackage={openPackageCheckout}
+                          onAddToCart={(prod, pkg) => handleAddToCart(prod, 1, pkg)}
+                        />
+                      );
+
+                    case 'featured_apps':
+                      return (
+                        <MobileAppStoreSection
+                          key="featured_apps"
+                          mode="home"
+                          lang={lang}
+                          settings={settings}
+                          paymentMethods={paymentMethods}
+                          user={user}
+                          profile={profile}
+                          wallet={wallet}
+                          maxHomeItems={sec.limit || 12}
+                          onOpenAuth={() => {
+                            setAuthInitialMode('login');
+                            setAuthModalOpen(true);
+                          }}
+                          onNavigateAll={() => setRoute('mobile-apps')}
+                          onGoToOrders={() => setRoute('orders')}
+                        />
+                      );
+
+                    case 'featured_games':
+                      return (
+                        <GamesStoreSection
+                          key="featured_games"
+                          mode="home"
+                          lang={lang}
+                          games={games}
+                          products={products}
+                          maxHomeItems={sec.limit || 8}
+                          onSelectProduct={openProductDetail}
+                          onNavigateAll={() => setRoute('games-store')}
+                        />
+                      );
+
+                    case 'gaming_topups':
+                      return gamingAndGiftProducts.length > 0 ? (
+                        <section key="gaming_topups" className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Gamepad2 className="w-5 h-5 text-[#FF8500]" />
+                              <h2 className="text-lg sm:text-xl font-extrabold text-[#172033] tracking-tight">
+                                {t(lang, 'gamingTopUpsTitle')}
+                              </h2>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setRoute('gaming-store')}
+                              className="px-3.5 py-1.5 rounded-full dh-orange-gradient text-white text-xs font-bold flex items-center gap-1"
+                            >
+                              <span>{t(lang, 'viewAll')}</span>
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                            {gamingAndGiftProducts.slice(0, sec.limit || 8).map((p) => (
+                              <ProductCard
+                                key={p.id}
+                                product={p}
+                                lang={lang}
+                                onSelect={openProductDetail}
+                                onQuickOrder={openQuickOrder}
+                                onAddToCart={(prod) => handleAddToCart(prod, 1)}
+                              />
+                            ))}
+                          </div>
+                        </section>
+                      ) : null;
+
+                    case 'flash_sale':
+                      return (
+                        <section key="flash_sale" className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Zap className="w-5 h-5 text-[#FF8500] fill-[#FF8500]" />
+                              <h2 className="text-lg sm:text-xl font-extrabold text-[#172033] tracking-tight">
+                                {t(lang, 'flashSale')}
+                              </h2>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setRoute('offers')}
+                              className="px-3.5 py-1.5 rounded-full dh-orange-gradient text-white text-xs font-bold flex items-center gap-1"
+                            >
+                              <span>{t(lang, 'viewAll')}</span>
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                            {(flashSaleProducts.length > 0 ? flashSaleProducts : products.filter((p) => p.active).slice(0, 4))
+                              .slice(0, sec.limit || 4)
+                              .map((p) => (
+                                <ProductCard
+                                  key={p.id}
+                                  product={p}
+                                  lang={lang}
+                                  onSelect={openProductDetail}
+                                  onQuickOrder={openQuickOrder}
+                                  onAddToCart={(prod) => handleAddToCart(prod, 1)}
+                                />
+                              ))}
+                          </div>
+                        </section>
+                      );
+
+                    case 'hot_products':
+                      return (
+                        <div key="hot_products" className="space-y-6">
+                          <section className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Flame className="w-5 h-5 text-[#FF8500] fill-[#FF8500]" />
+                                <h2 className="text-lg sm:text-xl font-extrabold text-[#172033] tracking-tight">
+                                  {t(lang, 'hotProducts')}
+                                </h2>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setRoute('services')}
+                                className="px-3.5 py-1.5 rounded-full dh-orange-gradient text-white text-xs font-bold flex items-center gap-1"
+                              >
+                                <span>{t(lang, 'viewAll')}</span>
+                                <ChevronRight className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                              {(hotProducts.length > 0 ? hotProducts : products.filter((p) => p.active).slice(0, 8))
+                                .slice(0, sec.limit || 8)
+                                .map((p) => (
+                                  <ProductCard
+                                    key={p.id}
+                                    product={p}
+                                    lang={lang}
+                                    onSelect={openProductDetail}
+                                    onQuickOrder={openQuickOrder}
+                                    onAddToCart={(prod) => handleAddToCart(prod, 1)}
+                                  />
+                                ))}
+                            </div>
+                          </section>
+                          <BannerSlotView
+                            slot="between_sections"
+                            banners={banners}
+                            adNetworks={adNetworks}
+                            adsEnabled={settings.adsEnabled}
+                            lang={lang}
+                          />
+                          <ManagedPlacementSlot
+                            placement="slider"
+                            variant="slider"
+                            units={managedAdUnits}
+                            adsEnabled={settings.adsEnabled}
+                            lang={lang}
+                          />
+                          <NativeAdRow
+                            placement="between_sections"
+                            advertisements={advertisements}
+                            adNetworks={adNetworks}
+                            adsEnabled={settings.adsEnabled}
+                            lang={lang}
+                            maxCards={3}
+                          />
+                        </div>
+                      );
+
+                    case 'streaming_ai':
+                      return streamingAndAiProducts.length > 0 ? (
+                        <section key="streaming_ai" className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Tv className="w-5 h-5 text-[#FF8500]" />
+                              <h2 className="text-lg sm:text-xl font-extrabold text-[#172033]">
+                                {t(lang, 'streamingGiftTitle')}
+                              </h2>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setRoute('streaming-store')}
+                              className="text-xs font-bold text-[#FF8500] hover:underline"
+                            >
+                              {t(lang, 'viewAll')} →
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                            {streamingAndAiProducts.slice(0, sec.limit || 4).map((p) => (
+                              <ProductCard
+                                key={p.id}
+                                product={p}
+                                lang={lang}
+                                onSelect={openProductDetail}
+                                onQuickOrder={openQuickOrder}
+                                onAddToCart={(prod) => handleAddToCart(prod, 1)}
+                              />
+                            ))}
+                          </div>
+                        </section>
+                      ) : null;
+
+                    case 'trending_services':
+                      return trendingProducts.length > 0 ? (
+                        <section key="trending_services" className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <TrendingUp className="w-5 h-5 text-[#FF8500]" />
+                              <h2 className="text-lg sm:text-xl font-extrabold text-[#172033]">
+                                {t(lang, 'trendingServices')}
+                              </h2>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setRoute('services')}
+                              className="text-xs font-bold text-[#FF8500] hover:underline"
+                            >
+                              {t(lang, 'viewAll')} →
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                            {trendingProducts.slice(0, sec.limit || 4).map((p) => (
+                              <ProductCard
+                                key={p.id}
+                                product={p}
+                                lang={lang}
+                                onSelect={openProductDetail}
+                                onQuickOrder={openQuickOrder}
+                                onAddToCart={(prod) => handleAddToCart(prod, 1)}
+                              />
+                            ))}
+                          </div>
+                        </section>
+                      ) : null;
+
+                    case 'best_sellers':
+                      return (
+                        <section key="best_sellers" className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Award className="w-5 h-5 text-[#FF8500]" />
+                              <h2 className="text-lg sm:text-xl font-extrabold text-[#172033]">
+                                {t(lang, 'bestSellers')} & {t(lang, 'newArrivals')}
+                              </h2>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setRoute('digital-products')}
+                              className="text-xs font-bold text-[#FF8500] hover:underline"
+                            >
+                              {t(lang, 'viewAll')} →
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                            {[...newArrivalProducts, ...bestSellerProducts].slice(0, sec.limit || 8).map((p) => (
+                              <ProductCard
+                                key={p.id}
+                                product={p}
+                                lang={lang}
+                                onSelect={openProductDetail}
+                                onQuickOrder={openQuickOrder}
+                                onAddToCart={(prod) => handleAddToCart(prod, 1)}
+                              />
+                            ))}
+                          </div>
+                        </section>
+                      );
+
+                    case 'payment_channels':
+                      return (
+                        <HomepagePaymentSection
+                          key="payment_channels"
+                          settings={settings}
+                          lang={lang}
+                          user={user}
+                          profile={profile}
+                          onOpenAuth={() => setAuthModalOpen(true)}
+                          onNavigateAddMoney={() => setRoute('add-money')}
+                        />
+                      );
+
+                    case 'spotlight':
+                      return (
+                        <div key="spotlight" className="space-y-6">
+                          <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="dh-card rounded-3xl p-4 sm:p-5 flex items-center justify-between gap-3 sm:gap-4 bg-gradient-to-br from-white to-[#FFF7EE] dark:from-slate-900 dark:to-slate-800/90 overflow-hidden">
+                              <div className="space-y-1.5 min-w-0 flex-1">
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#FF8500] uppercase">
+                                  <Gift className="w-3.5 h-3.5 shrink-0" />
+                                  Gift Cards & Vouchers
+                                </span>
+                                <h3 className="text-sm sm:text-lg font-extrabold text-[#172033] dark:text-slate-100 leading-snug">
+                                  {lang === 'bn' ? 'Steam, UniPin, PlayStation ও Google Play' : 'Steam, UniPin, PSN & Google Play Codes'}
+                                </h3>
+                                <button
+                                  type="button"
+                                  onClick={() => setRoute('gift-cards')}
+                                  className="px-3.5 sm:px-4 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold mt-1"
+                                >
+                                  {t(lang, 'navGiftCards')} →
+                                </button>
+                              </div>
+                              <img
+                                src={STUDIO_IMAGES.giftVouchers}
+                                alt="Gift Cards"
+                                className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover shrink-0"
+                              />
+                            </div>
+
+                            <div className="dh-card rounded-3xl p-4 sm:p-5 flex items-center justify-between gap-3 sm:gap-4 bg-gradient-to-br from-[#172033] to-[#23314d] text-white border-none overflow-hidden">
+                              <div className="space-y-1.5 min-w-0 flex-1">
+                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#FF9B19] uppercase">
+                                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                                  VIP Community
+                                </span>
+                                <h3 className="text-sm sm:text-lg font-extrabold leading-snug">
+                                  {lang === 'bn' ? 'প্রাইভেট টেলিগ্রাম ভিআইপি গ্রুপ' : 'Telegram VIP Groups & Learning'}
+                                </h3>
+                                <button
+                                  type="button"
+                                  onClick={() => setRoute('vip-groups')}
+                                  className="px-3.5 sm:px-4 py-1.5 rounded-xl bg-[#FF8500] text-white text-xs font-bold mt-1"
+                                >
+                                  {t(lang, 'navVip')} →
+                                </button>
+                              </div>
+                              <img
+                                src={STUDIO_IMAGES.bannerVip}
+                                alt="VIP Community"
+                                className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover shrink-0"
+                              />
+                            </div>
+                          </section>
+                          <BannerSlotView
+                            slot="home_middle"
+                            banners={banners}
+                            adNetworks={adNetworks}
+                            adsEnabled={settings.adsEnabled}
+                            lang={lang}
+                          />
+                          <ManagedPlacementSlot
+                            placement="in_page"
+                            units={managedAdUnits}
+                            adsEnabled={settings.adsEnabled}
+                            lang={lang}
+                          />
+                        </div>
+                      );
+
+                    case 'ad_player':
+                      return (
+                        <AdPlayerSection
+                          key="ad_player"
+                          ads={advertisements}
+                          adsEnabled={settings.adsEnabled}
+                          lang={lang}
+                        />
+                      );
+
+                    case 'reviews':
+                      return reviews.length > 0 ? (
+                        <section key="reviews" className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
+                          <h2 className="text-lg font-extrabold text-[#172033]">{t(lang, 'customerReviews')}</h2>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            {reviews.slice(0, sec.limit || 6).map((rev) => (
+                              <div key={rev.id} className="p-4 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-[#172033]">{rev.authorName}</span>
+                                  <span className="inline-flex items-center gap-0.5 text-xs font-bold text-[#FF8500]">
+                                    <Star className="w-3.5 h-3.5 fill-current" />
+                                    {rev.rating}/5
+                                  </span>
+                                </div>
+                                <p className="text-xs text-[#777777]">{rev.comment}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </section>
+                      ) : null;
+
+                    case 'why_faq':
+                      return (
+                        <div key="why_faq" className="space-y-6">
+                          <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                            <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
+                              <h2 className="text-lg font-extrabold text-[#172033]">{t(lang, 'whyChooseUs')}</h2>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                {[
+                                  {
+                                    icon: ShieldCheck,
+                                    title: lang === 'bn' ? 'স্বচ্ছ ম্যানুয়াল পেমেন্ট যাচাই' : 'Verified Manual Payments',
+                                    desc:
+                                      lang === 'bn'
+                                        ? 'বিকাশ, নগদ ও রকেট ট্রানজেকশন যাচাই করে নিরাপদ অর্ডার প্রসেসিং।'
+                                        : 'Every bKash, Nagad & Rocket TxID is verified by an admin before processing.',
+                                  },
+                                  {
+                                    icon: Clock,
+                                    title: lang === 'bn' ? 'দ্রুত ও নির্ভরযোগ্য ডেলিভারি' : 'Fast Digital Fulfillment',
+                                    desc:
+                                      lang === 'bn'
+                                        ? 'অনুমোদনের পর নির্ধারিত সময়ের মধ্যে সার্ভিস ডেলিভারি।'
+                                        : 'Prompt delivery within each service’s stated turnaround window.',
+                                  },
+                                ].map((item) => {
+                                  const Icon = item.icon;
+                                  return (
+                                    <div key={item.title} className="p-3.5 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-1">
+                                      <Icon className="w-5 h-5 text-[#FF8500]" />
+                                      <p className="font-bold text-[#172033]">{item.title}</p>
+                                      <p className="text-[#777777]">{item.desc}</p>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-3">
+                              <div className="flex items-center gap-2">
+                                <HelpCircle className="w-5 h-5 text-[#FF8500]" />
+                                <h2 className="text-lg font-extrabold text-[#172033]">{t(lang, 'faqTitle')}</h2>
+                              </div>
+                              <div className="space-y-2 text-xs">
+                                <div className="p-3 rounded-2xl bg-[#F3F6FF]">
+                                  <p className="font-bold text-[#172033]">
+                                    {lang === 'bn'
+                                      ? 'পেমেন্ট করার কতক্ষণ পর অর্ডার কনফার্ম হয়?'
+                                      : 'How long does payment verification take?'}
+                                  </p>
+                                  <p className="text-[#777777] mt-0.5">
+                                    {lang === 'bn'
+                                      ? 'TxID জমা দেওয়ার পর অ্যাডমিন প্রকৃত লেনদেন যাচাই করে অনুমোদন দেন।'
+                                      : 'After submitting your TxID, the owner verifies the actual transaction and approves it.'}
+                                  </p>
+                                </div>
+                                <div className="p-3 rounded-2xl bg-[#F3F6FF]">
+                                  <p className="font-bold text-[#172033]">
+                                    {lang === 'bn' ? 'ওয়ালেট ব্যালেন্স কীভাবে যোগ করবো?' : 'How does Add Money work?'}
+                                  </p>
+                                  <p className="text-[#777777] mt-0.5">
+                                    {lang === 'bn'
+                                      ? 'নিচের "+" বাটনে ক্লিক করে Send Money তথ্য ও TxID জমা দিন।'
+                                      : 'Tap the "+" Add Money button, send money to our personal number, and submit your TxID.'}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          </section>
+                          <BannerSlotView
+                            slot="home_bottom"
+                            banners={banners}
+                            adNetworks={adNetworks}
+                            adsEnabled={settings.adsEnabled}
+                            lang={lang}
+                          />
+                        </div>
+                      );
+
+                    default:
+                      return null;
+                  }
                 })}
-              </div>
-            </section>
-
-            {/* Download Our Mobile App (PWA Install Card) */}
-            <MobileAppDownloadCard lang={lang} siteName={settings.siteName} />
-
-            {/* Prominent Watch Ads & Earn Coins Section (Homepage Mobile + Desktop) */}
-            <WatchEarnHomeBanner
-              lang={lang}
-              user={user}
-              profile={profile}
-              wallet={wallet}
-              settings={settings}
-              advertisements={advertisements}
-              managedAdUnits={managedAdUnits}
-              adNetworks={adNetworks}
-              onNavigate={setRoute}
-              onOpenAuth={() => {
-                setAuthInitialMode('login');
-                setAuthModalOpen(true);
-              }}
-              onToast={showToast}
-            />
-
-            {/* Homepage Top Ad Placement */}
-            <BannerSlotView
-              slot="home_top"
-              banners={banners}
-              adNetworks={adNetworks}
-              adsEnabled={settings.adsEnabled}
-              lang={lang}
-            />
-            <ManagedPlacementSlot
-              placement="home_main"
-              units={managedAdUnits}
-              adsEnabled={settings.adsEnabled}
-              lang={lang}
-            />
-
-            {/* CapCut Premium Recharge Package Section */}
-            <CapCutRechargeSection
-              products={products}
-              lang={lang}
-              onOrderPackage={openPackageCheckout}
-              onAddToCart={(prod, pkg) => handleAddToCart(prod, 1, pkg)}
-            />
-
-            {/* Mobile App Store Section (Android / Mobile Apps Only) */}
-            <MobileAppStoreSection
-              mode="home"
-              lang={lang}
-              settings={settings}
-              paymentMethods={paymentMethods}
-              user={user}
-              profile={profile}
-              wallet={wallet}
-              onOpenAuth={() => {
-                setAuthInitialMode('login');
-                setAuthModalOpen(true);
-              }}
-              onNavigateAll={() => setRoute('mobile-apps')}
-              onGoToOrders={() => setRoute('orders')}
-            />
-
-            {/* 3. GAMING TOP-UPS & PASSES (MangoTopUp Core) */}
-            {gamingAndGiftProducts.length > 0 && (
-              <section className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Gamepad2 className="w-5 h-5 text-[#FF8500]" />
-                    <h2 className="text-lg sm:text-xl font-extrabold text-[#172033] tracking-tight">
-                      {t(lang, 'gamingTopUpsTitle')}
-                    </h2>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setRoute('gaming-store')}
-                    className="px-3.5 py-1.5 rounded-full dh-orange-gradient text-white text-xs font-bold flex items-center gap-1"
-                  >
-                    <span>{t(lang, 'viewAll')}</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
-                  {gamingAndGiftProducts.slice(0, 8).map((p) => (
-                    <ProductCard
-                      key={p.id}
-                      product={p}
-                      lang={lang}
-                      onSelect={openProductDetail}
-                      onQuickOrder={openQuickOrder}
-                      onAddToCart={(prod) => handleAddToCart(prod, 1)}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* 4. FLASH SALE Section */}
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Zap className="w-5 h-5 text-[#FF8500] fill-[#FF8500]" />
-                  <h2 className="text-lg sm:text-xl font-extrabold text-[#172033] tracking-tight">
-                    {t(lang, 'flashSale')}
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setRoute('offers')}
-                  className="px-3.5 py-1.5 rounded-full dh-orange-gradient text-white text-xs font-bold flex items-center gap-1"
-                >
-                  <span>{t(lang, 'viewAll')}</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
-                {(flashSaleProducts.length > 0 ? flashSaleProducts : products.filter((p) => p.active).slice(0, 4))
-                  .slice(0, 4)
-                  .map((p) => (
-                    <ProductCard
-                      key={p.id}
-                      product={p}
-                      lang={lang}
-                      onSelect={openProductDetail}
-                      onQuickOrder={openQuickOrder}
-                      onAddToCart={(prod) => handleAddToCart(prod, 1)}
-                    />
-                  ))}
-              </div>
-            </section>
-
-            {/* 5. HOT PRODUCT Section */}
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Flame className="w-5 h-5 text-[#FF8500] fill-[#FF8500]" />
-                  <h2 className="text-lg sm:text-xl font-extrabold text-[#172033] tracking-tight">
-                    {t(lang, 'hotProducts')}
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setRoute('services')}
-                  className="px-3.5 py-1.5 rounded-full dh-orange-gradient text-white text-xs font-bold flex items-center gap-1"
-                >
-                  <span>{t(lang, 'viewAll')}</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
-                {(hotProducts.length > 0 ? hotProducts : products.filter((p) => p.active).slice(0, 8))
-                  .slice(0, 8)
-                  .map((p) => (
-                    <ProductCard
-                      key={p.id}
-                      product={p}
-                      lang={lang}
-                      onSelect={openProductDetail}
-                      onQuickOrder={openQuickOrder}
-                      onAddToCart={(prod) => handleAddToCart(prod, 1)}
-                    />
-                  ))}
-              </div>
-            </section>
-
-            {/* Between-Sections Ad Banner & Native Ads */}
-            <BannerSlotView
-              slot="between_sections"
-              banners={banners}
-              adNetworks={adNetworks}
-              adsEnabled={settings.adsEnabled}
-              lang={lang}
-            />
-            <ManagedPlacementSlot
-              placement="slider"
-              variant="slider"
-              units={managedAdUnits}
-              adsEnabled={settings.adsEnabled}
-              lang={lang}
-            />
-            <NativeAdRow
-              placement="between_sections"
-              advertisements={advertisements}
-              adNetworks={adNetworks}
-              adsEnabled={settings.adsEnabled}
-              lang={lang}
-              maxCards={3}
-            />
-
-            {/* 6. STREAMING, OTT & AI SUBSCRIPTIONS */}
-            {streamingAndAiProducts.length > 0 && (
-              <section className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Tv className="w-5 h-5 text-[#FF8500]" />
-                    <h2 className="text-lg sm:text-xl font-extrabold text-[#172033]">
-                      {t(lang, 'streamingGiftTitle')}
-                    </h2>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setRoute('streaming-store')}
-                    className="text-xs font-bold text-[#FF8500] hover:underline"
-                  >
-                    {t(lang, 'viewAll')} →
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
-                  {streamingAndAiProducts.slice(0, 4).map((p) => (
-                    <ProductCard
-                      key={p.id}
-                      product={p}
-                      lang={lang}
-                      onSelect={openProductDetail}
-                      onQuickOrder={openQuickOrder}
-                      onAddToCart={(prod) => handleAddToCart(prod, 1)}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* 7. TRENDING SERVICES */}
-            {trendingProducts.length > 0 && (
-              <section className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-[#FF8500]" />
-                    <h2 className="text-lg sm:text-xl font-extrabold text-[#172033]">
-                      {t(lang, 'trendingServices')}
-                    </h2>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setRoute('services')}
-                    className="text-xs font-bold text-[#FF8500] hover:underline"
-                  >
-                    {t(lang, 'viewAll')} →
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
-                  {trendingProducts.slice(0, 4).map((p) => (
-                    <ProductCard
-                      key={p.id}
-                      product={p}
-                      lang={lang}
-                      onSelect={openProductDetail}
-                      onQuickOrder={openQuickOrder}
-                      onAddToCart={(prod) => handleAddToCart(prod, 1)}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* 8. BEST SELLERS & NEW ARRIVALS */}
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Award className="w-5 h-5 text-[#FF8500]" />
-                  <h2 className="text-lg sm:text-xl font-extrabold text-[#172033]">
-                    {t(lang, 'bestSellers')} & {t(lang, 'newArrivals')}
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setRoute('digital-products')}
-                  className="text-xs font-bold text-[#FF8500] hover:underline"
-                >
-                  {t(lang, 'viewAll')} →
-                </button>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
-                {[...newArrivalProducts, ...bestSellerProducts].slice(0, 8).map((p) => (
-                  <ProductCard
-                    key={p.id}
-                    product={p}
-                    lang={lang}
-                    onSelect={openProductDetail}
-                    onQuickOrder={openQuickOrder}
-                    onAddToCart={(prod) => handleAddToCart(prod, 1)}
-                  />
-                ))}
-              </div>
-            </section>
-
-            {/* 9. Premium Official Payment Channels & Quick Deposit (bKash, Nagad & Rocket Authentic Logos) */}
-            <HomepagePaymentSection
-              settings={settings}
-              lang={lang}
-              user={user}
-              profile={profile}
-              onOpenAuth={() => setAuthModalOpen(true)}
-              onNavigateAddMoney={() => setRoute('add-money')}
-            />
-
-            {/* 10. Gift Cards & VIP Community Spotlight */}
-            <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="dh-card rounded-3xl p-4 sm:p-5 flex items-center justify-between gap-3 sm:gap-4 bg-gradient-to-br from-white to-[#FFF7EE] dark:from-slate-900 dark:to-slate-800/90 overflow-hidden">
-                <div className="space-y-1.5 min-w-0 flex-1">
-                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#FF8500] uppercase">
-                    <Gift className="w-3.5 h-3.5 shrink-0" />
-                    Gift Cards & Vouchers
-                  </span>
-                  <h3 className="text-sm sm:text-lg font-extrabold text-[#172033] dark:text-slate-100 leading-snug">
-                    {lang === 'bn' ? 'Steam, UniPin, PlayStation ও Google Play' : 'Steam, UniPin, PSN & Google Play Codes'}
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => setRoute('gift-cards')}
-                    className="px-3.5 sm:px-4 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold mt-1"
-                  >
-                    {t(lang, 'navGiftCards')} →
-                  </button>
-                </div>
-                <img
-                  src={STUDIO_IMAGES.giftVouchers}
-                  alt="Gift Cards"
-                  className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover shrink-0"
-                />
-              </div>
-
-              <div className="dh-card rounded-3xl p-4 sm:p-5 flex items-center justify-between gap-3 sm:gap-4 bg-gradient-to-br from-[#172033] to-[#23314d] text-white border-none overflow-hidden">
-                <div className="space-y-1.5 min-w-0 flex-1">
-                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#FF9B19] uppercase">
-                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                    VIP Community
-                  </span>
-                  <h3 className="text-sm sm:text-lg font-extrabold leading-snug">
-                    {lang === 'bn' ? 'প্রাইভেট টেলিগ্রাম ভিআইপি গ্রুপ' : 'Telegram VIP Groups & Learning'}
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => setRoute('vip-groups')}
-                    className="px-3.5 sm:px-4 py-1.5 rounded-xl bg-[#FF8500] text-white text-xs font-bold mt-1"
-                  >
-                    {t(lang, 'navVip')} →
-                  </button>
-                </div>
-                <img
-                  src={STUDIO_IMAGES.bannerVip}
-                  alt="VIP Community"
-                  className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover shrink-0"
-                />
-              </div>
-            </section>
-
-            {/* Homepage Middle Ad Banner */}
-            <BannerSlotView
-              slot="home_middle"
-              banners={banners}
-              adNetworks={adNetworks}
-              adsEnabled={settings.adsEnabled}
-              lang={lang}
-            />
-            <ManagedPlacementSlot
-              placement="in_page"
-              units={managedAdUnits}
-              adsEnabled={settings.adsEnabled}
-              lang={lang}
-            />
-
-            {/* 11. Dedicated Advertisement Player Section (AD01-AD06) */}
-            <AdPlayerSection ads={advertisements} adsEnabled={settings.adsEnabled} lang={lang} />
-
-            {/* 12. Verified Customer Reviews */}
-            {reviews.length > 0 && (
-              <section className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
-                <h2 className="text-lg font-extrabold text-[#172033]">{t(lang, 'customerReviews')}</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {reviews.slice(0, 6).map((rev) => (
-                    <div key={rev.id} className="p-4 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-[#172033]">{rev.authorName}</span>
-                        <span className="inline-flex items-center gap-0.5 text-xs font-bold text-[#FF8500]">
-                          <Star className="w-3.5 h-3.5 fill-current" />
-                          {rev.rating}/5
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#777777]">{rev.comment}</p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* 13. Why Choose Us + FAQ */}
-            <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
-                <h2 className="text-lg font-extrabold text-[#172033]">{t(lang, 'whyChooseUs')}</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  {[
-                    {
-                      icon: ShieldCheck,
-                      title: lang === 'bn' ? 'স্বচ্ছ ম্যানুয়াল পেমেন্ট যাচাই' : 'Verified Manual Payments',
-                      desc:
-                        lang === 'bn'
-                          ? 'বিকাশ, নগদ ও রকেট ট্রানজেকশন যাচাই করে নিরাপদ অর্ডার প্রসেসিং।'
-                          : 'Every bKash, Nagad & Rocket TxID is verified by an admin before processing.',
-                    },
-                    {
-                      icon: Clock,
-                      title: lang === 'bn' ? 'দ্রুত ও নির্ভরযোগ্য ডেলিভারি' : 'Fast Digital Fulfillment',
-                      desc:
-                        lang === 'bn'
-                          ? 'অনুমোদনের পর নির্ধারিত সময়ের মধ্যে সার্ভিস ডেলিভারি।'
-                          : 'Prompt delivery within each service’s stated turnaround window.',
-                    },
-                  ].map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <div key={item.title} className="p-3.5 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] space-y-1">
-                        <Icon className="w-5 h-5 text-[#FF8500]" />
-                        <p className="font-bold text-[#172033]">{item.title}</p>
-                        <p className="text-[#777777]">{item.desc}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-3">
-                <div className="flex items-center gap-2">
-                  <HelpCircle className="w-5 h-5 text-[#FF8500]" />
-                  <h2 className="text-lg font-extrabold text-[#172033]">{t(lang, 'faqTitle')}</h2>
-                </div>
-                <div className="space-y-2 text-xs">
-                  <div className="p-3 rounded-2xl bg-[#F3F6FF]">
-                    <p className="font-bold text-[#172033]">
-                      {lang === 'bn'
-                        ? 'পেমেন্ট করার কতক্ষণ পর অর্ডার কনফার্ম হয়?'
-                        : 'How long does payment verification take?'}
-                    </p>
-                    <p className="text-[#777777] mt-0.5">
-                      {lang === 'bn'
-                        ? 'TxID জমা দেওয়ার পর অ্যাডমিন প্রকৃত লেনদেন যাচাই করে অনুমোদন দেন।'
-                        : 'After submitting your TxID, the owner verifies the actual transaction and approves it.'}
-                    </p>
-                  </div>
-                  <div className="p-3 rounded-2xl bg-[#F3F6FF]">
-                    <p className="font-bold text-[#172033]">
-                      {lang === 'bn' ? 'ওয়ালেট ব্যালেন্স কীভাবে যোগ করবো?' : 'How does Add Money work?'}
-                    </p>
-                    <p className="text-[#777777] mt-0.5">
-                      {lang === 'bn'
-                        ? 'নিচের "+" বাটনে ক্লিক করে Send Money তথ্য ও TxID জমা দিন।'
-                        : 'Tap the "+" Add Money button, send money to our personal number, and submit your TxID.'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* Homepage Bottom Ad Banner */}
-            <BannerSlotView
-              slot="home_bottom"
-              banners={banners}
-              adNetworks={adNetworks}
-              adsEnabled={settings.adsEnabled}
-              lang={lang}
-            />
             </div>
           </div>
         )}
@@ -1562,6 +1668,17 @@ export default function App() {
             }}
             onBackHome={() => setRoute('home')}
             onGoToOrders={() => setRoute('orders')}
+          />
+        )}
+
+        {route === 'games-store' && (
+          <GamesStoreSection
+            mode="page"
+            lang={lang}
+            games={games}
+            products={products}
+            onSelectProduct={openProductDetail}
+            onBackHome={() => setRoute('home')}
           />
         )}
 
@@ -1741,8 +1858,10 @@ export default function App() {
             walletTxs={walletTxs}
             adRewardTransactions={adRewardTransactions}
             favoriteAppIds={favoriteAppIds}
+            downloadHistory={downloadHistory}
             totalDownloads={totalDownloads}
             mobileApps={mobileApps}
+            games={games}
             orders={orders}
             payments={payments}
             referrals={referrals}
@@ -1793,6 +1912,7 @@ export default function App() {
             isAdmin={isAdmin}
             categories={categories}
             products={products}
+            games={games}
             advertisements={advertisements}
             adNetworks={adNetworks}
             managedAdUnits={managedAdUnits}
@@ -1870,6 +1990,7 @@ export default function App() {
             {(
               [
                 ['mobile-apps', lang === 'bn' ? 'মোবাইল অ্যাপ স্টোর' : 'Mobile App Store'],
+                ['games-store', lang === 'bn' ? 'গেমস স্টোর' : 'Games Store'],
                 ['software-store', t(lang, 'navSoftware')],
                 ['digital-products', t(lang, 'navDigital')],
                 ['graphic-design', t(lang, 'navDesign')],

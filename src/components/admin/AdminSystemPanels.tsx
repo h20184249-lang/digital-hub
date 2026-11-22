@@ -672,6 +672,37 @@ export function AdminSettingsPanel({
               className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
             />
           </div>
+          <div className="sm:col-span-2">
+            <label className="block font-bold mb-1.5">Brand Accent Theme Color</label>
+            <div className="flex flex-wrap items-center gap-2">
+              {['#FF8500', '#2563EB', '#059669', '#DC2626', '#7C3AED'].map((hex) => (
+                <button
+                  key={hex}
+                  type="button"
+                  onClick={() => setDraft({ ...draft, accentColor: hex })}
+                  className={`w-7 h-7 rounded-full border-2 ${
+                    (draft.accentColor || '#FF8500').toUpperCase() === hex.toUpperCase()
+                      ? 'border-[#172033] dark:border-white scale-110'
+                      : 'border-transparent'
+                  }`}
+                  style={{ backgroundColor: hex }}
+                  aria-label={`Select accent color ${hex}`}
+                />
+              ))}
+              <input
+                type="color"
+                value={draft.accentColor || '#FF8500'}
+                onChange={(e) => setDraft({ ...draft, accentColor: e.target.value })}
+                className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
+              />
+              <input
+                type="text"
+                value={draft.accentColor || '#FF8500'}
+                onChange={(e) => setDraft({ ...draft, accentColor: e.target.value })}
+                className="w-28 px-3 py-1.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num uppercase"
+              />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1364,6 +1395,7 @@ interface AdminStorefrontPanelProps {
   coupons: Coupon[];
   tickets: SupportTicket[];
   reviews: Review[];
+  defaultSubTab?: 'orders' | 'payments' | 'products' | 'categories' | 'coupons' | 'tickets' | 'reviews';
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
 }
@@ -1377,10 +1409,16 @@ export function AdminStorefrontPanel({
   coupons,
   tickets,
   reviews,
+  defaultSubTab,
   onSuccess,
   onError,
 }: AdminStorefrontPanelProps) {
-  const [subTab, setSubTab] = useState<'orders' | 'payments' | 'products' | 'categories' | 'coupons' | 'tickets' | 'reviews'>('orders');
+  const [subTab, setSubTab] = useState<'orders' | 'payments' | 'products' | 'categories' | 'coupons' | 'tickets' | 'reviews'>(
+    defaultSubTab || 'orders'
+  );
+  useEffect(() => {
+    if (defaultSubTab) setSubTab(defaultSubTab);
+  }, [defaultSubTab]);
   const [orderNotes, setOrderNotes] = useState<Record<string, string>>({});
   const [ticketReplies, setTicketReplies] = useState<Record<string, string>>({});
   const [prodSearch, setProdSearch] = useState('');

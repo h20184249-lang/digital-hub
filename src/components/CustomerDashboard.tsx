@@ -53,6 +53,8 @@ import {
   AuthUser,
   Banner,
   Coupon,
+  DownloadHistoryItem,
+  GameItem,
   Language,
   ManagedAdUnitConfig,
   Order,
@@ -98,6 +100,7 @@ interface CustomerDashboardProps {
     | 'referrals'
     | 'rewards'
     | 'favorites'
+    | 'downloads'
     | 'coupons'
     | 'notifications'
     | 'support'
@@ -110,8 +113,10 @@ interface CustomerDashboardProps {
   walletTxs?: WalletTransaction[];
   adRewardTransactions?: AdRewardTransaction[];
   favoriteAppIds?: string[];
+  downloadHistory?: DownloadHistoryItem[];
   totalDownloads?: number;
   mobileApps?: MobileAppItem[];
+  games?: GameItem[];
   orders: Order[];
   payments: Payment[];
   referrals: Referral[];
@@ -135,7 +140,9 @@ interface CustomerDashboardProps {
 const EMPTY_WALLET_TXS: WalletTransaction[] = [];
 const EMPTY_AD_REWARD_TXS: AdRewardTransaction[] = [];
 const EMPTY_STRING_IDS: string[] = [];
+const EMPTY_DOWNLOAD_HISTORY: DownloadHistoryItem[] = [];
 const EMPTY_MOBILE_APPS: MobileAppItem[] = [];
+const EMPTY_GAMES: GameItem[] = [];
 const EMPTY_WITHDRAWALS: WithdrawalRequest[] = [];
 const EMPTY_REWARD_CLAIMS: RewardedAdClaim[] = [];
 const EMPTY_ANNOUNCEMENTS: Announcement[] = [];
@@ -153,8 +160,10 @@ export function CustomerDashboard({
   walletTxs = EMPTY_WALLET_TXS,
   adRewardTransactions = EMPTY_AD_REWARD_TXS,
   favoriteAppIds = EMPTY_STRING_IDS,
+  downloadHistory = EMPTY_DOWNLOAD_HISTORY,
   totalDownloads = 0,
   mobileApps = EMPTY_MOBILE_APPS,
+  games = EMPTY_GAMES,
   orders,
   payments,
   referrals,
@@ -290,6 +299,18 @@ export function CustomerDashboard({
     const idSet = new Set(favoriteAppIds);
     return mobileApps.filter((a) => idSet.has(a.id));
   }, [favoriteAppIds, mobileApps]);
+
+  const appById = useMemo(() => {
+    const map = new Map<string, MobileAppItem>();
+    mobileApps.forEach((a) => map.set(a.id, a));
+    return map;
+  }, [mobileApps]);
+
+  const gameById = useMemo(() => {
+    const map = new Map<string, GameItem>();
+    games.forEach((g) => map.set(g.id, g));
+    return map;
+  }, [games]);
 
   const filteredNotifications = useMemo(() => {
     if (notifFilter === 'all') return notifications;
@@ -645,6 +666,11 @@ export function CustomerDashboard({
       id: 'favorites',
       label: `${lang === 'bn' ? 'পছন্দের অ্যাপস' : 'Favorites'}${favoriteApps.length ? ` (${favoriteApps.length})` : ''}`,
       icon: Heart,
+    },
+    {
+      id: 'downloads',
+      label: `${lang === 'bn' ? 'ডাউনলোড হিস্টোরি' : 'Downloads'}${downloadHistory.length ? ` (${downloadHistory.length})` : ''}`,
+      icon: Download,
     },
     { id: 'referrals', label: lang === 'bn' ? 'রেফারেল' : 'Referrals', icon: Gift },
     { id: 'coupons', label: lang === 'bn' ? 'কুপন' : 'Coupons', icon: Tag },
@@ -1191,6 +1217,56 @@ export function CustomerDashboard({
             </div>
           </div>
 
+          {/* Recent Download History Card (Synced from DB analytics_events) */}
+          <div className="dh-card rounded-3xl p-5 dark:bg-slate-900 dark:border-slate-800 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-base font-bold text-[#172033] dark:text-slate-100 flex items-center gap-2">
+                <Download className="w-4 h-4 text-[#0EA5E9]" />
+                {lang === 'bn' ? 'সাম্প্রতিক ডাউনলোড ও প্লে হিস্টোরি' : 'Recent Downloads & Plays'}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setTab('downloads')}
+                className="text-xs font-bold text-[#FF8500] hover:underline cursor-pointer"
+              >
+                {lang === 'bn' ? 'সব হিস্টোরি →' : 'Full History →'}
+              </button>
+            </div>
+            {downloadHistory.length === 0 ? (
+              <p className="text-xs text-[#777777] dark:text-slate-400 py-3 text-center">
+                {lang === 'bn'
+                  ? 'এখনো কোনো অ্যাপ বা গেম ডাউনলোড/প্লে রেকর্ড হয়নি।'
+                  : 'No app downloads or game plays recorded yet.'}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                {downloadHistory.slice(0, 3).map((dl) => {
+                  const matchedApp = dl.contentType === 'app' ? appById.get(dl.contentId) : undefined;
+                  const matchedGame = dl.contentType === 'game' ? gameById.get(dl.contentId) : undefined;
+                  const itemTitle =
+                    matchedApp?.name ||
+                    (matchedGame ? (lang === 'bn' ? matchedGame.titleBn : matchedGame.titleEn) : '') ||
+                    dl.contentId;
+                  return (
+                    <button
+                      key={dl.id}
+                      type="button"
+                      onClick={() => onNavigate(dl.contentType === 'game' ? 'games-store' : 'mobile-apps')}
+                      className="p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70 border border-[#E6ECFA] dark:border-slate-700 text-left hover:border-[#FF8500] transition-colors cursor-pointer"
+                    >
+                      <p className="text-xs font-extrabold text-[#172033] dark:text-slate-100 truncate">
+                        {itemTitle}
+                      </p>
+                      <p className="text-[10px] font-mono-num text-[#64748B] dark:text-slate-400 mt-0.5 truncate">
+                        {dl.contentType.toUpperCase()} · {dl.eventType.replace(/_/g, ' ')} · {formatDateShort(dl.createdAt, lang)}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <div className="p-4 rounded-3xl bg-gradient-to-r from-[#172033] to-[#23314d] text-white flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-1">
               <p className="text-xs font-extrabold uppercase text-[#FF8500] flex items-center gap-1.5">
@@ -1668,6 +1744,111 @@ export function CustomerDashboard({
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'downloads' && (
+        <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-[#172033] dark:text-slate-100 flex items-center gap-2">
+                <Download className="w-5 h-5 text-[#0EA5E9]" />
+                {lang === 'bn' ? 'অ্যাপ ও গেম ডাউনলোড হিস্টোরি' : 'Download & Play History'}
+              </h2>
+              <p className="text-xs text-[#777777] dark:text-slate-400">
+                {lang === 'bn'
+                  ? 'আপনার অ্যাকাউন্ট থেকে করা সাম্প্রতিক অ্যাপ ডাউনলোড ও গেম প্লে ক্লিকের ইতিহাস।'
+                  : 'Verified record of mobile app downloads and game play/install clicks from your account.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onNavigate('mobile-apps')}
+                className="px-3.5 py-2 rounded-xl bg-[#172033] text-white text-xs font-bold hover:bg-[#FF8500] transition-colors cursor-pointer"
+              >
+                {lang === 'bn' ? 'অ্যাপ স্টোর' : 'App Store'}
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('games-store')}
+                className="px-3.5 py-2 rounded-xl dh-orange-gradient text-white text-xs font-bold cursor-pointer"
+              >
+                {lang === 'bn' ? 'গেমস স্টোর' : 'Games Store'}
+              </button>
+            </div>
+          </div>
+
+          {downloadHistory.length === 0 ? (
+            <div className="py-10 text-center space-y-3">
+              <Download className="w-10 h-10 text-[#CBD5E1] mx-auto" />
+              <p className="text-sm text-[#777777] dark:text-slate-400">
+                {lang === 'bn'
+                  ? 'এখনো কোনো ডাউনলোড হিস্টোরি নেই।'
+                  : 'No downloads or game plays recorded yet.'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {downloadHistory.map((dl) => {
+                const matchedApp = dl.contentType === 'app' ? appById.get(dl.contentId) : undefined;
+                const matchedGame = dl.contentType === 'game' ? gameById.get(dl.contentId) : undefined;
+                const title =
+                  matchedApp?.name ||
+                  (matchedGame ? (lang === 'bn' ? matchedGame.titleBn : matchedGame.titleEn) : '') ||
+                  dl.contentId;
+                const thumb = matchedApp?.iconUrl || matchedGame?.imageUrl;
+                const catLabel = matchedApp?.category || matchedGame?.category || '';
+                return (
+                  <div
+                    key={dl.id}
+                    className="p-3.5 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70 border border-[#E6ECFA] dark:border-slate-700 flex flex-wrap items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      {thumb ? (
+                        <img
+                          src={thumb}
+                          alt={title}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          className="w-10 h-10 rounded-xl object-cover border border-[#E6ECFA] shrink-0"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-700 flex items-center justify-center shrink-0">
+                          <Download className="w-4 h-4 text-[#0EA5E9]" />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="font-extrabold text-[#172033] dark:text-slate-100 truncate">{title}</p>
+                        <p className="text-[11px] font-mono-num text-[#64748B] dark:text-slate-400">
+                          {dl.contentType.toUpperCase()}
+                          {catLabel ? ` · ${catLabel}` : ''} · {dl.deviceType} · {formatDateShort(dl.createdAt, lang)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-700 text-[10px] font-bold uppercase text-[#0EA5E9]">
+                        {dl.eventType === 'play_click'
+                          ? lang === 'bn'
+                            ? 'প্লে ক্লিক'
+                            : 'Play Click'
+                          : lang === 'bn'
+                            ? 'ডাউনলোড ক্লিক'
+                            : 'Download Click'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onNavigate(dl.contentType === 'game' ? 'games-store' : 'mobile-apps')}
+                        className="px-3 py-1.5 rounded-xl bg-[#172033] text-white text-xs font-bold hover:bg-[#FF8500] transition-colors cursor-pointer"
+                      >
+                        {lang === 'bn' ? 'স্টোর খুলুন' : 'Open Store'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

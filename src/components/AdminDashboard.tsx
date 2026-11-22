@@ -3,20 +3,26 @@ import {
   Activity,
   ArrowDownToLine,
   ArrowLeft,
+  BarChart3,
   Bell,
   CheckCircle2,
   Coins,
   CreditCard,
   Database,
   FileText,
+  FolderTree,
+  Gamepad2,
   Gift,
   LayoutDashboard,
+  LayoutGrid,
+  LifeBuoy,
   Lock,
   LogOut,
   Megaphone,
   Menu,
   Moon,
   Package,
+  Radio,
   RefreshCw,
   Settings,
   Shield,
@@ -24,6 +30,7 @@ import {
   ShoppingBag,
   Smartphone,
   Sun,
+  TrendingUp,
   Users,
   Wallet,
   Wrench,
@@ -40,6 +47,7 @@ import {
   Banner,
   Category,
   Coupon,
+  GameItem,
   Language,
   ManagedAdUnitConfig,
   Order,
@@ -69,12 +77,26 @@ import {
   subscribeAllAnnouncements,
   subscribeAllRewardedClaims,
   subscribeAllWithdrawals,
+  subscribeGames,
+  subscribeMobileApps,
   verifyOwnerAdminServer,
 } from '../lib/firestoreService';
+import type { MobileAppItem } from '../lib/mobileAppsCatalog';
 import { DigitalHubLogo } from './DigitalHubLogo';
 import { AdminCharts } from './admin/AdminCharts';
 import { AdminUsersPanel } from './admin/AdminUsersPanel';
 import { AdminAppsPanel } from './admin/AdminAppsPanel';
+import {
+  AdminContentStatsPanel,
+  AdminDailyAnalyticsPanel,
+  AdminLiveVisitorsPanel,
+} from './admin/AdminAnalyticsPanels';
+import {
+  AdminGamesPanel,
+  AdminHomepageEditorPanel,
+  AdminSupportCenterPanel,
+  AdminUnifiedCategoriesPanel,
+} from './admin/AdminContentCmsPanels';
 import {
   AdminCoinManagementPanel,
   AdminTransactionsPanel,
@@ -109,6 +131,7 @@ interface AdminDashboardProps {
   onLogout: () => Promise<void>;
   categories: Category[];
   products: Product[];
+  games?: GameItem[];
   advertisements: Advertisement[];
   adNetworks: AdNetworkConfig[];
   managedAdUnits: ManagedAdUnitConfig[];
@@ -119,24 +142,33 @@ interface AdminDashboardProps {
 
 type AdminSection =
   | 'overview'
-  | 'packages'
+  | 'analytics'
+  | 'live_visitors'
+  | 'content_stats'
   | 'apps'
+  | 'games'
+  | 'packages'
+  | 'categories'
+  | 'orders'
   | 'users'
+  | 'advertisements'
+  | 'homepage_editor'
+  | 'settings'
+  | 'support'
   | 'wallets'
   | 'coins'
   | 'transactions'
   | 'withdrawals'
   | 'referrals'
-  | 'advertisements'
   | 'payment_methods'
   | 'notifications'
-  | 'settings'
   | 'security'
   | 'activity_logs'
   | 'backup'
   | 'storefront';
 
 const EMPTY_PAYMENT_METHODS: PaymentMethodConfig[] = [];
+const EMPTY_GAMES: GameItem[] = [];
 
 export function AdminDashboard({
   lang,
@@ -149,6 +181,7 @@ export function AdminDashboard({
   onLogout,
   categories,
   products,
+  games = EMPTY_GAMES,
   advertisements,
   managedAdUnits,
   banners,
@@ -177,6 +210,8 @@ export function AdminDashboard({
   const [adRewardTransactions, setAdRewardTransactions] = useState<AdRewardTransaction[]>([]);
   const [adAnalytics, setAdAnalytics] = useState<ServerAdAnalytics | null>(null);
   const [liveAnalytics, setLiveAnalytics] = useState<AdminAnalyticsPayload | null>(null);
+  const [liveApps, setLiveApps] = useState<MobileAppItem[]>([]);
+  const [liveGames, setLiveGames] = useState<GameItem[]>([]);
 
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState('');
@@ -235,6 +270,8 @@ export function AdminDashboard({
     const uR = subscribeAllRewardedClaims(setRewardClaims);
     const uA = subscribeAllAnnouncements(setAnnouncements);
     const uT = subscribeAllAdRewardTransactions(setAdRewardTransactions);
+    const uApps = subscribeMobileApps(setLiveApps, true);
+    const uGames = subscribeGames(setLiveGames, true);
 
     fetchAdminDashboardServer(false)
       .then((snap) => {
@@ -254,6 +291,8 @@ export function AdminDashboard({
       uR();
       uA();
       uT();
+      uApps();
+      uGames();
     };
   }, [serverVerifiedAdmin]);
 
@@ -350,41 +389,73 @@ export function AdminDashboard({
     );
   }
 
-  const navItems: Array<{
+  const displayGames = liveGames.length > 0 ? liveGames : games;
+  const openTicketCount = tickets.filter((t) => t.status === 'open' || t.status === 'in_progress').length;
+
+  type NavItemMeta = {
     id: AdminSection;
     label: string;
     labelBn: string;
     icon: typeof LayoutDashboard;
     badge?: number;
-  }> = [
+  };
+
+  const primaryNavItems: NavItemMeta[] = [
     { id: 'overview', label: 'Overview', labelBn: 'ওভারভিউ', icon: LayoutDashboard },
+    { id: 'analytics', label: 'Analytics', labelBn: 'অ্যানালিটিক্স', icon: BarChart3 },
+    {
+      id: 'live_visitors',
+      label: 'Live Visitors',
+      labelBn: 'লাইভ ভিজিটর',
+      icon: Radio,
+      badge: liveAnalytics?.kpis.onlineUsers || undefined,
+    },
+    { id: 'content_stats', label: 'Content Statistics', labelBn: 'কনটেন্ট পরিসংখ্যান', icon: TrendingUp },
+    { id: 'apps', label: 'Apps', labelBn: 'অ্যাপস স্টোর', icon: Smartphone, badge: liveApps.length || undefined },
+    { id: 'games', label: 'Games', labelBn: 'গেমস হাব', icon: Gamepad2, badge: displayGames.length || undefined },
     {
       id: 'packages',
-      label: 'Package Management',
-      labelBn: 'প্যাকেজ ম্যানেজমেন্ট',
+      label: 'Digital Services',
+      labelBn: 'ডিজিটাল সার্ভিস',
       icon: Package,
       badge: products.length,
     },
     {
-      id: 'apps',
-      label: 'Smart App Store',
-      labelBn: 'স্মার্ট অ্যাপ স্টোর',
-      icon: Smartphone,
+      id: 'categories',
+      label: 'Categories',
+      labelBn: 'ক্যাটাগরি',
+      icon: FolderTree,
+      badge: categories.length,
+    },
+    {
+      id: 'orders',
+      label: 'Orders',
+      labelBn: 'অর্ডার সমূহ',
+      icon: ShoppingBag,
+      badge: kpis.pendingOrders || undefined,
     },
     { id: 'users', label: 'Users', labelBn: 'ইউজার ম্যানেজমেন্ট', icon: Users, badge: kpis.totalUsers },
+    { id: 'advertisements', label: 'Advertisements', labelBn: 'বিজ্ঞাপন ও ব্যানার', icon: Megaphone },
+    { id: 'homepage_editor', label: 'Homepage Editor', labelBn: 'হোমপেজ এডিটর', icon: LayoutGrid },
+    { id: 'settings', label: 'Settings', labelBn: 'ওয়েবসাইট সেটিংস', icon: Settings },
+    {
+      id: 'support',
+      label: 'Support',
+      labelBn: 'সাপোর্ট সেন্টার',
+      icon: LifeBuoy,
+      badge: openTicketCount || undefined,
+    },
+  ];
+
+  const financeOpsNavItems: NavItemMeta[] = [
     {
       id: 'wallets',
-      label: 'Wallet & Balances',
+      label: 'Wallets & Balances',
       labelBn: 'ওয়ালেট ও ব্যালেন্স',
       icon: Wallet,
       badge: kpis.pendingDeposits || undefined,
     },
-    {
-      id: 'coins',
-      label: 'Coin Management',
-      labelBn: 'কয়েন ম্যানেজমেন্ট',
-      icon: Coins,
-    },
+    { id: 'coins', label: 'Coin Management', labelBn: 'কয়েন ম্যানেজমেন্ট', icon: Coins },
     { id: 'transactions', label: 'Transactions', labelBn: 'লেনদেন লেজার', icon: FileText },
     {
       id: 'withdrawals',
@@ -394,20 +465,56 @@ export function AdminDashboard({
       badge: kpis.pendingWithdrawalCount || undefined,
     },
     { id: 'referrals', label: 'Referrals', labelBn: 'রেফারেল প্রোগ্রাম', icon: Gift },
-    { id: 'advertisements', label: 'Advertisements', labelBn: 'বিজ্ঞাপন ও ব্যানার', icon: Megaphone },
     { id: 'payment_methods', label: 'Payment Methods', labelBn: 'পেমেন্ট মেথড', icon: CreditCard },
     { id: 'notifications', label: 'Notifications', labelBn: 'নোটিফিকেশন', icon: Bell },
-    { id: 'settings', label: 'Website Settings', labelBn: 'ওয়েবসাইট সেটিংস', icon: Settings },
     { id: 'security', label: 'Security', labelBn: 'সিকিউরিটি', icon: Lock },
     { id: 'activity_logs', label: 'Activity Logs', labelBn: 'অ্যাক্টিভিটি লগ', icon: Activity },
     { id: 'backup', label: 'Backup & Export', labelBn: 'ব্যাকআপ ও এক্সপোর্ট', icon: Database },
   ];
 
+  const allNavItems = [...primaryNavItems, ...financeOpsNavItems];
+
   const activeNavMeta =
-    navItems.find((n) => n.id === section) ||
+    allNavItems.find((n) => n.id === section) ||
     (section === 'storefront'
-      ? { label: 'Storefront & Orders', labelBn: 'স্টোরফ্রন্ট ও অর্ডার' }
-      : navItems[0]);
+      ? { label: 'Storefront Tools', labelBn: 'স্টোরফ্রন্ট টুলস' }
+      : allNavItems[0]);
+
+  const renderNavButton = (item: NavItemMeta) => {
+    const Icon = item.icon;
+    const active = section === item.id;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        onClick={() => {
+          setSection(item.id);
+          setMobileMenuOpen(false);
+        }}
+        className={`w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-colors ${
+          active
+            ? 'bg-[#FF8500] text-white shadow-xs'
+            : 'text-[#172033] dark:text-slate-300 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
+        }`}
+      >
+        <span className="flex items-center gap-2.5 min-w-0">
+          <Icon className={`w-4 h-4 shrink-0 ${active ? 'text-white' : 'text-slate-500 dark:text-slate-400'}`} />
+          <span className="truncate">{lang === 'bn' ? item.labelBn : item.label}</span>
+        </span>
+        {item.badge !== undefined && item.badge > 0 && (
+          <span
+            className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono-num font-extrabold ${
+              active
+                ? 'bg-white/20 text-white'
+                : 'bg-[#FFF3E5] dark:bg-orange-950/50 text-[#FF8500]'
+            }`}
+          >
+            {item.badge}
+          </span>
+        )}
+      </button>
+    );
+  };
 
   const renderSidebarNav = () => (
     <div className="flex flex-col h-full">
@@ -439,52 +546,26 @@ export function AdminDashboard({
         </div>
       </div>
 
-      {/* 12 Primary Items + Storefront + Logout (#13) */}
-      <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const active = section === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => {
-                setSection(item.id);
-                setMobileMenuOpen(false);
-              }}
-              className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-colors ${
-                active
-                  ? 'bg-[#FF8500] text-white shadow-xs'
-                  : 'text-[#172033] dark:text-slate-300 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
-              }`}
-            >
-              <span className="flex items-center gap-2.5 min-w-0">
-                <Icon className={`w-4 h-4 shrink-0 ${active ? 'text-white' : 'text-slate-500 dark:text-slate-400'}`} />
-                <span className="truncate">{lang === 'bn' ? item.labelBn : item.label}</span>
-              </span>
-              {item.badge !== undefined && item.badge > 0 && (
-                <span
-                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono-num font-extrabold ${
-                    active
-                      ? 'bg-white/20 text-white'
-                      : 'bg-[#FFF3E5] dark:bg-orange-950/50 text-[#FF8500]'
-                  }`}
-                >
-                  {item.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
+      {/* Primary 14 Sections + Finance & System Operations + Logout */}
+      <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
+        <p className="px-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-[#777777] dark:text-slate-500">
+          {lang === 'bn' ? 'প্রধান কন্ট্রোল' : 'Management & Analytics'}
+        </p>
+        {primaryNavItems.map(renderNavButton)}
 
-        <div className="pt-2 mt-2 border-t border-[#E6ECFA] dark:border-slate-800 space-y-1">
+        <div className="pt-3 mt-2 border-t border-[#E6ECFA] dark:border-slate-800 space-y-0.5">
+          <p className="px-3 pb-1 text-[10px] font-extrabold uppercase tracking-wider text-[#777777] dark:text-slate-500">
+            {lang === 'bn' ? 'ফিন্যান্স ও সিস্টেম' : 'Finance & System'}
+          </p>
+          {financeOpsNavItems.map(renderNavButton)}
+
           <button
             type="button"
             onClick={() => {
               setSection('storefront');
               setMobileMenuOpen(false);
             }}
-            className={`w-full px-3 py-2.5 rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-colors ${
+            className={`w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between gap-2 transition-colors ${
               section === 'storefront'
                 ? 'bg-[#FF8500] text-white'
                 : 'text-[#172033] dark:text-slate-300 hover:bg-[#F3F6FF] dark:hover:bg-slate-800'
@@ -492,19 +573,14 @@ export function AdminDashboard({
           >
             <span className="flex items-center gap-2.5">
               <ShoppingBag className="w-4 h-4 shrink-0" />
-              <span>{lang === 'bn' ? 'স্টোরফ্রন্ট ও অর্ডার' : 'Storefront & Orders'}</span>
+              <span>{lang === 'bn' ? 'কুপন ও রিভিউ' : 'Coupons & Reviews'}</span>
             </span>
-            {kpis.pendingOrders > 0 && (
-              <span className="px-1.5 py-0.5 rounded-md text-[10px] font-mono-num font-extrabold bg-amber-100 text-amber-800">
-                {kpis.pendingOrders}
-              </span>
-            )}
           </button>
 
           <button
             type="button"
             onClick={() => setLogoutConfirmOpen(true)}
-            className="w-full px-3 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2.5 text-[#DC2626] hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
+            className="w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 text-[#DC2626] hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
           >
             <LogOut className="w-4 h-4 shrink-0" />
             <span>{lang === 'bn' ? 'লগআউট' : 'Logout'}</span>
@@ -733,52 +809,119 @@ export function AdminDashboard({
                 ))}
               </div>
 
-              {/* Live Visitor & App Store Activity Strip */}
+              {/* Live Visitor & Content Activity Strip */}
               {liveAnalytics && (
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                  <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 flex items-center justify-between gap-2">
-                    <div>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setSection('live_visitors')}
+                      className="text-left rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 flex items-center justify-between gap-2 hover:border-[#FF8500]"
+                    >
+                      <div>
+                        <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
+                          {lang === 'bn' ? 'অনলাইন ভিজিটর (৫ মি.)' : 'Live Visitors (5m)'}
+                        </p>
+                        <p className="text-lg font-extrabold font-mono-num text-emerald-600 dark:text-emerald-400">
+                          {liveAnalytics.kpis.onlineUsers.toLocaleString()}
+                        </p>
+                      </div>
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSection('analytics')}
+                      className="text-left rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 hover:border-[#FF8500]"
+                    >
                       <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
-                        {lang === 'bn' ? 'অনলাইন ইউজার (৫ মি.)' : 'Online Users (5m)'}
+                        {lang === 'bn' ? 'আজ বনাম গতকাল ভিজিটর' : 'Today vs Yesterday Visitors'}
                       </p>
-                      <p className="text-lg font-extrabold font-mono-num text-emerald-600 dark:text-emerald-400">
-                        {liveAnalytics.kpis.onlineUsers.toLocaleString()}
+                      <p className="text-lg font-extrabold font-mono-num text-[#172033] dark:text-slate-100">
+                        {(liveAnalytics.overview?.visitorsToday ?? 0).toLocaleString()}
+                        <span className="text-xs font-semibold text-[#777777] ml-1.5">
+                          / {(liveAnalytics.overview?.visitorsYesterday ?? 0).toLocaleString()} yest.
+                        </span>
                       </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSection('content_stats')}
+                      className="text-left rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 hover:border-[#FF8500]"
+                    >
+                      <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
+                        {lang === 'bn' ? 'ডাউনলোড ক্লিক (মোট / আজ)' : 'Download Clicks (Total / Today)'}
+                      </p>
+                      <p className="text-lg font-extrabold font-mono-num text-[#FF8500]">
+                        {liveAnalytics.kpis.totalDownloads.toLocaleString()}
+                        <span className="text-xs font-semibold text-[#777777] ml-1.5">
+                          ({liveAnalytics.kpis.todayDownloads} today)
+                        </span>
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSection('support')}
+                      className="text-left rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 hover:border-[#FF8500]"
+                    >
+                      <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
+                        {lang === 'bn' ? 'ওপেন সাপোর্ট টিকেট' : 'Pending Support Tickets'}
+                      </p>
+                      <p className="text-lg font-extrabold font-mono-num text-[#172033] dark:text-slate-100">
+                        {liveAnalytics.kpis.pendingTickets.toLocaleString()}
+                      </p>
+                    </button>
+                  </div>
+
+                  {/* Quick Jump Bar + Catalog Inventory Summary */}
+                  <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-4 font-mono-num">
+                      <span>
+                        Apps: <strong className="text-[#FF8500]">{liveApps.length}</strong>
+                      </span>
+                      <span>
+                        Games: <strong className="text-violet-600 dark:text-violet-400">{displayGames.length}</strong>
+                      </span>
+                      <span>
+                        Services: <strong className="text-[#172033] dark:text-slate-100">{products.length}</strong>
+                      </span>
+                      {liveAnalytics.comparisonSummary && (
+                        <span>
+                          Period Visitor Delta:{' '}
+                          <strong
+                            className={
+                              liveAnalytics.comparisonSummary.deltasPct.uniqueVisitors >= 0
+                                ? 'text-emerald-600'
+                                : 'text-[#DC2626]'
+                            }
+                          >
+                            {liveAnalytics.comparisonSummary.deltasPct.uniqueVisitors >= 0 ? '+' : ''}
+                            {liveAnalytics.comparisonSummary.deltasPct.uniqueVisitors}%
+                          </strong>
+                        </span>
+                      )}
                     </div>
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <div className="flex flex-wrap gap-1.5">
+                      {(
+                        [
+                          ['analytics', 'Analytics'],
+                          ['live_visitors', 'Live Visitors'],
+                          ['content_stats', 'Content Stats'],
+                          ['games', 'Games CMS'],
+                          ['homepage_editor', 'Homepage Editor'],
+                          ['orders', 'Orders'],
+                        ] as const
+                      ).map(([target, lbl]) => (
+                        <button
+                          key={target}
+                          type="button"
+                          onClick={() => setSection(target)}
+                          className="px-2.5 py-1 rounded-lg bg-[#F3F6FF] dark:bg-slate-800 hover:bg-[#FF8500] hover:text-white font-bold transition-colors"
+                        >
+                          {lbl} →
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3">
-                    <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
-                      {lang === 'bn' ? 'ইউনিক ভিজিটর' : 'Unique Visitors'}
-                    </p>
-                    <p className="text-lg font-extrabold font-mono-num text-[#172033] dark:text-slate-100">
-                      {liveAnalytics.kpis.uniqueVisitors.toLocaleString()}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSection('apps')}
-                    className="text-left rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 hover:border-[#FF8500] cursor-pointer"
-                  >
-                    <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
-                      {lang === 'bn' ? 'আজকের অ্যাপ ডাউনলোড' : 'App Downloads Today'}
-                    </p>
-                    <p className="text-lg font-extrabold font-mono-num text-[#FF8500]">
-                      {liveAnalytics.kpis.todayDownloads.toLocaleString()}
-                    </p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSection('storefront')}
-                    className="text-left rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 px-4 py-3 hover:border-[#FF8500] cursor-pointer"
-                  >
-                    <p className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
-                      {lang === 'bn' ? 'ওপেন সাপোর্ট টিকেট' : 'Pending Tickets'}
-                    </p>
-                    <p className="text-lg font-extrabold font-mono-num text-[#172033] dark:text-slate-100">
-                      {liveAnalytics.kpis.pendingTickets.toLocaleString()}
-                    </p>
-                  </button>
                 </div>
               )}
 
@@ -870,6 +1013,29 @@ export function AdminDashboard({
             </div>
           )}
 
+          {section === 'analytics' && (
+            <AdminDailyAnalyticsPanel
+              lang={lang}
+              apps={liveApps}
+              games={displayGames}
+              onError={showError}
+            />
+          )}
+
+          {section === 'live_visitors' && (
+            <AdminLiveVisitorsPanel lang={lang} onError={showError} />
+          )}
+
+          {section === 'content_stats' && (
+            <AdminContentStatsPanel
+              lang={lang}
+              products={products}
+              apps={liveApps}
+              games={displayGames}
+              onError={showError}
+            />
+          )}
+
           {section === 'packages' && (
             <AdminPackagesPanel
               lang={lang}
@@ -883,6 +1049,45 @@ export function AdminDashboard({
 
           {section === 'apps' && (
             <AdminAppsPanel lang={lang} onSuccess={showSuccess} onError={showError} />
+          )}
+
+          {section === 'games' && (
+            <AdminGamesPanel
+              lang={lang}
+              products={products}
+              onSuccess={showSuccess}
+              onError={showError}
+            />
+          )}
+
+          {section === 'categories' && (
+            <AdminUnifiedCategoriesPanel
+              lang={lang}
+              categories={categories}
+              products={products}
+              apps={liveApps}
+              games={displayGames}
+              onSuccess={showSuccess}
+              onError={showError}
+            />
+          )}
+
+          {section === 'homepage_editor' && (
+            <AdminHomepageEditorPanel
+              lang={lang}
+              settings={settings}
+              onSuccess={showSuccess}
+              onError={showError}
+            />
+          )}
+
+          {section === 'support' && (
+            <AdminSupportCenterPanel
+              lang={lang}
+              tickets={tickets}
+              onSuccess={showSuccess}
+              onError={showError}
+            />
           )}
 
           {section === 'users' && (
@@ -1008,7 +1213,7 @@ export function AdminDashboard({
             />
           )}
 
-          {section === 'storefront' && (
+          {(section === 'orders' || section === 'storefront') && (
             <AdminStorefrontPanel
               lang={lang}
               orders={orders}
@@ -1018,6 +1223,7 @@ export function AdminDashboard({
               coupons={coupons}
               tickets={tickets}
               reviews={reviews}
+              defaultSubTab="orders"
               onSuccess={showSuccess}
               onError={showError}
             />

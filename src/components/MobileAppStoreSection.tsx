@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  Eye,
   Flag,
   Flame,
   Heart,
@@ -35,12 +36,15 @@ import type {
 import {
   buildMobileAppProductForOrder,
   getMobileAppCategoryMeta,
+  matchesSmartAppFilter,
   MOBILE_APP_CATEGORIES,
   MOBILE_APP_DEVICE_PLANS,
   MOBILE_APPS_CATALOG,
+  SMART_APP_STORE_FILTERS,
   type MobileAppCategoryId,
   type MobileAppDevicePlan,
   type MobileAppItem,
+  type SmartAppFilterId,
 } from '../lib/mobileAppsCatalog';
 import {
   compressImageToDataUrl,
@@ -52,6 +56,9 @@ import {
   submitOrderWithWalletBalance,
   subscribeMobileApps,
   toggleAppFavorite,
+  trackContentView,
+  trackExternalLinkClick,
+  trackSearchQuery,
   validateTransactionIdServer,
 } from '../lib/firestoreService';
 import {
@@ -72,6 +79,7 @@ interface MobileAppStoreSectionProps {
   user: AuthUser | null;
   profile: UserProfile | null;
   wallet: WalletAccount | null;
+  maxHomeItems?: number;
   onOpenAuth: () => void;
   onNavigateAll?: () => void;
   onBackHome?: () => void;
@@ -195,6 +203,7 @@ export function MobileAppStoreSection({
   user,
   profile,
   wallet,
+  maxHomeItems = 12,
   onOpenAuth,
   onNavigateAll,
   onBackHome,
@@ -210,8 +219,10 @@ export function MobileAppStoreSection({
   const [discoveryFilter, setDiscoveryFilter] = useState<
     'all' | 'latest' | 'popular' | 'trending' | 'updated' | 'favorites'
   >('all');
+  const [smartFilter, setSmartFilter] = useState<'all' | SmartAppFilterId>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedHome, setExpandedHome] = useState(false);
+  const searchTimerRef = useRef<number | null>(null);
 
   // Active modals & Smart Store interaction state
   const [detailsApp, setDetailsApp] = useState<MobileAppItem | null>(null);
@@ -275,6 +286,18 @@ export function MobileAppStoreSection({
     }
   }, [enabledManualMethods, paymentMethod]);
 
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) return;
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = window.setTimeout(() => {
+      trackSearchQuery(q, 'apps');
+    }, 650);
+    return () => {
+      if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
+    };
+  }, [searchQuery]);
+
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = { all: liveApps.length };
     for (const app of liveApps) {
@@ -289,6 +312,7 @@ export function MobileAppStoreSection({
     const q = searchQuery.trim().toLowerCase();
     const list = liveApps.filter((app) => {
       if (selectedCategory !== 'all' && app.category !== selectedCategory) return false;
+      if (smartFilter !== 'all' && !matchesSmartAppFilter(app, smartFilter)) return false;
       if (discoveryFilter === 'favorites' && !favoriteSet.has(app.id)) return false;
       if (discoveryFilter === 'popular') {
         const dl = appMeta.statsByApp[app.id]?.downloads || 0;
@@ -319,7 +343,7 @@ export function MobileAppStoreSection({
           Number(Boolean(b.popular)) - Number(Boolean(a.popular))
       );
     }
-    if (discoveryFilter === 'updated' || discoveryFilter === 'latest') {
+    if (discoveryFilter === 'updated' || discoveryFilter === 'latest' || smartFilter === 'latest_updates') {
       return [...list].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     }
     if (discoveryFilter === 'trending') {
@@ -330,15 +354,16 @@ export function MobileAppStoreSection({
       );
     }
     return list;
-  }, [liveApps, selectedCategory, discoveryFilter, searchQuery, favoriteSet, appMeta.statsByApp]);
+  }, [liveApps, selectedCategory, smartFilter, discoveryFilter, searchQuery, favoriteSet, appMeta.statsByApp]);
 
   const isHomeCompact =
     mode === 'home' &&
     !expandedHome &&
     selectedCategory === 'all' &&
+    smartFilter === 'all' &&
     discoveryFilter === 'all' &&
     searchQuery.trim() === '';
-  const visibleApps = isHomeCompact ? filteredApps.slice(0, 12) : filteredApps;
+  const visibleApps = isHomeCompact ? filteredApps.slice(0, Math.max(4, maxHomeItems)) : filteredApps;
 
   const activeOrderPlan: MobileAppDevicePlan =
     MOBILE_APP_DEVICE_PLANS.find((p) => p.id === orderPlanId) || MOBILE_APP_DEVICE_PLANS[0];
@@ -366,6 +391,24 @@ export function MobileAppStoreSection({
     setReportOpen(false);
     setReportReason('');
     setReportDone('');
+    trackContentView({
+      contentId: app.id,
+      contentType: 'app',
+      contentCategory: app.category,
+      pagePath: '/apps',
+    });
+    setAppMeta((prev) => ({
+      ...prev,
+      statsByApp: {
+        ...prev.statsByApp,
+        [app.id]: {
+          views: (prev.statsByApp[app.id]?.views || 0) + 1,
+          downloads: prev.statsByApp[app.id]?.downloads || 0,
+          ratingAvg: prev.statsByApp[app.id]?.ratingAvg || 0,
+          ratingCount: prev.statsByApp[app.id]?.ratingCount || 0,
+        },
+      },
+    }));
   };
 
   const openOrderModal = (app: MobileAppItem, defaultPlan: '1_device' | '2_devices' = '1_device') => {
@@ -416,6 +459,7 @@ export function MobileAppStoreSection({
           statsByApp: {
             ...prev.statsByApp,
             [app.id]: {
+              views: prev.statsByApp[app.id]?.views || 0,
               downloads: count,
               ratingAvg: prev.statsByApp[app.id]?.ratingAvg || 0,
               ratingCount: prev.statsByApp[app.id]?.ratingCount || 0,
@@ -452,6 +496,7 @@ export function MobileAppStoreSection({
         statsByApp: {
           ...prev.statsByApp,
           [detailsApp.id]: {
+            views: prev.statsByApp[detailsApp.id]?.views || 0,
             downloads: prev.statsByApp[detailsApp.id]?.downloads || 0,
             ratingAvg: avg,
             ratingCount: appRevs.length,
@@ -768,6 +813,38 @@ export function MobileAppStoreSection({
         })}
       </div>
 
+      {/* Smart App Store 8-Filter Collection Strip */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+        <button
+          type="button"
+          onClick={() => setSmartFilter('all')}
+          className={`min-h-[32px] px-3 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+            smartFilter === 'all'
+              ? 'bg-[#FF8500]/15 text-[#FF8500] border border-[#FF8500]/40'
+              : 'bg-white dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-800 text-[#475569] dark:text-slate-300 hover:border-[#FF8500]'
+          }`}
+        >
+          {lang === 'bn' ? 'স্মার্ট ফিল্টার: সব' : 'Smart Filter: All'}
+        </button>
+        {SMART_APP_STORE_FILTERS.map((sf) => {
+          const active = smartFilter === sf.id;
+          return (
+            <button
+              key={sf.id}
+              type="button"
+              onClick={() => setSmartFilter(active ? 'all' : sf.id)}
+              className={`min-h-[32px] px-3 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                active
+                  ? 'bg-[#FF8500] text-white shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border border-[#E2E9F7] dark:border-slate-800 text-[#475569] dark:text-slate-300 hover:border-[#FF8500]'
+              }`}
+            >
+              {lang === 'bn' ? sf.labelBn : sf.labelEn}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Interactive Category Filter Bar */}
       <div
         role="tablist"
@@ -814,7 +891,7 @@ export function MobileAppStoreSection({
       </div>
 
       {/* Results Count Line when filtering */}
-      {(selectedCategory !== 'all' || discoveryFilter !== 'all' || searchQuery.trim() !== '') && (
+      {(selectedCategory !== 'all' || smartFilter !== 'all' || discoveryFilter !== 'all' || searchQuery.trim() !== '') && (
         <div className="flex items-center justify-between gap-2 text-xs text-[#64748B] dark:text-slate-400">
           <p className="font-medium">
             {lang === 'bn'
@@ -825,6 +902,7 @@ export function MobileAppStoreSection({
             type="button"
             onClick={() => {
               setSelectedCategory('all');
+              setSmartFilter('all');
               setDiscoveryFilter('all');
               setSearchQuery('');
             }}
@@ -852,6 +930,7 @@ export function MobileAppStoreSection({
             onClick={() => {
               setSearchQuery('');
               setSelectedCategory('all');
+              setSmartFilter('all');
               setDiscoveryFilter('all');
             }}
             className="px-4 py-2 rounded-xl dh-orange-gradient text-white text-xs font-bold cursor-pointer"
@@ -921,12 +1000,18 @@ export function MobileAppStoreSection({
                           {app.version ? ` · v${app.version}` : ''}
                           {app.sizeLabel ? ` · ${app.sizeLabel}` : ''}
                         </p>
-                        {(appStats?.downloads > 0 || appStats?.ratingCount > 0) && (
+                        {(appStats?.views || appStats?.downloads || appStats?.ratingCount) ? (
                           <div className="flex items-center gap-2.5 mt-1 text-[10px] font-mono-num font-bold text-[#475569] dark:text-slate-300">
                             {appStats.ratingCount > 0 && (
                               <span className="inline-flex items-center gap-0.5 text-[#FF8500]">
                                 <Star className="w-3 h-3 fill-current" />
                                 {appStats.ratingAvg.toFixed(1)} ({appStats.ratingCount})
+                              </span>
+                            )}
+                            {(appStats.views || 0) > 0 && (
+                              <span className="inline-flex items-center gap-0.5 text-[#64748B] dark:text-slate-400">
+                                <Eye className="w-3 h-3" />
+                                {appStats.views}
                               </span>
                             )}
                             {appStats.downloads > 0 && (
@@ -936,7 +1021,7 @@ export function MobileAppStoreSection({
                               </span>
                             )}
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
@@ -1026,7 +1111,7 @@ export function MobileAppStoreSection({
         </div>
       )}
 
-      {mode === 'home' && expandedHome && selectedCategory === 'all' && discoveryFilter === 'all' && searchQuery.trim() === '' && (
+      {mode === 'home' && expandedHome && selectedCategory === 'all' && smartFilter === 'all' && discoveryFilter === 'all' && searchQuery.trim() === '' && (
         <div className="flex justify-center pt-1">
           <button
             type="button"
@@ -1125,9 +1210,13 @@ export function MobileAppStoreSection({
                   {detailsApp.sizeLabel && (
                     <span className="text-[#64748B] dark:text-slate-300">{detailsApp.sizeLabel}</span>
                   )}
+                  <span className="inline-flex items-center gap-1 text-[#64748B] dark:text-slate-300 font-bold">
+                    <Eye className="w-3.5 h-3.5" />
+                    {appMeta.statsByApp[detailsApp.id]?.views || 0} {lang === 'bn' ? 'ভিউ' : 'views'}
+                  </span>
                   <span className="inline-flex items-center gap-1 text-[#0EA5E9] font-bold">
                     <Download className="w-3.5 h-3.5" />
-                    {appMeta.statsByApp[detailsApp.id]?.downloads || 0} {lang === 'bn' ? 'ডাউনলোড' : 'downloads'}
+                    {appMeta.statsByApp[detailsApp.id]?.downloads || 0} {lang === 'bn' ? 'ডাউনলোড ক্লিক' : 'download clicks'}
                   </span>
                   <span className="inline-flex items-center gap-1 text-[#FF8500] font-bold">
                     <Star className="w-3.5 h-3.5 fill-current" />
@@ -1222,6 +1311,14 @@ export function MobileAppStoreSection({
                     href={detailsApp.officialStoreUrl}
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={() =>
+                      trackExternalLinkClick({
+                        contentId: detailsApp.id,
+                        contentType: 'app',
+                        targetUrl: detailsApp.officialStoreUrl,
+                        pagePath: '/apps',
+                      })
+                    }
                     className="inline-flex items-center gap-1.5 font-bold text-[#0EA5E9] hover:underline"
                   >
                     <span>

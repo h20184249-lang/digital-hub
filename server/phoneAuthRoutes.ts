@@ -735,6 +735,219 @@ function normalizeTxIdKey(raw: string): string {
   return raw.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
 }
 
+const VALID_ANALYTICS_EVENT_TYPES = new Set([
+  'page_view',
+  'homepage_view',
+  'app_view',
+  'game_view',
+  'product_view',
+  'service_view',
+  'download_click',
+  'app_download',
+  'external_link_click',
+  'play_click',
+  'search',
+  'favorite',
+  'heartbeat',
+  'signup',
+  'login',
+  'order_created',
+  'order_completed',
+]);
+
+function getDhakaDayStartMs(ms: number = Date.now()): number {
+  const dateStr = getDhakaDateString(ms);
+  const parsed = Date.parse(`${dateStr}T00:00:00+06:00`);
+  if (Number.isFinite(parsed)) return parsed;
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function getDhakaMonthStartMs(ms: number = Date.now()): number {
+  const dateStr = getDhakaDateString(ms).slice(0, 7);
+  const parsed = Date.parse(`${dateStr}-01T00:00:00+06:00`);
+  if (Number.isFinite(parsed)) return parsed;
+  const d = new Date(ms);
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function parseUserAgentMetadata(uaRaw: unknown): {
+  deviceType: 'mobile' | 'tablet' | 'desktop';
+  browser: string;
+  os: string;
+  isLikelyBot: boolean;
+} {
+  const ua = typeof uaRaw === 'string' ? uaRaw : '';
+  const lower = ua.toLowerCase();
+  const isLikelyBot =
+    !ua ||
+    /(bot|crawler|spider|slurp|bingpreview|headlesschrome|lighthouse|pingdom|uptimerobot|curl\/|wget\/|python-requests|go-http-client)/i.test(
+      ua
+    );
+
+  let deviceType: 'mobile' | 'tablet' | 'desktop' = 'desktop';
+  if (/ipad|tablet|playbook|silk|(android(?!.*mobile))/i.test(ua)) {
+    deviceType = 'tablet';
+  } else if (/mobile|iphone|ipod|android.*mobile|windows phone|blackberry|opera mini|iemobile/i.test(ua)) {
+    deviceType = 'mobile';
+  }
+
+  let browser = 'Other';
+  if (lower.includes('edg/') || lower.includes('edga/') || lower.includes('edgios/')) browser = 'Edge';
+  else if (lower.includes('opr/') || lower.includes('opera')) browser = 'Opera';
+  else if (lower.includes('samsungbrowser/')) browser = 'Samsung Internet';
+  else if (lower.includes('ucbrowser/')) browser = 'UC Browser';
+  else if (lower.includes('firefox/') || lower.includes('fxios/')) browser = 'Firefox';
+  else if (lower.includes('chrome/') || lower.includes('crios/')) browser = 'Chrome';
+  else if (lower.includes('safari/') && !lower.includes('chrome')) browser = 'Safari';
+
+  let os = 'Other';
+  if (lower.includes('android')) os = 'Android';
+  else if (lower.includes('iphone') || lower.includes('ipad') || lower.includes('ipod')) os = 'iOS';
+  else if (lower.includes('windows nt')) os = 'Windows';
+  else if (lower.includes('mac os x') || lower.includes('macintosh')) os = 'macOS';
+  else if (lower.includes('cros')) os = 'ChromeOS';
+  else if (lower.includes('linux')) os = 'Linux';
+
+  return { deviceType, browser, os, isLikelyBot };
+}
+
+function extractServerCountry(req: express.Request): string {
+  const raw = req.headers['cf-ipcountry'];
+  if (typeof raw !== 'string') return '';
+  const code = raw.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code) || code === 'XX' || code === 'T1') return '';
+  return code;
+}
+
+async function logServerAnalyticsEvent(
+  db: AppDatabase,
+  req: express.Request,
+  params: {
+    visitorId?: string;
+    sessionId?: string;
+    userId?: string;
+    eventType: string;
+    pagePath?: string;
+    appId?: string;
+    contentId?: string;
+    contentType?: string;
+    contentCategory?: string;
+    deviceTypeHint?: string;
+    referrerHost?: string;
+    metadata?: Record<string, unknown>;
+    now?: number;
+  }
+): Promise<string | null> {
+  try {
+    const eventType = VALID_ANALYTICS_EVENT_TYPES.has(params.eventType) ? params.eventType : 'page_view';
+    const uaMeta = parseUserAgentMetadata(req.headers['user-agent']);
+    const now = params.now || Date.now();
+    const visitorId =
+      String(params.visitorId || params.userId || `srv_${now}`)
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, '')
+        .slice(0, 64) || `srv_${now}`;
+    const sessionId =
+      String(params.sessionId || `sess_${visitorId.slice(0, 24)}`)
+        .trim()
+        .replace(/[^a-zA-Z0-9_-]/g, '')
+        .slice(0, 64) || `sess_${visitorId.slice(0, 24)}`;
+    const userId = String(params.userId || '').trim().slice(0, 80);
+    const pagePath = String(params.pagePath || '/').trim().slice(0, 140) || '/';
+    const appId = String(params.appId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
+    const contentId =
+      String(params.contentId || appId || '')
+        .trim()
+        .replace(/[^a-zA-Z0-9_.:-]/g, '')
+        .slice(0, 100);
+    const contentType = String(params.contentType || (appId ? 'app' : '')).trim().slice(0, 32);
+    const contentCategory = String(params.contentCategory || '').trim().slice(0, 64);
+    const deviceType =
+      params.deviceTypeHint === 'mobile' || params.deviceTypeHint === 'tablet' || params.deviceTypeHint === 'desktop'
+        ? params.deviceTypeHint
+        : uaMeta.deviceType;
+    const referrerHost = String(params.referrerHost || 'direct').trim().slice(0, 80) || 'direct';
+    const country = extractServerCountry(req);
+    const metadataJson = JSON.stringify(params.metadata || {}).slice(0, 1200);
+    const id = generateSecureId('evt', 10);
+
+    await db.run(
+      `INSERT INTO analytics_events (
+        id, visitor_id, session_id, user_id, event_type, page_path, app_id,
+        content_id, content_type, content_category, device_type, browser, os, country, referrer_host, metadata_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        visitorId,
+        sessionId,
+        userId,
+        eventType,
+        pagePath,
+        appId,
+        contentId,
+        contentType,
+        contentCategory,
+        deviceType,
+        uaMeta.browser,
+        uaMeta.os,
+        country,
+        referrerHost,
+        metadataJson,
+        now,
+      ]
+    );
+
+    const priorRow = await db.first<{ cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM visitor_sessions WHERE visitor_id = ? AND session_id != ?`,
+      [visitorId, sessionId]
+    );
+    const isReturning = Number(priorRow?.cnt || 0) > 0 ? 1 : 0;
+
+    await db.run(
+      `INSERT INTO visitor_sessions (
+        session_id, visitor_id, user_id, first_seen_at, last_seen_at, visit_count, is_returning,
+        current_page, last_event_type, last_content_id, device_type, browser, os, referrer_host, country
+      ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        user_id = CASE WHEN excluded.user_id != '' THEN excluded.user_id ELSE visitor_sessions.user_id END,
+        last_seen_at = excluded.last_seen_at,
+        visit_count = visitor_sessions.visit_count + CASE WHEN excluded.last_event_type = 'heartbeat' THEN 0 ELSE 1 END,
+        is_returning = CASE WHEN visitor_sessions.is_returning = 1 OR excluded.is_returning = 1 THEN 1 ELSE 0 END,
+        current_page = CASE WHEN excluded.current_page != '' THEN excluded.current_page ELSE visitor_sessions.current_page END,
+        last_event_type = CASE WHEN excluded.last_event_type = 'heartbeat' THEN visitor_sessions.last_event_type ELSE excluded.last_event_type END,
+        last_content_id = CASE WHEN excluded.last_content_id != '' THEN excluded.last_content_id ELSE visitor_sessions.last_content_id END,
+        device_type = excluded.device_type,
+        browser = excluded.browser,
+        os = excluded.os,
+        country = CASE WHEN excluded.country != '' THEN excluded.country ELSE visitor_sessions.country END`,
+      [
+        sessionId,
+        visitorId,
+        userId,
+        now,
+        now,
+        isReturning,
+        pagePath,
+        eventType,
+        contentId,
+        deviceType,
+        uaMeta.browser,
+        uaMeta.os,
+        referrerHost,
+        country,
+      ]
+    );
+
+    return id;
+  } catch {
+    return null;
+  }
+}
+
 export function createPhoneAuthAndAppRouter(): express.Router {
   const router = express.Router();
 
@@ -1064,6 +1277,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       await createSessionForUser(db, uid, req, res);
 
+      await logServerAnalyticsEvent(db, req, {
+        userId: uid,
+        eventType: 'signup',
+        pagePath: '/auth/register',
+        referrerHost: 'direct',
+        metadata: { authMethod },
+        now,
+      });
+
       const createdRow = await db.first<UserRow>('SELECT * FROM users WHERE uid = ?', [uid]);
       if (!createdRow) {
         res.status(500).json({ ok: false, code: 'server/internal-error', error: 'Account load failed.' });
@@ -1277,6 +1499,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       await clearAttemptLimit(db, limitKey);
       await ensureWalletAccount(db, userRow.uid);
       await createSessionForUser(db, userRow.uid, req, res);
+
+      await logServerAnalyticsEvent(db, req, {
+        userId: userRow.uid,
+        eventType: 'login',
+        pagePath: '/auth/login',
+        referrerHost: 'direct',
+        metadata: { authMethod },
+        now,
+      });
 
       // Login security alert notification when logging in from a new IP or if alerts enabled
       if (siteSettings.loginAlertsEnabled && previousIp && previousIp !== ip) {
@@ -1730,10 +1961,28 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           [user.uid]
         ),
         db.first<{ cnt: number }>(
-          `SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ? AND event_type = 'app_download'`,
+          `SELECT COUNT(*) AS cnt FROM analytics_events WHERE user_id = ? AND event_type IN ('app_download', 'download_click')`,
           [user.uid]
         ),
       ]);
+
+      const downloadHistoryRows = await db.all<{
+        id: string;
+        app_id: string;
+        content_id: string;
+        content_type: string;
+        page_path: string;
+        device_type: string;
+        event_type: string;
+        created_at: number;
+      }>(
+        `SELECT id, app_id, content_id, content_type, page_path, device_type, event_type, created_at
+         FROM analytics_events
+         WHERE user_id = ? AND event_type IN ('app_download', 'download_click', 'play_click')
+         ORDER BY created_at DESC
+         LIMIT 50`,
+        [user.uid]
+      );
 
       res.json({
         ok: true,
@@ -1753,6 +2002,16 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         announcements: announcementRows.map((r) => parseJsonSafe(r.payload_json, {})),
         favoriteAppIds: favoriteRows.map((r) => r.app_id),
         totalDownloads: Number(downloadCountRow?.cnt || 0),
+        downloadHistory: downloadHistoryRows.map((row) => ({
+          id: row.id,
+          appId: row.app_id || row.content_id || '',
+          contentId: row.content_id || row.app_id || '',
+          contentType: row.content_type || 'app',
+          pagePath: row.page_path || '/apps',
+          deviceType: row.device_type || 'desktop',
+          eventType: row.event_type,
+          createdAt: Number(row.created_at || 0),
+        })),
       });
     } catch (err) {
       handleRouteError(res, err, 'ড্যাশবোর্ড তথ্য লোড করা যায়নি।');
@@ -2014,6 +2273,16 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         `Order #${orderNumber} (৳${totalPriceBdt}) submitted for payment verification.`,
         'order'
       );
+
+      await logServerAnalyticsEvent(db, req, {
+        userId: user.uid,
+        eventType: 'order_created',
+        pagePath: '/checkout',
+        contentId: orderObj.productId,
+        contentType: 'service',
+        metadata: { orderId, orderNumber, totalPriceBdt, paymentMethod: method },
+        now,
+      });
 
       res.status(201).json({ ok: true, orderId, orderNumber, paymentId });
     } catch (err) {
@@ -3868,6 +4137,17 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         now,
         orderId,
       ]);
+      if (status === 'Completed' && existing.status !== 'Completed') {
+        await logServerAnalyticsEvent(db, req, {
+          userId: row.customer_id,
+          eventType: 'order_completed',
+          pagePath: '/admin/orders',
+          contentId: String(existing.productId || ''),
+          contentType: 'service',
+          metadata: { orderId },
+          now,
+        });
+      }
       await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'ORDER_STATUS_UPDATED', 'orders', orderId, `Set status ${status}`);
       res.json({ ok: true });
     } catch (err) {
@@ -3904,6 +4184,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         now,
         orderId,
       ]);
+      await logServerAnalyticsEvent(db, req, {
+        userId: row.customer_id,
+        eventType: 'order_completed',
+        pagePath: '/admin/orders',
+        contentId: String(existing.productId || ''),
+        contentType: 'service',
+        metadata: { orderId },
+        now,
+      });
       await insertNotification(
         db,
         row.customer_id,
@@ -5981,6 +6270,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         'categories',
         'products',
         'mobileApps',
+        'games',
         'advertisements',
         'adNetworks',
         'managedAdUnits',
@@ -6224,6 +6514,56 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         };
       }
 
+      if (col === 'games') {
+        const gameTitle = String(body.data.name || body.data.titleEn || '').trim().slice(0, 120);
+        if (gameTitle.length < 2) {
+          res.status(400).json({ ok: false, error: 'Game name must be at least 2 characters.' });
+          return;
+        }
+        if (
+          !isSafePackageAssetUrl(body.data.iconUrl) ||
+          !isSafePackageAssetUrl(body.data.imageUrl)
+        ) {
+          res.status(400).json({ ok: false, error: 'Invalid game icon or cover image URL.' });
+          return;
+        }
+        const screenshots = Array.isArray(body.data.screenshots)
+          ? body.data.screenshots
+              .map((s) => String(s || '').trim())
+              .filter((s) => s && isSafePackageAssetUrl(s))
+              .slice(0, 8)
+          : [];
+        const rawPlayUrl = String(body.data.playUrl || '').trim();
+        const rawDownloadUrl = String(body.data.downloadUrl || '').trim();
+        const sanitizeExternal = (u: string) =>
+          u && (u.startsWith('https://') || u.startsWith('http://') || u.startsWith('/'))
+            ? u.slice(0, 500)
+            : '';
+        payloadToSave = {
+          ...body.data,
+          id: docId,
+          name: gameTitle,
+          slug: String(body.data.slug || docId).trim().slice(0, 80),
+          category: String(body.data.category || 'android_games').trim().slice(0, 48),
+          developer: String(body.data.developer || 'Official Publisher').trim().slice(0, 80),
+          shortDescBn: String(body.data.shortDescBn || body.data.shortDescEn || '').trim().slice(0, 400),
+          shortDescEn: String(body.data.shortDescEn || body.data.shortDescBn || '').trim().slice(0, 400),
+          descriptionBn: String(body.data.descriptionBn || body.data.shortDescBn || '').trim().slice(0, 1600),
+          descriptionEn: String(body.data.descriptionEn || body.data.shortDescEn || '').trim().slice(0, 1600),
+          iconUrl: String(body.data.iconUrl || body.data.imageUrl || '/assets/products/prod_ff_bd_diamonds.jpg').trim().slice(0, 200000),
+          imageUrl: String(body.data.imageUrl || body.data.iconUrl || '/assets/products/prod_ff_bd_diamonds.jpg').trim().slice(0, 200000),
+          screenshots,
+          playUrl: sanitizeExternal(rawPlayUrl),
+          downloadUrl: sanitizeExternal(rawDownloadUrl),
+          relatedProductId: String(body.data.relatedProductId || '').trim().slice(0, 80),
+          featured: Boolean(body.data.featured),
+          popular: Boolean(body.data.popular),
+          isNew: Boolean(body.data.isNew),
+          visible: body.data.visible !== false,
+          updatedAt: Number(body.data.updatedAt || now),
+        };
+      }
+
       if (col === 'settings' && docId === 'global') {
         payloadToSave = {
           ...payloadToSave,
@@ -6294,7 +6634,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         col === 'banners' ||
         col === 'managedAdUnits' ||
         col === 'categories' ||
-        col === 'mobileApps'
+        col === 'mobileApps' ||
+        col === 'games'
       ) {
         await insertAuditLog(
           admin.db,
@@ -6366,40 +6707,70 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
   router.post('/analytics/track', async (req, res) => {
     try {
+      const uaMeta = parseUserAgentMetadata(req.headers['user-agent']);
+      if (uaMeta.isLikelyBot) {
+        res.json({ ok: true, filtered: 'bot' });
+        return;
+      }
+
       const body = (req.body || {}) as {
         visitorId?: string;
         sessionId?: string;
         eventType?: string;
         pagePath?: string;
         appId?: string;
+        contentId?: string;
+        contentType?: string;
+        contentCategory?: string;
         deviceType?: string;
         referrerHost?: string;
+        metadata?: Record<string, unknown>;
       };
-      const eventType =
-        body.eventType === 'heartbeat' || body.eventType === 'app_download'
-          ? body.eventType
-          : 'page_view';
+
+      const rawEventType = String(body.eventType || 'page_view').trim();
+      const eventType = VALID_ANALYTICS_EVENT_TYPES.has(rawEventType) ? rawEventType : 'page_view';
       const visitorId = String(body.visitorId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
       if (visitorId.length < 6) {
         res.status(400).json({ ok: false, error: 'Invalid visitor identifier.' });
         return;
       }
-      const sessionId = String(body.sessionId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
-      const pagePath = String(body.pagePath || '/').trim().slice(0, 120) || '/';
+      const sessionId =
+        String(body.sessionId || `sess_${visitorId.slice(0, 24)}`)
+          .trim()
+          .replace(/[^a-zA-Z0-9_-]/g, '')
+          .slice(0, 64) || `sess_${visitorId.slice(0, 24)}`;
+      const pagePath = String(body.pagePath || '/').trim().slice(0, 140) || '/';
       const appId = String(body.appId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
-      const deviceType = body.deviceType === 'mobile' ? 'mobile' : 'desktop';
+      const contentId =
+        String(body.contentId || appId || '')
+          .trim()
+          .replace(/[^a-zA-Z0-9_.:-]/g, '')
+          .slice(0, 100);
+      const contentType = String(body.contentType || (appId ? 'app' : '')).trim().slice(0, 32);
+      const contentCategory = String(body.contentCategory || '').trim().slice(0, 64);
+      const deviceType =
+        body.deviceType === 'mobile' || body.deviceType === 'tablet' || body.deviceType === 'desktop'
+          ? body.deviceType
+          : uaMeta.deviceType;
       const referrerHost = String(body.referrerHost || 'direct').trim().slice(0, 80) || 'direct';
 
       const now = Date.now();
-      const throttleKey = `${visitorId}:${eventType}:${pagePath}:${appId}`;
+      const throttleKey = `${visitorId}:${eventType}:${pagePath}:${contentId || appId}`;
       const prevTs = recentAnalyticsBucket.get(throttleKey) || 0;
-      const minGapMs = eventType === 'heartbeat' ? 20_000 : eventType === 'page_view' ? 4_000 : 1_500;
+      const minGapMs =
+        eventType === 'heartbeat'
+          ? 20_000
+          : eventType === 'page_view' || eventType === 'homepage_view'
+            ? 4_000
+            : eventType === 'app_view' || eventType === 'game_view' || eventType === 'product_view' || eventType === 'service_view'
+              ? 3_000
+              : 1_200;
       if (now - prevTs < minGapMs) {
         res.json({ ok: true, throttled: true });
         return;
       }
       recentAnalyticsBucket.set(throttleKey, now);
-      if (recentAnalyticsBucket.size > 5000) {
+      if (recentAnalyticsBucket.size > 6000) {
         const cutoff = now - 120_000;
         for (const [k, ts] of recentAnalyticsBucket.entries()) {
           if (ts < cutoff) recentAnalyticsBucket.delete(k);
@@ -6408,12 +6779,22 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       const session = await resolveSessionFromRequest(req).catch(() => null);
       const db = session ? session.db : await getAppDatabase();
-      const id = generateSecureId('evt', 10);
-      await db.run(
-        `INSERT INTO analytics_events (id, visitor_id, session_id, user_id, event_type, page_path, app_id, device_type, referrer_host, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [id, visitorId, sessionId, session?.user.uid || '', eventType, pagePath, appId, deviceType, referrerHost, now]
-      );
+      const id = await logServerAnalyticsEvent(db, req, {
+        visitorId,
+        sessionId,
+        userId: session?.user.uid || '',
+        eventType,
+        pagePath,
+        appId,
+        contentId,
+        contentType,
+        contentCategory,
+        deviceTypeHint: deviceType,
+        referrerHost,
+        metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : undefined,
+        now,
+      });
+
       res.status(201).json({ ok: true, id });
     } catch {
       res.json({ ok: false });
@@ -6426,17 +6807,21 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       if (!admin) return;
       const { db } = admin;
       const now = Date.now();
-      const startOfToday = new Date();
-      startOfToday.setHours(0, 0, 0, 0);
-      const todayMs = startOfToday.getTime();
+      const todayMs = getDhakaDayStartMs(now);
+      const yesterdayMs = todayMs - 24 * 60 * 60 * 1000;
+      const monthStartMs = getDhakaMonthStartMs(now);
       const onlineCutoffMs = now - 5 * 60 * 1000;
-      const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-      const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+      const sevenDaysAgo = todayMs - 6 * 24 * 60 * 60 * 1000;
+      const prev7dStartMs = sevenDaysAgo - 7 * 24 * 60 * 60 * 1000;
+      const thirtyDaysAgo = todayMs - 29 * 24 * 60 * 60 * 1000;
 
       const rawFrom = Number(req.query.from || 0);
       const rawTo = Number(req.query.to || 0);
       const rangeFrom = Number.isFinite(rawFrom) && rawFrom > 0 ? rawFrom : thirtyDaysAgo;
       const rangeTo = Number.isFinite(rawTo) && rawTo > rangeFrom ? rawTo : now;
+      const spanMs = Math.max(24 * 60 * 60 * 1000, rangeTo - rangeFrom);
+      const prevFrom = rangeFrom - spanMs;
+      const prevTo = rangeFrom - 1;
 
       const [
         totalUsersRow,
@@ -6444,18 +6829,31 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         activeTodayRow,
         active7dRow,
         active30dRow,
-        totalVisitorsRow,
-        uniqueVisitorsRow,
+        overallVisitorsRow,
+        todayUniqueRow,
+        yesterdayUniqueRow,
+        monthUniqueRow,
+        last7dUniqueRow,
+        prev7dUniqueRow,
         onlineVisitorsRow,
-        totalDownloadsRow,
-        todayDownloadsRow,
+        totalOrdersRow,
+        pendingOrdersRow,
+        completedOrdersRow,
         rewardClaimsRow,
         coinsTotalRow,
         pendingWithdrawalsRow,
         pendingTicketsRow,
         rangeEvents,
+        prevEvents,
+        rangeOrdersRows,
+        prevOrdersCountRow,
         rangeNewUsers,
         rangeRewardRows,
+        activeSessionsRows,
+        recentEventRows,
+        allFavoritesRows,
+        allOrdersRows,
+        contentEvents30dRows,
       ] = await Promise.all([
         db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM users'),
         db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM users WHERE created_at >= ?', [todayMs]),
@@ -6483,26 +6881,40 @@ export function createPhoneAuthAndAppRouter(): express.Router {
            )`,
           [thirtyDaysAgo, thirtyDaysAgo]
         ),
+        db.first<{ cnt: number }>(`SELECT COUNT(DISTINCT visitor_id) AS cnt FROM analytics_events`),
         db.first<{ cnt: number }>(
-          `SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'page_view' AND created_at BETWEEN ? AND ?`,
-          [rangeFrom, rangeTo]
+          `SELECT COUNT(DISTINCT visitor_id) AS cnt FROM analytics_events WHERE created_at >= ?`,
+          [todayMs]
         ),
         db.first<{ cnt: number }>(
-          `SELECT COUNT(DISTINCT visitor_id) AS cnt FROM analytics_events WHERE created_at BETWEEN ? AND ?`,
-          [rangeFrom, rangeTo]
+          `SELECT COUNT(DISTINCT visitor_id) AS cnt FROM analytics_events WHERE created_at >= ? AND created_at < ?`,
+          [yesterdayMs, todayMs]
         ),
         db.first<{ cnt: number }>(
           `SELECT COUNT(DISTINCT visitor_id) AS cnt FROM analytics_events WHERE created_at >= ?`,
-          [onlineCutoffMs]
+          [monthStartMs]
         ),
         db.first<{ cnt: number }>(
-          `SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'app_download' AND created_at BETWEEN ? AND ?`,
-          [rangeFrom, rangeTo]
+          `SELECT COUNT(DISTINCT visitor_id) AS cnt FROM analytics_events WHERE created_at >= ?`,
+          [sevenDaysAgo]
         ),
         db.first<{ cnt: number }>(
-          `SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'app_download' AND created_at >= ?`,
-          [todayMs]
+          `SELECT COUNT(DISTINCT visitor_id) AS cnt FROM analytics_events WHERE created_at >= ? AND created_at < ?`,
+          [prev7dStartMs, sevenDaysAgo]
         ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(DISTINCT visitor_id) AS cnt FROM (
+             SELECT visitor_id FROM visitor_sessions WHERE last_seen_at >= ?
+             UNION ALL
+             SELECT visitor_id FROM analytics_events WHERE created_at >= ?
+           )`,
+          [onlineCutoffMs, onlineCutoffMs]
+        ),
+        db.first<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM orders`),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(*) AS cnt FROM orders WHERE status IN ('Pending Payment', 'Verification Pending', 'Processing')`
+        ),
+        db.first<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM orders WHERE status = 'Completed'`),
         db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM rewarded_claims'),
         db.first<{ totalCoins: number }>(
           'SELECT COALESCE(SUM(coins_lifetime_earned), 0) AS totalCoins FROM watch_earn_balances'
@@ -6511,16 +6923,42 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         db.first<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM support_tickets WHERE status = 'open'`),
         db.all<{
           visitor_id: string;
+          session_id: string;
+          user_id: string;
           event_type: string;
           page_path: string;
           app_id: string;
+          content_id: string;
+          content_type: string;
+          content_category: string;
           device_type: string;
+          browser: string;
+          os: string;
+          country: string;
           referrer_host: string;
           created_at: number;
         }>(
-          `SELECT visitor_id, event_type, page_path, app_id, device_type, referrer_host, created_at
-           FROM analytics_events WHERE created_at BETWEEN ? AND ? ORDER BY created_at ASC LIMIT 25000`,
+          `SELECT visitor_id, session_id, user_id, event_type, page_path, app_id,
+                  content_id, content_type, content_category, device_type, browser, os, country, referrer_host, created_at
+           FROM analytics_events WHERE created_at BETWEEN ? AND ? ORDER BY created_at ASC LIMIT 40000`,
           [rangeFrom, rangeTo]
+        ),
+        db.all<{
+          visitor_id: string;
+          event_type: string;
+          created_at: number;
+        }>(
+          `SELECT visitor_id, event_type, created_at
+           FROM analytics_events WHERE created_at BETWEEN ? AND ? LIMIT 40000`,
+          [prevFrom, prevTo]
+        ),
+        db.all<{ created_at: number; status: string; payload_json: string }>(
+          `SELECT created_at, status, payload_json FROM orders WHERE created_at BETWEEN ? AND ? LIMIT 10000`,
+          [rangeFrom, rangeTo]
+        ),
+        db.first<{ cnt: number }>(
+          `SELECT COUNT(*) AS cnt FROM orders WHERE created_at BETWEEN ? AND ?`,
+          [prevFrom, prevTo]
         ),
         db.all<{ created_at: number }>(
           `SELECT created_at FROM users WHERE created_at BETWEEN ? AND ? ORDER BY created_at ASC LIMIT 10000`,
@@ -6530,45 +6968,226 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           `SELECT coins, created_at FROM ad_reward_transactions WHERE coins > 0 AND created_at BETWEEN ? AND ? LIMIT 10000`,
           [rangeFrom, rangeTo]
         ),
+        db.all<{
+          session_id: string;
+          visitor_id: string;
+          user_id: string;
+          first_seen_at: number;
+          last_seen_at: number;
+          visit_count: number;
+          is_returning: number;
+          current_page: string;
+          last_event_type: string;
+          last_content_id: string;
+          device_type: string;
+          browser: string;
+          os: string;
+          referrer_host: string;
+          country: string;
+        }>(
+          `SELECT * FROM visitor_sessions WHERE last_seen_at >= ? ORDER BY last_seen_at DESC LIMIT 80`,
+          [onlineCutoffMs]
+        ),
+        db.all<{
+          id: string;
+          visitor_id: string;
+          session_id: string;
+          user_id: string;
+          event_type: string;
+          page_path: string;
+          app_id: string;
+          content_id: string;
+          content_type: string;
+          device_type: string;
+          browser: string;
+          os: string;
+          country: string;
+          referrer_host: string;
+          created_at: number;
+        }>(
+          `SELECT id, visitor_id, session_id, user_id, event_type, page_path, app_id,
+                  content_id, content_type, device_type, browser, os, country, referrer_host, created_at
+           FROM analytics_events
+           WHERE event_type != 'heartbeat'
+           ORDER BY created_at DESC
+           LIMIT 50`
+        ),
+        db.all<{ app_id: string; cnt: number }>(`SELECT app_id, COUNT(*) AS cnt FROM app_favorites GROUP BY app_id`),
+        db.all<{ payload_json: string; created_at: number }>(
+          `SELECT payload_json, created_at FROM orders ORDER BY created_at DESC LIMIT 10000`
+        ),
+        db.all<{
+          visitor_id: string;
+          event_type: string;
+          app_id: string;
+          content_id: string;
+          content_type: string;
+          content_category: string;
+          created_at: number;
+        }>(
+          `SELECT visitor_id, event_type, app_id, content_id, content_type, content_category, created_at
+           FROM analytics_events
+           WHERE (content_id != '' OR app_id != '')
+             AND event_type IN ('app_view', 'game_view', 'product_view', 'service_view', 'app_download', 'download_click', 'play_click', 'external_link_click')
+           ORDER BY created_at DESC
+           LIMIT 50000`
+        ),
       ]);
+
+      // Fetch returning visitor counts inside range from visitor_sessions
+      const returningSessionsInRange = await db.all<{ visitor_id: string }>(
+        `SELECT DISTINCT visitor_id FROM visitor_sessions WHERE is_returning = 1 AND last_seen_at BETWEEN ? AND ?`,
+        [rangeFrom, rangeTo]
+      );
+      const returningVisitorSet = new Set(returningSessionsInRange.map((r) => r.visitor_id));
 
       const dayBuckets = new Map<
         string,
-        { date: string; visitors: Set<string>; pageViews: number; downloads: number; registrations: number; coins: number }
+        {
+          date: string;
+          visitors: Set<string>;
+          returningVisitors: Set<string>;
+          pageViews: number;
+          appViews: number;
+          gameViews: number;
+          serviceViews: number;
+          downloads: number;
+          playClicks: number;
+          orders: number;
+          registrations: number;
+          coins: number;
+        }
       >();
       const ensureDay = (ms: number) => {
-        const d = new Date(ms);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const key = getDhakaDateString(ms);
         let entry = dayBuckets.get(key);
         if (!entry) {
-          entry = { date: key, visitors: new Set(), pageViews: 0, downloads: 0, registrations: 0, coins: 0 };
+          entry = {
+            date: key,
+            visitors: new Set(),
+            returningVisitors: new Set(),
+            pageViews: 0,
+            appViews: 0,
+            gameViews: 0,
+            serviceViews: 0,
+            downloads: 0,
+            playClicks: 0,
+            orders: 0,
+            registrations: 0,
+            coins: 0,
+          };
           dayBuckets.set(key, entry);
         }
         return entry;
       };
 
+      // Pre-fill date axis for spans <= 95 days so daily chart never shows awkward gaps
+      const daySpan = Math.ceil((rangeTo - rangeFrom) / (24 * 60 * 60 * 1000));
+      if (daySpan <= 95) {
+        for (let t = getDhakaDayStartMs(rangeFrom); t <= rangeTo; t += 24 * 60 * 60 * 1000) {
+          ensureDay(t);
+        }
+      }
+
       const pageCounts = new Map<string, number>();
       const appDownloadCounts = new Map<string, number>();
       const sourceCounts = new Map<string, number>();
+      const browserVisitors = new Map<string, Set<string>>();
+      const osVisitors = new Map<string, Set<string>>();
+      const countryVisitors = new Map<string, Set<string>>();
       const mobileVisitors = new Set<string>();
+      const tabletVisitors = new Set<string>();
       const desktopVisitors = new Set<string>();
+      const uniqueVisitorsRangeSet = new Set<string>();
+
+      let pageViewsRange = 0;
+      let homepageViewsRange = 0;
+      let appViewsRange = 0;
+      let gameViewsRange = 0;
+      let productViewsRange = 0;
+      let serviceViewsRange = 0;
+      let downloadClicksRange = 0;
+      let playClicksRange = 0;
+      let externalClicksRange = 0;
+      let searchesRange = 0;
+      let todayDownloadClicks = 0;
+      let visitorsTodayViews = 0;
+      let visitorsYesterdayViews = 0;
 
       for (const ev of rangeEvents) {
+        uniqueVisitorsRangeSet.add(ev.visitor_id);
         const day = ensureDay(ev.created_at);
         day.visitors.add(ev.visitor_id);
+        if (returningVisitorSet.has(ev.visitor_id)) {
+          day.returningVisitors.add(ev.visitor_id);
+        }
         if (ev.device_type === 'mobile') mobileVisitors.add(ev.visitor_id);
+        else if (ev.device_type === 'tablet') tabletVisitors.add(ev.visitor_id);
         else desktopVisitors.add(ev.visitor_id);
 
-        if (ev.event_type === 'page_view') {
+        if (ev.browser) {
+          let s = browserVisitors.get(ev.browser);
+          if (!s) {
+            s = new Set();
+            browserVisitors.set(ev.browser, s);
+          }
+          s.add(ev.visitor_id);
+        }
+        if (ev.os) {
+          let s = osVisitors.get(ev.os);
+          if (!s) {
+            s = new Set();
+            osVisitors.set(ev.os, s);
+          }
+          s.add(ev.visitor_id);
+        }
+        if (ev.country) {
+          let s = countryVisitors.get(ev.country);
+          if (!s) {
+            s = new Set();
+            countryVisitors.set(ev.country, s);
+          }
+          s.add(ev.visitor_id);
+        }
+
+        if (ev.event_type === 'page_view' || ev.event_type === 'homepage_view') {
+          pageViewsRange += 1;
           day.pageViews += 1;
+          if (ev.event_type === 'homepage_view') homepageViewsRange += 1;
+          if (ev.created_at >= todayMs) visitorsTodayViews += 1;
+          else if (ev.created_at >= yesterdayMs && ev.created_at < todayMs) visitorsYesterdayViews += 1;
           const p = ev.page_path || '/';
           pageCounts.set(p, (pageCounts.get(p) || 0) + 1);
           const src = ev.referrer_host || 'direct';
           sourceCounts.set(src, (sourceCounts.get(src) || 0) + 1);
-        } else if (ev.event_type === 'app_download') {
+        } else if (ev.event_type === 'app_view') {
+          appViewsRange += 1;
+          day.appViews += 1;
+        } else if (ev.event_type === 'game_view') {
+          gameViewsRange += 1;
+          day.gameViews += 1;
+        } else if (ev.event_type === 'product_view' || ev.event_type === 'service_view') {
+          if (ev.event_type === 'product_view') productViewsRange += 1;
+          else serviceViewsRange += 1;
+          day.serviceViews += 1;
+        } else if (ev.event_type === 'app_download' || ev.event_type === 'download_click') {
+          downloadClicksRange += 1;
           day.downloads += 1;
-          if (ev.app_id) appDownloadCounts.set(ev.app_id, (appDownloadCounts.get(ev.app_id) || 0) + 1);
+          if (ev.created_at >= todayMs) todayDownloadClicks += 1;
+          const targetAppId = ev.app_id || ev.content_id;
+          if (targetAppId) appDownloadCounts.set(targetAppId, (appDownloadCounts.get(targetAppId) || 0) + 1);
+        } else if (ev.event_type === 'play_click') {
+          playClicksRange += 1;
+          day.playClicks += 1;
+        } else if (ev.event_type === 'external_link_click') {
+          externalClicksRange += 1;
+        } else if (ev.event_type === 'search') {
+          searchesRange += 1;
         }
+      }
+
+      for (const ord of rangeOrdersRows) {
+        ensureDay(ord.created_at).orders += 1;
       }
       for (const u of rangeNewUsers) {
         ensureDay(u.created_at).registrations += 1;
@@ -6577,31 +7196,185 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         ensureDay(rc.created_at).coins += Number(rc.coins || 0);
       }
 
+      // Previous period comparison summary
+      const prevUniqueSet = new Set<string>();
+      let prevPageViews = 0;
+      let prevDownloads = 0;
+      for (const ev of prevEvents) {
+        prevUniqueSet.add(ev.visitor_id);
+        if (ev.event_type === 'page_view' || ev.event_type === 'homepage_view') prevPageViews += 1;
+        else if (ev.event_type === 'app_download' || ev.event_type === 'download_click') prevDownloads += 1;
+      }
+      const calcDeltaPct = (curr: number, prev: number) => {
+        if (prev <= 0) return curr > 0 ? 100 : 0;
+        return Math.round(((curr - prev) / prev) * 100);
+      };
+
+      // Content Stats aggregation (real DB metrics across apps, games, products/services)
+      type AggItem = {
+        id: string;
+        contentType: 'app' | 'game' | 'service';
+        category: string;
+        totalViews: number;
+        uniqueViewers: Set<string>;
+        viewsToday: number;
+        viewsYesterday: number;
+        views7d: number;
+        views30d: number;
+        downloadClicks: number;
+        playClicks: number;
+        externalClicks: number;
+        favoritesCount: number;
+        ordersCount: number;
+        lastViewedAt: number;
+      };
+      const contentAgg = new Map<string, AggItem>();
+      const ensureContentAgg = (
+        id: string,
+        contentType: 'app' | 'game' | 'service',
+        category = ''
+      ): AggItem => {
+        const key = `${contentType}:${id}`;
+        let item = contentAgg.get(key);
+        if (!item) {
+          item = {
+            id,
+            contentType,
+            category,
+            totalViews: 0,
+            uniqueViewers: new Set(),
+            viewsToday: 0,
+            viewsYesterday: 0,
+            views7d: 0,
+            views30d: 0,
+            downloadClicks: 0,
+            playClicks: 0,
+            externalClicks: 0,
+            favoritesCount: 0,
+            ordersCount: 0,
+            lastViewedAt: 0,
+          };
+          contentAgg.set(key, item);
+        }
+        if (category && !item.category) item.category = category;
+        return item;
+      };
+
+      for (const ev of contentEvents30dRows) {
+        const cid = ev.content_id || ev.app_id;
+        if (!cid) continue;
+        const ctype: 'app' | 'game' | 'service' =
+          ev.content_type === 'game' || ev.event_type === 'game_view' || ev.event_type === 'play_click'
+            ? 'game'
+            : ev.content_type === 'service' ||
+                ev.content_type === 'product' ||
+                ev.event_type === 'product_view' ||
+                ev.event_type === 'service_view'
+              ? 'service'
+              : 'app';
+        const agg = ensureContentAgg(cid, ctype, ev.content_category || '');
+        if (
+          ev.event_type === 'app_view' ||
+          ev.event_type === 'game_view' ||
+          ev.event_type === 'product_view' ||
+          ev.event_type === 'service_view'
+        ) {
+          agg.totalViews += 1;
+          agg.uniqueViewers.add(ev.visitor_id);
+          if (ev.created_at >= todayMs) agg.viewsToday += 1;
+          else if (ev.created_at >= yesterdayMs && ev.created_at < todayMs) agg.viewsYesterday += 1;
+          if (ev.created_at >= sevenDaysAgo) agg.views7d += 1;
+          if (ev.created_at >= thirtyDaysAgo) agg.views30d += 1;
+          if (ev.created_at > agg.lastViewedAt) agg.lastViewedAt = ev.created_at;
+        } else if (ev.event_type === 'app_download' || ev.event_type === 'download_click') {
+          agg.downloadClicks += 1;
+          if (ev.created_at > agg.lastViewedAt) agg.lastViewedAt = ev.created_at;
+        } else if (ev.event_type === 'play_click') {
+          agg.playClicks += 1;
+          if (ev.created_at > agg.lastViewedAt) agg.lastViewedAt = ev.created_at;
+        } else if (ev.event_type === 'external_link_click') {
+          agg.externalClicks += 1;
+        }
+      }
+
+      for (const fav of allFavoritesRows) {
+        if (!fav.app_id) continue;
+        const agg = ensureContentAgg(fav.app_id, 'app');
+        agg.favoritesCount += Number(fav.cnt || 0);
+      }
+
+      for (const ord of allOrdersRows) {
+        const parsed = parseJsonSafe<{ productId?: string }>(ord.payload_json, {});
+        const pid = String(parsed.productId || '').trim();
+        if (!pid) continue;
+        const isMobileAppOrder = pid.startsWith('mapp_');
+        const agg = ensureContentAgg(pid, isMobileAppOrder ? 'app' : 'service');
+        agg.ordersCount += 1;
+      }
+
+      const contentStats = Array.from(contentAgg.values()).map((c) => {
+        const totalClicks = c.downloadClicks + c.playClicks + c.ordersCount;
+        const conversionRate =
+          c.totalViews > 0 ? Math.min(100, Math.round((totalClicks / c.totalViews) * 1000) / 10) : 0;
+        return {
+          id: c.id,
+          contentType: c.contentType,
+          category: c.category,
+          totalViews: c.totalViews,
+          uniqueViews: c.uniqueViewers.size,
+          viewsToday: c.viewsToday,
+          viewsYesterday: c.viewsYesterday,
+          views7d: c.views7d,
+          views30d: c.views30d,
+          downloadClicks: c.downloadClicks,
+          playClicks: c.playClicks,
+          externalClicks: c.externalClicks,
+          favoritesCount: c.favoritesCount,
+          ordersCount: c.ordersCount,
+          conversionRate,
+          lastViewedAt: c.lastViewedAt,
+        };
+      });
+
       const dailySeries = Array.from(dayBuckets.values())
         .sort((a, b) => a.date.localeCompare(b.date))
         .map((d) => ({
           date: d.date,
+          visitors: d.visitors.size,
           uniqueVisitors: d.visitors.size,
+          returningVisitors: d.returningVisitors.size,
           pageViews: d.pageViews,
+          appViews: d.appViews,
+          gameViews: d.gameViews,
+          serviceViews: d.serviceViews,
           downloads: d.downloads,
+          downloadClicks: d.downloads,
+          playClicks: d.playClicks,
+          orders: d.orders,
           registrations: d.registrations,
           coinsDistributed: d.coins,
         }));
 
       const topPages = Array.from(pageCounts.entries())
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 10)
+        .slice(0, 12)
         .map(([path, views]) => ({ path, views }));
 
       const topApps = Array.from(appDownloadCounts.entries())
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 10)
+        .slice(0, 12)
         .map(([appId, downloads]) => ({ appId, downloads }));
 
       const trafficSources = Array.from(sourceCounts.entries())
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
+        .slice(0, 10)
         .map(([source, visits]) => ({ source, visits }));
+
+      const toSortedSplit = (m: Map<string, Set<string>>, limit = 8) =>
+        Array.from(m.entries())
+          .map(([name, set]) => ({ name, count: set.size }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, limit);
 
       res.json({
         ok: true,
@@ -6612,24 +7385,112 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           activeUsersToday: Number(activeTodayRow?.cnt || 0),
           activeUsers7d: Number(active7dRow?.cnt || 0),
           activeUsers30d: Number(active30dRow?.cnt || 0),
-          totalVisitors: Number(totalVisitorsRow?.cnt || 0),
-          uniqueVisitors: Number(uniqueVisitorsRow?.cnt || 0),
+          totalVisitors: pageViewsRange,
+          uniqueVisitors: uniqueVisitorsRangeSet.size,
           onlineUsers: Number(onlineVisitorsRow?.cnt || 0),
-          totalDownloads: Number(totalDownloadsRow?.cnt || 0),
-          todayDownloads: Number(todayDownloadsRow?.cnt || 0),
+          totalDownloads: downloadClicksRange,
+          todayDownloads: todayDownloadClicks,
           totalRewardClaims: Number(rewardClaimsRow?.cnt || 0),
           totalCoinsDistributed: Number(coinsTotalRow?.totalCoins || 0),
           pendingWithdrawals: Number(pendingWithdrawalsRow?.cnt || 0),
           pendingTickets: Number(pendingTicketsRow?.cnt || 0),
         },
+        overview: {
+          visitorsToday: Number(todayUniqueRow?.cnt || 0),
+          visitorsYesterday: Number(yesterdayUniqueRow?.cnt || 0),
+          visitorsTodayPageViews: visitorsTodayViews,
+          visitorsYesterdayPageViews: visitorsYesterdayViews,
+          visitorsThisMonth: Number(monthUniqueRow?.cnt || 0),
+          visitorsLast7d: Number(last7dUniqueRow?.cnt || 0),
+          visitorsPrev7d: Number(prev7dUniqueRow?.cnt || 0),
+          totalVisitorsOverall: Number(overallVisitorsRow?.cnt || 0),
+          uniqueVisitorsInRange: uniqueVisitorsRangeSet.size,
+          returningVisitorsInRange: returningVisitorSet.size,
+          currentlyActiveVisitors: Number(onlineVisitorsRow?.cnt || 0),
+          totalPageViews: pageViewsRange,
+          totalHomepageViews: homepageViewsRange,
+          totalAppViews: appViewsRange,
+          totalGameViews: gameViewsRange,
+          totalProductViews: productViewsRange,
+          totalServiceViews: serviceViewsRange,
+          totalDownloadClicks: downloadClicksRange,
+          todayDownloadClicks,
+          totalPlayClicks: playClicksRange,
+          totalExternalClicks: externalClicksRange,
+          totalSearches: searchesRange,
+          totalOrders: Number(totalOrdersRow?.cnt || 0),
+          pendingOrders: Number(pendingOrdersRow?.cnt || 0),
+          completedOrders: Number(completedOrdersRow?.cnt || 0),
+          ordersInRange: rangeOrdersRows.length,
+        },
+        comparisonSummary: {
+          current: {
+            uniqueVisitors: uniqueVisitorsRangeSet.size,
+            pageViews: pageViewsRange,
+            downloadClicks: downloadClicksRange,
+            orders: rangeOrdersRows.length,
+          },
+          previous: {
+            uniqueVisitors: prevUniqueSet.size,
+            pageViews: prevPageViews,
+            downloadClicks: prevDownloads,
+            orders: Number(prevOrdersCountRow?.cnt || 0),
+          },
+          deltasPct: {
+            uniqueVisitors: calcDeltaPct(uniqueVisitorsRangeSet.size, prevUniqueSet.size),
+            pageViews: calcDeltaPct(pageViewsRange, prevPageViews),
+            downloadClicks: calcDeltaPct(downloadClicksRange, prevDownloads),
+            orders: calcDeltaPct(rangeOrdersRows.length, Number(prevOrdersCountRow?.cnt || 0)),
+          },
+        },
         deviceSplit: {
           mobile: mobileVisitors.size,
+          tablet: tabletVisitors.size,
           desktop: desktopVisitors.size,
         },
+        browserSplit: toSortedSplit(browserVisitors),
+        osSplit: toSortedSplit(osVisitors),
+        countrySplit: toSortedSplit(countryVisitors),
         dailySeries,
         topPages,
         topApps,
         trafficSources,
+        liveVisitors: {
+          activeCount: Number(onlineVisitorsRow?.cnt || 0),
+          activeSessions: activeSessionsRows.map((s) => ({
+            sessionId: s.session_id,
+            visitorId: s.visitor_id.slice(0, 18),
+            isMember: Boolean(s.user_id),
+            isReturning: s.is_returning === 1,
+            visitCount: Number(s.visit_count || 1),
+            currentPage: s.current_page || '/',
+            lastEventType: s.last_event_type || 'page_view',
+            lastContentId: s.last_content_id || '',
+            deviceType: s.device_type || 'desktop',
+            browser: s.browser || 'Other',
+            os: s.os || 'Other',
+            referrerHost: s.referrer_host || 'direct',
+            country: s.country || '',
+            firstSeenAt: Number(s.first_seen_at || 0),
+            lastSeenAt: Number(s.last_seen_at || 0),
+          })),
+          recentEvents: recentEventRows.map((ev) => ({
+            id: ev.id,
+            visitorId: ev.visitor_id.slice(0, 18),
+            isMember: Boolean(ev.user_id),
+            eventType: ev.event_type,
+            pagePath: ev.page_path || '/',
+            contentId: ev.content_id || ev.app_id || '',
+            contentType: ev.content_type || '',
+            deviceType: ev.device_type || 'desktop',
+            browser: ev.browser || 'Other',
+            os: ev.os || 'Other',
+            country: ev.country || '',
+            referrerHost: ev.referrer_host || 'direct',
+            createdAt: Number(ev.created_at || 0),
+          })),
+        },
+        contentStats,
       });
     } catch (err) {
       handleRouteError(res, err, 'Failed to load analytics.');
@@ -6640,9 +7501,20 @@ export function createPhoneAuthAndAppRouter(): express.Router {
     try {
       const session = await resolveSessionFromRequest(req).catch(() => null);
       const db = session ? session.db : await getAppDatabase();
-      const [downloadRows, ratingRows, reviewRows, favRows] = await Promise.all([
+      const [downloadRows, viewRows, ratingRows, reviewRows, favRows] = await Promise.all([
         db.all<{ app_id: string; cnt: number }>(
-          `SELECT app_id, COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'app_download' AND app_id != '' GROUP BY app_id`
+          `SELECT COALESCE(NULLIF(app_id, ''), content_id) AS app_id, COUNT(*) AS cnt
+           FROM analytics_events
+           WHERE event_type IN ('app_download', 'download_click')
+             AND (app_id != '' OR (content_type = 'app' AND content_id != ''))
+           GROUP BY COALESCE(NULLIF(app_id, ''), content_id)`
+        ),
+        db.all<{ app_id: string; cnt: number }>(
+          `SELECT COALESCE(NULLIF(content_id, ''), app_id) AS app_id, COUNT(*) AS cnt
+           FROM analytics_events
+           WHERE event_type = 'app_view'
+             AND (app_id != '' OR content_id != '')
+           GROUP BY COALESCE(NULLIF(content_id, ''), app_id)`
         ),
         db.all<{ app_id: string; rating_sum: number; cnt: number }>(
           `SELECT app_id, SUM(rating) AS rating_sum, COUNT(*) AS cnt FROM app_reviews GROUP BY app_id`
@@ -6655,12 +7527,19 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           : Promise.resolve([]),
       ]);
 
-      const statsByApp: Record<string, { downloads: number; ratingAvg: number; ratingCount: number }> = {};
+      const statsByApp: Record<string, { views: number; downloads: number; ratingAvg: number; ratingCount: number }> = {};
       for (const d of downloadRows) {
-        statsByApp[d.app_id] = { downloads: Number(d.cnt || 0), ratingAvg: 0, ratingCount: 0 };
+        if (!d.app_id) continue;
+        statsByApp[d.app_id] = { views: 0, downloads: Number(d.cnt || 0), ratingAvg: 0, ratingCount: 0 };
+      }
+      for (const v of viewRows) {
+        if (!v.app_id) continue;
+        const cur = statsByApp[v.app_id] || { views: 0, downloads: 0, ratingAvg: 0, ratingCount: 0 };
+        cur.views = Number(v.cnt || 0);
+        statsByApp[v.app_id] = cur;
       }
       for (const r of ratingRows) {
-        const cur = statsByApp[r.app_id] || { downloads: 0, ratingAvg: 0, ratingCount: 0 };
+        const cur = statsByApp[r.app_id] || { views: 0, downloads: 0, ratingAvg: 0, ratingCount: 0 };
         const cnt = Number(r.cnt || 0);
         cur.ratingCount = cnt;
         cur.ratingAvg = cnt > 0 ? Math.round((Number(r.rating_sum || 0) / cnt) * 10) / 10 : 0;
@@ -6686,6 +7565,41 @@ export function createPhoneAuthAndAppRouter(): express.Router {
     }
   });
 
+  router.get('/games/meta', async (req, res) => {
+    try {
+      const session = await resolveSessionFromRequest(req).catch(() => null);
+      const db = session ? session.db : await getAppDatabase();
+      const [viewRows, playRows, dlRows] = await Promise.all([
+        db.all<{ content_id: string; cnt: number }>(
+          `SELECT content_id, COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'game_view' AND content_id != '' GROUP BY content_id`
+        ),
+        db.all<{ content_id: string; cnt: number }>(
+          `SELECT content_id, COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'play_click' AND content_id != '' GROUP BY content_id`
+        ),
+        db.all<{ content_id: string; cnt: number }>(
+          `SELECT content_id, COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'download_click' AND content_type = 'game' AND content_id != '' GROUP BY content_id`
+        ),
+      ]);
+      const statsByGame: Record<string, { views: number; plays: number; downloads: number }> = {};
+      for (const r of viewRows) {
+        statsByGame[r.content_id] = { views: Number(r.cnt || 0), plays: 0, downloads: 0 };
+      }
+      for (const r of playRows) {
+        const cur = statsByGame[r.content_id] || { views: 0, plays: 0, downloads: 0 };
+        cur.plays = Number(r.cnt || 0);
+        statsByGame[r.content_id] = cur;
+      }
+      for (const r of dlRows) {
+        const cur = statsByGame[r.content_id] || { views: 0, plays: 0, downloads: 0 };
+        cur.downloads = Number(r.cnt || 0);
+        statsByGame[r.content_id] = cur;
+      }
+      res.json({ ok: true, statsByGame });
+    } catch {
+      res.json({ ok: true, statsByGame: {} });
+    }
+  });
+
   router.post('/apps/:id/download', async (req, res) => {
     try {
       const appId = String(req.params.id || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80);
@@ -6693,7 +7607,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         res.status(400).json({ ok: false, error: 'Invalid app ID.' });
         return;
       }
-      const body = (req.body || {}) as { appName?: string; visitorId?: string; deviceType?: string };
+      const body = (req.body || {}) as { appName?: string; visitorId?: string; sessionId?: string; deviceType?: string };
       const session = await resolveSessionFromRequest(req).catch(() => null);
       const db = session ? session.db : await getAppDatabase();
       const now = Date.now();
@@ -6701,12 +7615,19 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         String(body.visitorId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) ||
         session?.user.uid ||
         `anon_${now}`;
-      const deviceType = body.deviceType === 'mobile' ? 'mobile' : 'desktop';
-      await db.run(
-        `INSERT INTO analytics_events (id, visitor_id, session_id, user_id, event_type, page_path, app_id, device_type, referrer_host, created_at)
-         VALUES (?, ?, '', ?, 'app_download', '/apps', ?, ?, 'app_store', ?)`,
-        [generateSecureId('dl', 10), visitorId, session?.user.uid || '', appId, deviceType, now]
-      );
+      await logServerAnalyticsEvent(db, req, {
+        visitorId,
+        sessionId: body.sessionId,
+        userId: session?.user.uid || '',
+        eventType: 'app_download',
+        pagePath: '/apps',
+        appId,
+        contentId: appId,
+        contentType: 'app',
+        deviceTypeHint: body.deviceType === 'mobile' ? 'mobile' : undefined,
+        referrerHost: 'app_store',
+        now,
+      });
       if (session?.user.uid && body.appName) {
         const cleanName = String(body.appName).trim().slice(0, 100);
         await insertNotification(
@@ -6715,13 +7636,13 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           `ডাউনলোড শুরু হয়েছে: ${cleanName}`,
           `Download Started: ${cleanName}`,
           `আপনি "${cleanName}" অ্যাপটি ডাউনলোড করেছেন।`,
-          `You downloaded "${cleanName}" from Digital Hub Smart App Store.`,
+          `You clicked download for "${cleanName}" from Digital Hub Smart App Store.`,
           'download'
         );
       }
       const countRow = await db.first<{ cnt: number }>(
-        `SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type = 'app_download' AND app_id = ?`,
-        [appId]
+        `SELECT COUNT(*) AS cnt FROM analytics_events WHERE event_type IN ('app_download', 'download_click') AND (app_id = ? OR content_id = ?)`,
+        [appId, appId]
       );
       res.json({ ok: true, downloads: Number(countRow?.cnt || 0) });
     } catch (err) {
@@ -6757,6 +7678,15 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           Date.now(),
         ]);
         favorited = true;
+        await logServerAnalyticsEvent(db, req, {
+          userId: user.uid,
+          eventType: 'favorite',
+          pagePath: '/apps',
+          appId,
+          contentId: appId,
+          contentType: 'app',
+          referrerHost: 'app_store',
+        });
       }
       const rows = await db.all<{ app_id: string }>('SELECT app_id FROM app_favorites WHERE user_id = ?', [user.uid]);
       res.json({ ok: true, favorited, favoriteAppIds: rows.map((r) => r.app_id) });

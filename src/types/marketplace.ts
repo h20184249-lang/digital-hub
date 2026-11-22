@@ -59,6 +59,7 @@ export type AppRoute =
   | 'graphic-design'
   | 'social-media'
   | 'gaming-store'
+  | 'games-store'
   | 'streaming-store'
   | 'gift-cards'
   | 'offers'
@@ -167,6 +168,7 @@ export interface AdminRecord {
 export interface Category {
   id: string;
   slug: string;
+  type?: 'service' | 'app' | 'game';
   nameBn: string;
   nameEn: string;
   descriptionBn?: string;
@@ -669,7 +671,85 @@ export interface SiteSettings {
   privacyEn?: string;
   refundBn?: string;
   refundEn?: string;
+  accentColor?: string;
+  homepageSections?: HomepageSectionConfig[];
   updatedAt?: unknown;
+}
+
+export type HomepageSectionId =
+  | 'hero'
+  | 'quick_categories'
+  | 'browse_23'
+  | 'pwa_card'
+  | 'watch_earn'
+  | 'capcut_recharge'
+  | 'featured_apps'
+  | 'featured_games'
+  | 'gaming_topups'
+  | 'flash_sale'
+  | 'hot_products'
+  | 'streaming_ai'
+  | 'trending_services'
+  | 'best_sellers'
+  | 'payment_channels'
+  | 'spotlight'
+  | 'ad_player'
+  | 'reviews'
+  | 'why_faq';
+
+export interface HomepageSectionConfig {
+  id: HomepageSectionId;
+  labelEn: string;
+  labelBn: string;
+  visible: boolean;
+  order: number;
+  limit?: number;
+}
+
+export type GameCategoryId =
+  | 'android_games'
+  | 'online_games'
+  | 'casual_games'
+  | 'popular_games'
+  | 'new_games';
+
+export interface GameItem {
+  id: string;
+  slug: string;
+  titleEn: string;
+  titleBn: string;
+  category: GameCategoryId;
+  developer: string;
+  shortDescBn: string;
+  shortDescEn: string;
+  imageUrl: string;
+  screenshots?: string[];
+  playUrl?: string;
+  downloadUrl?: string;
+  relatedProductId?: string;
+  version?: string;
+  sizeLabel?: string;
+  featured?: boolean;
+  popular?: boolean;
+  trending?: boolean;
+  isNew?: boolean;
+  visible?: boolean;
+  updatedAt?: number;
+}
+
+export interface GameMetaPayload {
+  statsByGame: Record<string, { views: number; plays: number; downloads: number }>;
+}
+
+export interface DownloadHistoryItem {
+  id: string;
+  appId: string;
+  contentId: string;
+  contentType: string;
+  pagePath: string;
+  deviceType: string;
+  eventType: string;
+  createdAt: number;
 }
 
 export type WithdrawalStatus = 'Pending' | 'Approved' | 'Processing' | 'Paid' | 'Rejected';
@@ -836,6 +916,25 @@ export interface ServerAdAnalytics {
   >;
 }
 
+export type AnalyticsEventType =
+  | 'page_view'
+  | 'homepage_view'
+  | 'heartbeat'
+  | 'app_view'
+  | 'app_download'
+  | 'download_click'
+  | 'game_view'
+  | 'play_click'
+  | 'product_view'
+  | 'service_view'
+  | 'external_link_click'
+  | 'search'
+  | 'favorite'
+  | 'signup'
+  | 'login'
+  | 'order_created'
+  | 'order_completed';
+
 export interface AdminAnalyticsPayload {
   range: { from: number; to: number };
   kpis: {
@@ -854,18 +953,115 @@ export interface AdminAnalyticsPayload {
     pendingWithdrawals: number;
     pendingTickets: number;
   };
-  deviceSplit: { mobile: number; desktop: number };
+  overview?: {
+    visitorsToday: number;
+    visitorsYesterday: number;
+    visitorsTodayPageViews: number;
+    visitorsYesterdayPageViews: number;
+    visitorsThisMonth: number;
+    visitorsLast7d: number;
+    visitorsPrev7d: number;
+    totalVisitorsOverall: number;
+    uniqueVisitorsInRange: number;
+    returningVisitorsInRange: number;
+    currentlyActiveVisitors: number;
+    totalPageViews: number;
+    totalHomepageViews: number;
+    totalAppViews: number;
+    totalGameViews: number;
+    totalProductViews: number;
+    totalServiceViews: number;
+    totalDownloadClicks: number;
+    todayDownloadClicks: number;
+    totalPlayClicks: number;
+    totalExternalClicks: number;
+    totalSearches: number;
+    totalOrders: number;
+    pendingOrders: number;
+    completedOrders: number;
+    ordersInRange: number;
+  };
+  comparisonSummary?: {
+    current: { uniqueVisitors: number; pageViews: number; downloadClicks: number; orders: number };
+    previous: { uniqueVisitors: number; pageViews: number; downloadClicks: number; orders: number };
+    deltasPct: { uniqueVisitors: number; pageViews: number; downloadClicks: number; orders: number };
+  };
+  deviceSplit: { mobile: number; tablet?: number; desktop: number };
+  browserSplit?: Array<{ name: string; count: number }>;
+  osSplit?: Array<{ name: string; count: number }>;
+  countrySplit?: Array<{ name: string; count: number }>;
   dailySeries: Array<{
     date: string;
+    visitors?: number;
     uniqueVisitors: number;
+    returningVisitors?: number;
     pageViews: number;
+    appViews?: number;
+    gameViews?: number;
+    serviceViews?: number;
     downloads: number;
+    downloadClicks?: number;
+    playClicks?: number;
+    orders?: number;
     registrations: number;
     coinsDistributed: number;
   }>;
   topPages: Array<{ path: string; views: number }>;
   topApps: Array<{ appId: string; downloads: number }>;
   trafficSources: Array<{ source: string; visits: number }>;
+  liveVisitors?: {
+    activeCount: number;
+    activeSessions: Array<{
+      sessionId: string;
+      visitorId: string;
+      isMember: boolean;
+      isReturning: boolean;
+      visitCount: number;
+      currentPage: string;
+      lastEventType: string;
+      lastContentId: string;
+      deviceType: string;
+      browser: string;
+      os: string;
+      referrerHost: string;
+      country: string;
+      firstSeenAt: number;
+      lastSeenAt: number;
+    }>;
+    recentEvents: Array<{
+      id: string;
+      visitorId: string;
+      isMember: boolean;
+      eventType: string;
+      pagePath: string;
+      contentId: string;
+      contentType: string;
+      deviceType: string;
+      browser: string;
+      os: string;
+      country: string;
+      referrerHost: string;
+      createdAt: number;
+    }>;
+  };
+  contentStats?: Array<{
+    id: string;
+    contentType: 'app' | 'game' | 'service';
+    category: string;
+    totalViews: number;
+    uniqueViews: number;
+    viewsToday: number;
+    viewsYesterday: number;
+    views7d: number;
+    views30d: number;
+    downloadClicks: number;
+    playClicks: number;
+    externalClicks: number;
+    favoritesCount: number;
+    ordersCount: number;
+    conversionRate: number;
+    lastViewedAt: number;
+  }>;
 }
 
 export interface AdminCoinsOverview {
@@ -893,7 +1089,7 @@ export interface AppReviewItem {
 }
 
 export interface AppMetaPayload {
-  statsByApp: Record<string, { downloads: number; ratingAvg: number; ratingCount: number }>;
+  statsByApp: Record<string, { views?: number; downloads: number; ratingAvg: number; ratingCount: number }>;
   reviews: AppReviewItem[];
   favoriteAppIds: string[];
 }

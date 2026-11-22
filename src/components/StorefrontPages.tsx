@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
+  ChevronDown,
   Copy,
   Headphones,
+  HelpCircle,
   Mail,
   MessageCircle,
   Phone,
@@ -25,6 +27,7 @@ import {
   SiteSettings,
 } from '../types/marketplace';
 import { t } from '../lib/i18n';
+import { trackSearchQuery } from '../lib/firestoreService';
 import {
   CATALOG_23_CATEGORIES,
   CATALOG_23_MAP,
@@ -258,6 +261,7 @@ export function CategoryCatalogPage({
   const [availFilter, setAvailFilter] = useState<'all' | 'in_stock' | 'limited' | 'out_of_stock'>('all');
   const [sortBy, setSortBy] = useState<'popular' | 'price_low' | 'price_high' | 'name_az'>('popular');
   const [expand23, setExpand23] = useState(false);
+  const searchTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setSelectedSubcat('all');
@@ -268,6 +272,18 @@ export function CategoryCatalogPage({
       setSearch(initialSearch);
     }
   }, [initialSearch]);
+
+  useEffect(() => {
+    const q = search.trim();
+    if (q.length < 2) return;
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = window.setTimeout(() => {
+      trackSearchQuery(q, 'services');
+    }, 650);
+    return () => {
+      if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
+    };
+  }, [search]);
 
   useEffect(() => {
     setSelectedSection(initialCatalogSection || 'all');
@@ -786,6 +802,34 @@ export function SupportAndContactPage({
   lang: Language;
   onGoToTickets: () => void;
 }) {
+  const [openFaqIdx, setOpenFaqIdx] = useState<number | null>(0);
+  const faqs = [
+    {
+      qBn: 'পেমেন্ট করার পর অর্ডার ভেরিফাই হতে কত সময় লাগে?',
+      qEn: 'How long does payment verification and delivery take?',
+      aBn: 'bKash, Nagad বা Rocket-এ Send Money করে সঠিক TrxID জমা দিলে সাধারণত ৫–৩০ মিনিটের মধ্যে অ্যাডমিন যাচাই করে ডেলিভারি শুরু করেন।',
+      aEn: 'After submitting your Send Money TrxID via bKash, Nagad, or Rocket, orders are typically verified and fulfilled within 5–30 minutes.',
+    },
+    {
+      qBn: 'ওয়ালেটে Add Money ও Withdraw কীভাবে কাজ করে?',
+      qEn: 'How do Add Money and Wallet Withdrawals work?',
+      aBn: 'Add Money-তে অফিশিয়াল নম্বরে টাকা পাঠিয়ে TrxID দিন। ভেরিফাই হলে ব্যালেন্স যুক্ত হবে। Watch & Earn বা রেফারেল আয় ন্যূনতম সীমা পূরণ করলে Withdraw করতে পারবেন।',
+      aEn: 'Send money to the official account in Add Money and submit your TrxID. Once verified, funds credit to your wallet. Eligible balances can be withdrawn from the Wallet page.',
+    },
+    {
+      qBn: 'অ্যাপ বা গেমের ডাউনলোড লিংক কাজ না করলে কী করবো?',
+      qEn: 'What if an app or game download link does not work?',
+      aBn: 'Apps বা Games স্টোরের বিস্তারিত মডাল থেকে সরাসরি "Report Link" বাটনে রিপোর্ট করতে পারেন অথবা এখানে সাপোর্ট টিকেট খুলতে পারেন।',
+      aEn: 'Open the item details modal in Mobile App Store or Games Store and click Report Link, or open a support ticket with the app/game name.',
+    },
+    {
+      qBn: 'পাসওয়ার্ড ভুলে গেলে বা অ্যাকাউন্ট রিকভার করতে কী করবো?',
+      qEn: 'How can I recover my account if I forget my password?',
+      aBn: 'লগইন মডালের Forgot Password অপশন অথবা সাইন-আপের সময় পাওয়া ব্যাকআপ রিকভারি কোড ব্যবহার করুন, কিংবা সাপোর্ট টিমকে জানান।',
+      aEn: 'Use your backup recovery code in the Sign-In modal or contact our support team on WhatsApp or Telegram with your registered phone/email.',
+    },
+  ];
+
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 space-y-6">
       <div className="dh-card rounded-3xl p-6 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -794,10 +838,10 @@ export function SupportAndContactPage({
             <Headphones className="w-4 h-4" />
             <span>{mode === 'support' ? t(lang, 'navSupport') : lang === 'bn' ? 'যোগাযোগ' : 'Contact Us'}</span>
           </div>
-          <h1 className="text-2xl font-extrabold text-[#172033]">
+          <h1 className="text-2xl font-extrabold text-[#172033] dark:text-slate-100">
             {lang === 'bn' ? '২৪/৭ কাস্টমার সাপোর্ট ও সহায়তা কেন্দ্র' : '24/7 Customer Support & Contact Center'}
           </h1>
-          <p className="text-xs sm:text-sm text-[#777777]">
+          <p className="text-xs sm:text-sm text-[#777777] dark:text-slate-400">
             {lang === 'bn'
               ? 'পেমেন্ট যাচাই, অর্ডার ডেলিভারি বা যেকোনো প্রশ্নে আমাদের সাথে সরাসরি যোগাযোগ করুন।'
               : 'Reach our support team for payment verification, delivery updates, or service questions.'}
@@ -807,7 +851,7 @@ export function SupportAndContactPage({
         <button
           type="button"
           onClick={onGoToTickets}
-          className="px-5 py-3 rounded-xl dh-orange-gradient text-white text-sm font-bold flex items-center gap-2 shrink-0 self-start md:self-auto"
+          className="px-5 py-3 rounded-xl dh-orange-gradient text-white text-sm font-bold flex items-center gap-2 shrink-0 self-start md:self-auto cursor-pointer"
         >
           <MessageCircle className="w-4 h-4" />
           {lang === 'bn' ? 'সাপোর্ট টিকেট খুলুন' : 'Open Support Ticket'}
@@ -817,26 +861,26 @@ export function SupportAndContactPage({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="dh-card rounded-2xl p-5 space-y-2">
           <Phone className="w-5 h-5 text-[#FF8500]" />
-          <h3 className="text-sm font-bold text-[#172033]">
+          <h3 className="text-sm font-bold text-[#172033] dark:text-slate-100">
             {lang === 'bn' ? 'অফিশিয়াল পেমেন্ট নম্বরসমূহ' : 'Official Payment Numbers'}
           </h3>
-          <p className="text-xs font-mono-num text-[#777777]">
+          <p className="text-xs font-mono-num text-[#777777] dark:text-slate-400">
             bKash ({settings.bkashType || 'Personal'}): {settings.bkashNumber}
           </p>
-          <p className="text-xs font-mono-num text-[#777777]">
+          <p className="text-xs font-mono-num text-[#777777] dark:text-slate-400">
             Nagad ({settings.nagadType || 'Personal'}): {settings.nagadNumber}
           </p>
-          <p className="text-xs font-mono-num text-[#777777]">
+          <p className="text-xs font-mono-num text-[#777777] dark:text-slate-400">
             Rocket ({settings.rocketType || 'Personal'}): {settings.rocketNumber}
           </p>
         </div>
 
         <div className="dh-card rounded-2xl p-5 space-y-2">
           <Mail className="w-5 h-5 text-[#FF8500]" />
-          <h3 className="text-sm font-bold text-[#172033]">
+          <h3 className="text-sm font-bold text-[#172033] dark:text-slate-100">
             {lang === 'bn' ? 'অফিশিয়াল সাপোর্ট ইমেইল' : 'Support Email'}
           </h3>
-          <p className="text-xs font-mono-num text-[#777777]">
+          <p className="text-xs font-mono-num text-[#777777] dark:text-slate-400">
             {settings.supportContact || 'support@digitalhub.bd'}
           </p>
         </div>
@@ -903,6 +947,51 @@ export function SupportAndContactPage({
               </span>
             </a>
           </div>
+        </div>
+      </div>
+
+      {/* Interactive Support FAQ Accordion */}
+      <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-base sm:text-lg font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-2">
+            <HelpCircle className="w-5 h-5 text-[#FF8500]" />
+            <span>{lang === 'bn' ? 'সাধারণ জিজ্ঞাসা ও উত্তর (FAQ)' : 'Frequently Asked Questions'}</span>
+          </h2>
+          <button
+            type="button"
+            onClick={onGoToTickets}
+            className="text-xs font-bold text-[#FF8500] hover:underline cursor-pointer"
+          >
+            {lang === 'bn' ? 'অর্ডার সহায়তা টিকেট →' : 'Need Order Help? →'}
+          </button>
+        </div>
+        <div className="space-y-2">
+          {faqs.map((faq, idx) => {
+            const isOpen = openFaqIdx === idx;
+            return (
+              <div
+                key={idx}
+                className="rounded-2xl bg-[#F3F6FF] dark:bg-slate-800/70 border border-[#E6ECFA] dark:border-slate-700 overflow-hidden"
+              >
+                <button
+                  type="button"
+                  aria-expanded={isOpen}
+                  onClick={() => setOpenFaqIdx(isOpen ? null : idx)}
+                  className="w-full px-4 py-3 text-left flex items-center justify-between gap-3 text-xs sm:text-sm font-bold text-[#172033] dark:text-slate-100 cursor-pointer"
+                >
+                  <span>{lang === 'bn' ? faq.qBn : faq.qEn}</span>
+                  <ChevronDown
+                    className={`w-4 h-4 text-[#FF8500] shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                {isOpen && (
+                  <p className="px-4 pb-3.5 text-xs text-[#475569] dark:text-slate-300 leading-relaxed">
+                    {lang === 'bn' ? faq.aBn : faq.aEn}
+                  </p>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

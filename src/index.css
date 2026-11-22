@@ -82,7 +82,7 @@
 }
 
 .dh-orange-gradient {
-  background: linear-gradient(135deg, #FF8500 0%, #FF9B19 100%);
+  background: linear-gradient(135deg, var(--dh-orange, #FF8500) 0%, var(--dh-orange-light, #FF9B19) 100%);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -3,6 +3,7 @@ import {
   Banner,
   Category,
   Coupon,
+  HomepageSectionConfig,
   Product,
   SiteSettings,
 } from '../types/marketplace';
@@ -17,9 +18,33 @@ export { STUDIO_IMAGES };
 
 export const BOOTSTRAPPED_ADMIN_EMAIL = 'ftake810@gmail.com';
 
+export const DEFAULT_HOMEPAGE_SECTIONS: HomepageSectionConfig[] = [
+  { id: 'hero', labelEn: 'Hero Carousel & Search', labelBn: 'হিরো ব্যানার ও সার্চ', visible: true, order: 1 },
+  { id: 'quick_categories', labelEn: 'Quick Categories Bar', labelBn: 'কুইক ক্যাটাগরি শর্টকাট', visible: true, order: 2 },
+  { id: 'browse_23', labelEn: 'All 23 Service Categories', labelBn: 'সকল ২৩টি সার্ভিস ক্যাটাগরি', visible: true, order: 3 },
+  { id: 'pwa_card', labelEn: 'Install Mobile App Banner', labelBn: 'মোবাইল অ্যাপ ইনস্টল কার্ড', visible: true, order: 4 },
+  { id: 'watch_earn', labelEn: 'Watch & Earn Banner', labelBn: 'দেখুন ও আয় করুন ব্যানার', visible: true, order: 5 },
+  { id: 'capcut_recharge', labelEn: 'CapCut Premium Recharge', labelBn: 'ক্যাপকাট প্রিমিয়াম রিচার্জ', visible: true, order: 6 },
+  { id: 'featured_apps', labelEn: 'Smart App Store (Apps)', labelBn: 'স্মার্ট অ্যাপ স্টোর', visible: true, order: 7, limit: 12 },
+  { id: 'featured_games', labelEn: 'Games Hub & Play Store', labelBn: 'গেমস হাব ও প্লে স্টোর', visible: true, order: 8, limit: 8 },
+  { id: 'gaming_topups', labelEn: 'Gaming Top-Ups & Passes', labelBn: 'গেমিং টপ-আপ ও পাস', visible: true, order: 9, limit: 8 },
+  { id: 'flash_sale', labelEn: 'Flash Sale Deals', labelBn: 'ফ্ল্যাশ সেল অফার', visible: true, order: 10, limit: 4 },
+  { id: 'hot_products', labelEn: 'Hot Digital Services', labelBn: 'হট ডিজিটাল সার্ভিস', visible: true, order: 11, limit: 8 },
+  { id: 'streaming_ai', labelEn: 'Streaming, OTT & AI Tools', labelBn: 'স্ট্রিমিং, ওটিটি ও এআই টুলস', visible: true, order: 12, limit: 4 },
+  { id: 'trending_services', labelEn: 'Trending Services', labelBn: 'ট্রেন্ডিং সার্ভিস', visible: true, order: 13, limit: 4 },
+  { id: 'best_sellers', labelEn: 'Best Sellers & New Arrivals', labelBn: 'সেরা বিক্রিত ও নতুন সার্ভিস', visible: true, order: 14, limit: 8 },
+  { id: 'payment_channels', labelEn: 'Payment Channels & Add Money', labelBn: 'পেমেন্ট মাধ্যম ও অ্যাড মানি', visible: true, order: 15 },
+  { id: 'spotlight', labelEn: 'Gift Cards & VIP Spotlight', labelBn: 'গিফট কার্ড ও ভিআইপি স্পটলাইট', visible: true, order: 16 },
+  { id: 'ad_player', labelEn: 'Sponsored Partner Ads', labelBn: 'স্পন্সরড পার্টনার অ্যাডস', visible: true, order: 17 },
+  { id: 'reviews', labelEn: 'Customer Reviews', labelBn: 'কাস্টমার রিভিউ', visible: true, order: 18 },
+  { id: 'why_faq', labelEn: 'Why Choose Us & FAQ', labelBn: 'কেন আমরাই সেরা ও প্রশ্নোত্তর', visible: true, order: 19 },
+];
+
 export const DEFAULT_SITE_SETTINGS: SiteSettings = {
   id: 'global',
   siteName: 'DIGITAL HUB',
+  accentColor: '#FF8500',
+  homepageSections: DEFAULT_HOMEPAGE_SECTIONS,
   taglineBn: 'আপনার সম্পূর্ণ ডিজিটাল সার্ভিস মার্কেটপ্লেস',
   taglineEn: 'Your Complete Digital Services Marketplace',
   announcementBn: 'যাচাইকৃত ম্যানুয়াল বিকাশ, নগদ ও রকেট পেমেন্টে ২৪/৭ গেমিং টপ-আপ, স্ট্রিমিং ও ডিজিটাল সার্ভিস অর্ডার চলছে',

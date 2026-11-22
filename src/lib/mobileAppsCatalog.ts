@@ -101,6 +101,55 @@ export const MOBILE_APP_CATEGORIES: readonly MobileAppCategoryMeta[] = [
   },
 ] as const;
 
+export type SmartAppFilterId =
+  | 'all'
+  | 'editing'
+  | 'social'
+  | 'productivity'
+  | 'entertainment'
+  | 'tools'
+  | 'security'
+  | 'latest_updates';
+
+export interface SmartAppFilterMeta {
+  id: SmartAppFilterId;
+  labelBn: string;
+  labelEn: string;
+}
+
+export const SMART_APP_STORE_FILTERS: readonly SmartAppFilterMeta[] = [
+  { id: 'all', labelBn: 'অ্যান্ড্রয়েড অ্যাপস', labelEn: 'Android Apps' },
+  { id: 'editing', labelBn: 'এডিটিং অ্যাপস', labelEn: 'Editing Apps' },
+  { id: 'social', labelBn: 'সোশ্যাল মিডিয়া', labelEn: 'Social Media' },
+  { id: 'productivity', labelBn: 'প্রোডাক্টিভিটি', labelEn: 'Productivity' },
+  { id: 'entertainment', labelBn: 'এন্টারটেইনমেন্ট', labelEn: 'Entertainment' },
+  { id: 'tools', labelBn: 'টুলস ও ইউটিলিটি', labelEn: 'Tools & Utilities' },
+  { id: 'security', labelBn: 'সিকিউরিটি অ্যাপস', labelEn: 'Security Apps' },
+  { id: 'latest_updates', labelBn: 'সর্বশেষ আপডেট', labelEn: 'Latest Updates' },
+] as const;
+
+export function matchesSmartAppFilter(app: MobileAppItem, filter: SmartAppFilterId): boolean {
+  if (filter === 'all' || filter === 'latest_updates') return true;
+  if (filter === 'editing') return app.category === 'video_editing' || app.category === 'photo_editing';
+  if (filter === 'social') return app.category === 'social_comm';
+  if (filter === 'productivity') {
+    return (
+      app.category === 'ai_apps' ||
+      /notion|grammarly|canva|office|wps|scan|note/i.test(`${app.name} ${app.shortDescEn}`)
+    );
+  }
+  if (filter === 'entertainment') {
+    return app.category === 'video_player' || /music|spotify|stream|player/i.test(`${app.name} ${app.shortDescEn}`);
+  }
+  if (filter === 'security') {
+    return /vpn|security|truecaller|blocker|antivirus|shield|guard/i.test(`${app.name} ${app.shortDescEn}`);
+  }
+  if (filter === 'tools') {
+    return app.category === 'other_apps' || app.category === 'video_player';
+  }
+  return true;
+}
+
 export const MOBILE_APPS_CATALOG: readonly MobileAppItem[] = [
   // ─── Video Editing (6) ───────────────────────────────────────────────
   {

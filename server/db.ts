@@ -407,13 +407,39 @@ const SCHEMA_STATEMENTS: string[] = [
     event_type TEXT NOT NULL,
     page_path TEXT NOT NULL DEFAULT '/',
     app_id TEXT NOT NULL DEFAULT '',
+    content_id TEXT NOT NULL DEFAULT '',
+    content_type TEXT NOT NULL DEFAULT '',
+    content_category TEXT NOT NULL DEFAULT '',
     device_type TEXT NOT NULL DEFAULT 'desktop',
+    browser TEXT NOT NULL DEFAULT '',
+    os TEXT NOT NULL DEFAULT '',
+    country TEXT NOT NULL DEFAULT '',
     referrer_host TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_analytics_created ON analytics_events(created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_analytics_event_created ON analytics_events(event_type, created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_analytics_visitor_created ON analytics_events(visitor_id, created_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS visitor_sessions (
+    session_id TEXT PRIMARY KEY,
+    visitor_id TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT '',
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    visit_count INTEGER NOT NULL DEFAULT 1,
+    is_returning INTEGER NOT NULL DEFAULT 0,
+    current_page TEXT NOT NULL DEFAULT '/',
+    last_event_type TEXT NOT NULL DEFAULT 'page_view',
+    last_content_id TEXT NOT NULL DEFAULT '',
+    device_type TEXT NOT NULL DEFAULT 'desktop',
+    browser TEXT NOT NULL DEFAULT '',
+    os TEXT NOT NULL DEFAULT '',
+    referrer_host TEXT NOT NULL DEFAULT 'direct',
+    country TEXT NOT NULL DEFAULT ''
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_visitor_sessions_last_seen ON visitor_sessions(last_seen_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_visitor_sessions_visitor ON visitor_sessions(visitor_id, last_seen_at DESC)`,
   `CREATE TABLE IF NOT EXISTS app_favorites (
     user_id TEXT NOT NULL,
     app_id TEXT NOT NULL,
@@ -580,6 +606,30 @@ async function ensureSchema(db: AppDatabase): Promise<void> {
     await db.run(`ALTER TABLE users ADD COLUMN last_login_ip TEXT NOT NULL DEFAULT ''`);
   }
   await db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users(email_normalized)`);
+
+  // Non-destructive upgrade for analytics_events columns on existing databases
+  const analyticsCols = await db.all<{ name: string }>('PRAGMA table_info(analytics_events)');
+  const aColNames = new Set(analyticsCols.map((c) => c.name));
+  const analyticsAddCols: Array<[string, string]> = [
+    ['content_id', `TEXT NOT NULL DEFAULT ''`],
+    ['content_type', `TEXT NOT NULL DEFAULT ''`],
+    ['content_category', `TEXT NOT NULL DEFAULT ''`],
+    ['browser', `TEXT NOT NULL DEFAULT ''`],
+    ['os', `TEXT NOT NULL DEFAULT ''`],
+    ['country', `TEXT NOT NULL DEFAULT ''`],
+    ['metadata_json', `TEXT NOT NULL DEFAULT '{}'`],
+  ];
+  for (const [colName, colDef] of analyticsAddCols) {
+    if (!aColNames.has(colName)) {
+      await db.run(`ALTER TABLE analytics_events ADD COLUMN ${colName} ${colDef}`);
+    }
+  }
+  await db.run(
+    `CREATE INDEX IF NOT EXISTS idx_analytics_content_time ON analytics_events(content_id, event_type, created_at DESC)`
+  );
+  await db.run(
+    `CREATE INDEX IF NOT EXISTS idx_analytics_session_time ON analytics_events(session_id, created_at DESC)`
+  );
 
   await seedDefaultPaymentMethodsIfEmpty(db);
 

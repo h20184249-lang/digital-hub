@@ -23,6 +23,7 @@ import {
   DEFAULT_SITE_SETTINGS,
 } from './seedData';
 import { DIGITAL_HUB_AD_PROVIDER_CONFIG, mergeAdUnitsWithOverrides } from './adProviderConfig';
+import { mergeGamesCatalog } from './gamesCatalog';
 import { mergeMobileAppsCatalog, MobileAppItem } from './mobileAppsCatalog';
 import {
   AccountDeletionRequest,
@@ -37,6 +38,7 @@ import {
   AdminSecurityPayload,
   AdminUserDetailPayload,
   Advertisement,
+  AnalyticsEventType,
   Announcement,
   AppBrokenReport,
   AppMetaPayload,
@@ -47,6 +49,9 @@ import {
   CartItem,
   Category,
   Coupon,
+  DownloadHistoryItem,
+  GameItem,
+  GameMetaPayload,
   ManagedAdUnitConfig,
   Order,
   OrderStatus,
@@ -806,6 +811,23 @@ export function subscribeMobileApps(
   };
 }
 
+export function subscribeGames(
+  cb: (items: GameItem[]) => void,
+  includeHidden = false
+): Unsubscribe {
+  const emit = async (force = false) => {
+    const { overrides } = await fetchCatalogOverrides(force);
+    cb(mergeGamesCatalog(overrides.games, includeHidden));
+  };
+  emit(false).catch(() => cb(mergeGamesCatalog(undefined, includeHidden)));
+  const unsubCat = subscribeCatalogInvalidation(() => {
+    emit(true).catch(() => {});
+  });
+  return () => {
+    unsubCat();
+  };
+}
+
 export async function seedMarketplaceToFirestore(_forceOverwrite = false): Promise<{ addedCount: number }> {
   notifyCatalogInvalidation();
   return { addedCount: 0 };
@@ -832,6 +854,7 @@ export interface CustomerDashboardPayload {
   announcements: Announcement[];
   favoriteAppIds?: string[];
   totalDownloads?: number;
+  downloadHistory?: DownloadHistoryItem[];
 }
 
 export async function fetchCustomerDashboardServer(): Promise<CustomerDashboardPayload | null> {
@@ -1836,10 +1859,15 @@ export async function adminDeletePaymentMethod(id: string): Promise<void> {
   notifyCatalogInvalidation();
 }
 
-export async function adminFetchAnalytics(fromMs?: number, toMs?: number): Promise<AdminAnalyticsPayload> {
+export async function adminFetchAnalytics(
+  fromMs?: number,
+  toMs?: number,
+  compare = true
+): Promise<AdminAnalyticsPayload> {
   const qs = new URLSearchParams();
   if (fromMs && fromMs > 0) qs.set('from', String(Math.floor(fromMs)));
   if (toMs && toMs > 0) qs.set('to', String(Math.floor(toMs)));
+  if (compare) qs.set('compare', '1');
   const qStr = qs.toString() ? `?${qs.toString()}` : '';
   return apiJson<AdminAnalyticsPayload & { ok: true }>(`/api/admin/analytics${qStr}`, { method: 'GET' });
 }
@@ -1896,6 +1924,24 @@ export async function adminDeleteMobileApp(appId: string): Promise<void> {
   notifyCatalogInvalidation();
 }
 
+export async function adminSaveGame(game: GameItem, isNew: boolean): Promise<void> {
+  await saveCatalogOverride(
+    'games',
+    game.id,
+    {
+      ...game,
+      updatedAt: Date.now(),
+    },
+    { auditAction: isNew ? 'create' : 'update' }
+  );
+  notifyCatalogInvalidation();
+}
+
+export async function adminDeleteGame(gameId: string): Promise<void> {
+  await deleteCatalogOverride('games', gameId);
+  notifyCatalogInvalidation();
+}
+
 export async function adminFetchAppReports(): Promise<AppBrokenReport[]> {
   const res = await apiJson<{ ok: true; reports: AppBrokenReport[] }>('/api/admin/app-reports', {
     method: 'GET',
@@ -1911,29 +1957,158 @@ export async function adminResolveAppReport(reportId: string): Promise<void> {
 }
 
 // =========================================================================
-// PRIVACY-RESPECTING ANALYTICS & SMART APP STORE PUBLIC CLIENT APIS
+// PRIVACY-RESPECTING ANALYTICS & SMART APP STORE / GAMES PUBLIC CLIENT APIS
 // =========================================================================
 
+function getOrCreateClientVisitorId(): string {
+  try {
+    const key = 'dh_visitor_id_v1';
+    const existing = localStorage.getItem(key);
+    if (existing && /^[a-zA-Z0-9_-]{8,64}$/.test(existing)) return existing;
+    const created = `vis_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(key, created);
+    return created;
+  } catch {
+    return 'vis_anon_client';
+  }
+}
+
+function getOrCreateClientSessionId(): string {
+  try {
+    const key = 'dh_analytics_sess_v1';
+    const existing = sessionStorage.getItem(key);
+    if (existing && /^[a-zA-Z0-9_-]{8,64}$/.test(existing)) return existing;
+    const created = `asess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    sessionStorage.setItem(key, created);
+    return created;
+  } catch {
+    return 'asess_browser';
+  }
+}
+
+function isAnalyticsOptedOut(): boolean {
+  try {
+    const optOut = localStorage.getItem('dh_analytics_optout') === '1';
+    const dnt = typeof navigator !== 'undefined' && navigator.doNotTrack === '1';
+    return optOut || dnt;
+  } catch {
+    return false;
+  }
+}
+
+function detectClientDeviceType(): 'mobile' | 'desktop' {
+  if (typeof window === 'undefined') return 'desktop';
+  return window.innerWidth < 768 ? 'mobile' : 'desktop';
+}
+
 export async function trackAnalyticsEvent(params: {
-  visitorId: string;
+  visitorId?: string;
   sessionId?: string;
-  eventType: 'page_view' | 'heartbeat' | 'app_download';
+  eventType: AnalyticsEventType;
   pagePath?: string;
   appId?: string;
+  contentId?: string;
+  contentType?: string;
+  contentCategory?: string;
   deviceType?: 'mobile' | 'desktop';
   referrerHost?: string;
+  metadata?: Record<string, unknown>;
 }): Promise<void> {
+  if (isAnalyticsOptedOut()) return;
   try {
     await fetch(apiUrl('/api/analytics/track'), {
       method: 'POST',
       credentials: 'include',
       keepalive: true,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
+      body: JSON.stringify({
+        visitorId: params.visitorId || getOrCreateClientVisitorId(),
+        sessionId: params.sessionId || getOrCreateClientSessionId(),
+        deviceType: params.deviceType || detectClientDeviceType(),
+        ...params,
+      }),
     });
   } catch {
     // Non-blocking analytics
   }
+}
+
+export function trackContentView(params: {
+  contentId: string;
+  contentType: 'app' | 'game' | 'service';
+  contentCategory?: string;
+  pagePath?: string;
+}): void {
+  const eventType: AnalyticsEventType =
+    params.contentType === 'game'
+      ? 'game_view'
+      : params.contentType === 'service'
+        ? 'product_view'
+        : 'app_view';
+  void trackAnalyticsEvent({
+    eventType,
+    contentId: params.contentId,
+    contentType: params.contentType,
+    contentCategory: params.contentCategory || '',
+    appId: params.contentType === 'app' ? params.contentId : '',
+    pagePath: params.pagePath || (typeof window !== 'undefined' ? window.location.pathname : '/'),
+  });
+}
+
+export function trackDownloadClick(params: {
+  contentId: string;
+  contentType: 'app' | 'game';
+  contentCategory?: string;
+  pagePath?: string;
+}): void {
+  void trackAnalyticsEvent({
+    eventType: 'download_click',
+    contentId: params.contentId,
+    contentType: params.contentType,
+    contentCategory: params.contentCategory || '',
+    appId: params.contentType === 'app' ? params.contentId : '',
+    pagePath: params.pagePath || '/apps',
+  });
+}
+
+export function trackPlayClick(params: {
+  contentId: string;
+  contentCategory?: string;
+  pagePath?: string;
+}): void {
+  void trackAnalyticsEvent({
+    eventType: 'play_click',
+    contentId: params.contentId,
+    contentType: 'game',
+    contentCategory: params.contentCategory || '',
+    pagePath: params.pagePath || '/games',
+  });
+}
+
+export function trackExternalLinkClick(params: {
+  contentId?: string;
+  contentType?: string;
+  targetUrl?: string;
+  pagePath?: string;
+}): void {
+  void trackAnalyticsEvent({
+    eventType: 'external_link_click',
+    contentId: params.contentId || '',
+    contentType: params.contentType || '',
+    pagePath: params.pagePath || (typeof window !== 'undefined' ? window.location.pathname : '/'),
+    metadata: params.targetUrl ? { targetUrl: params.targetUrl.slice(0, 180) } : undefined,
+  });
+}
+
+export function trackSearchQuery(queryText: string, scope: 'services' | 'apps' | 'games'): void {
+  const q = queryText.trim().slice(0, 80);
+  if (q.length < 2) return;
+  void trackAnalyticsEvent({
+    eventType: 'search',
+    contentCategory: scope,
+    pagePath: typeof window !== 'undefined' ? window.location.pathname : '/',
+    metadata: { query: q, scope },
+  });
 }
 
 export async function fetchAppMeta(): Promise<AppMetaPayload> {
@@ -1946,6 +2121,17 @@ export async function fetchAppMeta(): Promise<AppMetaPayload> {
     };
   } catch {
     return { statsByApp: {}, reviews: [], favoriteAppIds: [] };
+  }
+}
+
+export async function fetchGameMeta(): Promise<GameMetaPayload> {
+  try {
+    const res = await apiJson<GameMetaPayload & { ok: true }>('/api/games/meta', { method: 'GET' });
+    return {
+      statsByGame: res.statsByGame || {},
+    };
+  } catch {
+    return { statsByGame: {} };
   }
 }
 
