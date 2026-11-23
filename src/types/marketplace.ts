@@ -420,6 +420,11 @@ export interface Banner {
 export type HeroBannerLinkType = 'internal_route' | 'external_url';
 export type HeroBannerDevice = 'both' | 'desktop' | 'mobile';
 export type HeroBannerImageFit = 'cover' | 'contain';
+export type HeroBannerThemeVariant =
+  | 'navy_services'
+  | 'white_wallet'
+  | 'orange_gaming'
+  | 'navy_support';
 export type HeroBannerIconName =
   | 'sparkles'
   | 'gamepad'
@@ -449,6 +454,7 @@ export interface HeroBanner {
   targetUrl?: string;
   openInNewTab?: boolean;
   clickable?: boolean;
+  themeVariant?: HeroBannerThemeVariant;
   iconName?: HeroBannerIconName;
   showIcon?: boolean;
   imageFit?: HeroBannerImageFit;

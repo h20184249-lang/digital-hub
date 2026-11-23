@@ -7054,8 +7054,11 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       if (col === 'heroBanners') {
         const imageUrl = String(body.data.imageUrl || '').trim();
         const mobileImageUrl = String(body.data.mobileImageUrl || '').trim();
-        if (!imageUrl || !isSafePackageAssetUrl(imageUrl) || (mobileImageUrl && !isSafePackageAssetUrl(mobileImageUrl))) {
-          res.status(400).json({ ok: false, error: 'Valid Hero Banner image (uploaded asset or https:// URL) is required.' });
+        if (
+          (imageUrl && !isSafePackageAssetUrl(imageUrl)) ||
+          (mobileImageUrl && !isSafePackageAssetUrl(mobileImageUrl))
+        ) {
+          res.status(400).json({ ok: false, error: 'Invalid Hero Banner image URL or format.' });
           return;
         }
         const linkType = body.data.linkType === 'external_url' ? 'external_url' : 'internal_route';
@@ -7084,6 +7087,9 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           typeof body.data.endDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.data.endDate.trim())
             ? body.data.endDate.trim()
             : '';
+        const allowedThemes = new Set(['navy_services', 'white_wallet', 'orange_gaming', 'navy_support']);
+        const rawTheme = String(body.data.themeVariant || 'navy_services').trim();
+        const themeVariant = allowedThemes.has(rawTheme) ? rawTheme : 'navy_services';
         const allowedIcons = new Set([
           'sparkles',
           'gamepad',
@@ -7117,8 +7123,9 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           targetUrl: linkType === 'external_url' ? cleanTargetUrl : undefined,
           openInNewTab: Boolean(body.data.openInNewTab ?? linkType === 'external_url'),
           clickable: body.data.clickable !== false,
+          themeVariant,
           iconName: cleanIcon,
-          showIcon: body.data.showIcon !== false,
+          showIcon: body.data.showIcon === true,
           imageFit,
           imageUrl,
           ...(mobileImageUrl ? { mobileImageUrl } : {}),

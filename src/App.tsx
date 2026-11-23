@@ -1,7 +1,5 @@
 import { FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft,
-  ArrowRight,
   Award,
   CheckCircle2,
   ChevronRight,
@@ -88,6 +86,7 @@ import {
   DEFAULT_BANNERS,
   DEFAULT_CATEGORIES,
   DEFAULT_COUPONS,
+  DEFAULT_FALLBACK_HERO_BANNER,
   DEFAULT_HERO_BANNERS,
   DEFAULT_HOMEPAGE_SECTIONS,
   DEFAULT_PRODUCTS,
@@ -98,7 +97,7 @@ import { mergeAdUnitsWithOverrides } from './lib/adProviderConfig';
 import { DEFAULT_GAMES_CATALOG } from './lib/gamesCatalog';
 import { MOBILE_APPS_CATALOG, type MobileAppItem } from './lib/mobileAppsCatalog';
 import { t } from './lib/i18n';
-import { HeroBannerIconBadge } from './lib/heroBannerIcons';
+import { HomeBannerCarousel } from './components/HomeBannerCarousel';
 import { useOnlineStatus, useSwUpdatePrompt } from './hooks/usePWAInstall';
 import { Navbar } from './components/Navbar';
 import { BannerSlotView } from './components/BannerSlotView';
@@ -287,7 +286,6 @@ export default function App() {
   const [homeSearch, setHomeSearch] = useState('');
   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
   const [catalogSectionFilter, setCatalogSectionFilter] = useState('');
-  const [heroSlide, setHeroSlide] = useState(0);
   const [toast, setToast] = useState('');
 
   const managedAdUnits = useMemo(
@@ -537,15 +535,6 @@ export default function App() {
     [settings.heroAutoPlayMs]
   );
 
-  useEffect(() => {
-    if (activeHeroSlides.length <= 1) return;
-    const timer = setInterval(
-      () => setHeroSlide((s) => (s + 1) % activeHeroSlides.length),
-      heroIntervalMs
-    );
-    return () => clearInterval(timer);
-  }, [activeHeroSlides.length, heroIntervalMs]);
-
   const detailProduct = useMemo(
     () => products.find((p) => p.id === detailProductId) || null,
     [products, detailProductId]
@@ -764,9 +753,6 @@ export default function App() {
       ),
     [products]
   );
-
-  const safeHeroIndex = activeHeroSlides.length > 0 ? heroSlide % activeHeroSlides.length : 0;
-  const activeSlide = activeHeroSlides[safeHeroIndex] || null;
 
   const quickButtons: { label: string; route: AppRoute; icon: typeof Send }[] = [
     { label: lang === 'bn' ? 'গেমিং টপ-আপ' : 'Gaming Top-Up', route: 'gaming-store', icon: Gamepad2 },
@@ -990,180 +976,21 @@ export default function App() {
                   switch (sec.id) {
                     case 'hero':
                       return (
-                        <section key="hero" className="space-y-3">
-                          {activeSlide && (() => {
-                            const slideFitContain = activeSlide.imageFit === 'contain';
-                            const slideClickable = activeSlide.clickable !== false;
-                            const slideShowIcon = activeSlide.showIcon !== false;
-                            const slideIsExternal =
-                              activeSlide.linkType === 'external_url' && Boolean(activeSlide.targetUrl);
+                        <section key="hero" className="space-y-4">
+                          <HomeBannerCarousel
+                            slides={activeHeroSlides}
+                            fallbackBanner={DEFAULT_FALLBACK_HERO_BANNER}
+                            lang={lang}
+                            isMobileViewport={isMobileViewport}
+                            autoPlayMs={heroIntervalMs}
+                            onNavigate={(r) => {
+                              setCatalogSearchQuery('');
+                              setCatalogSectionFilter('');
+                              setRoute(r);
+                            }}
+                          />
 
-                            return (
-                              <div
-                                onClick={
-                                  slideClickable && !slideIsExternal
-                                    ? () => setRoute(activeSlide.ctaRoute || 'services')
-                                    : undefined
-                                }
-                                className={`relative rounded-3xl overflow-hidden shadow-lg bg-[#172033] min-h-[220px] sm:min-h-[280px] flex items-center group ${
-                                  slideClickable ? 'cursor-pointer' : 'cursor-default'
-                                }`}
-                              >
-                                <img
-                                  src={
-                                    isMobileViewport && activeSlide.mobileImageUrl
-                                      ? activeSlide.mobileImageUrl
-                                      : activeSlide.imageUrl || STUDIO_IMAGES.hero
-                                  }
-                                  alt={lang === 'bn' ? activeSlide.titleBn : activeSlide.titleEn}
-                                  onError={(e) => {
-                                    e.currentTarget.src = STUDIO_IMAGES.hero;
-                                  }}
-                                  className={`absolute inset-0 w-full h-full transition-all duration-500 ${
-                                    slideFitContain
-                                      ? 'object-contain object-center opacity-90'
-                                      : 'object-cover opacity-55'
-                                  }`}
-                                />
-                                <div
-                                  className={`absolute inset-0 ${
-                                    slideFitContain
-                                      ? 'bg-gradient-to-r from-[#172033]/90 via-[#172033]/55 to-transparent'
-                                      : 'bg-gradient-to-r from-[#172033] via-[#172033]/85 to-[#172033]/40'
-                                  }`}
-                                />
-
-                                {slideClickable && slideIsExternal && (
-                                  <a
-                                    href={activeSlide.targetUrl}
-                                    target={activeSlide.openInNewTab ? '_blank' : '_self'}
-                                    rel="noopener noreferrer"
-                                    aria-label={lang === 'bn' ? activeSlide.titleBn : activeSlide.titleEn}
-                                    className="absolute inset-0 z-10"
-                                  />
-                                )}
-
-                                {activeHeroSlides.length > 1 && (
-                                  <>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setHeroSlide(
-                                          (s) => (s - 1 + activeHeroSlides.length) % activeHeroSlides.length
-                                        );
-                                      }}
-                                      aria-label="Previous slide"
-                                      className="hidden sm:flex absolute left-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/35 hover:bg-[#FF8500] text-white items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                    >
-                                      <ArrowLeft className="w-4 h-4" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setHeroSlide((s) => (s + 1) % activeHeroSlides.length);
-                                      }}
-                                      aria-label="Next slide"
-                                      className="hidden sm:flex absolute right-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/35 hover:bg-[#FF8500] text-white items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                    >
-                                      <ArrowRight className="w-4 h-4" />
-                                    </button>
-                                  </>
-                                )}
-
-                                <div className="relative z-20 pointer-events-none w-full p-5 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5">
-                                  <div className="max-w-xl space-y-2.5">
-                                    {(activeSlide.badgeBn || activeSlide.badgeEn || slideShowIcon) && (
-                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#FF8500] text-white text-[11px] font-extrabold tracking-wide">
-                                        {slideShowIcon && (
-                                          <HeroBannerIconBadge
-                                            name={activeSlide.iconName}
-                                            className="w-3.5 h-3.5 shrink-0"
-                                          />
-                                        )}
-                                        <span>
-                                          {(lang === 'bn'
-                                            ? activeSlide.badgeBn || activeSlide.badgeEn
-                                            : activeSlide.badgeEn || activeSlide.badgeBn) || 'DIGITAL HUB BD'}
-                                        </span>
-                                      </span>
-                                    )}
-                                    <h1 className="text-xl sm:text-3xl font-extrabold text-white leading-tight">
-                                      {lang === 'bn'
-                                        ? activeSlide.titleBn || activeSlide.titleEn
-                                        : activeSlide.titleEn || activeSlide.titleBn}
-                                    </h1>
-                                    <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
-                                      {lang === 'bn'
-                                        ? activeSlide.subtitleBn || activeSlide.subtitleEn
-                                        : activeSlide.subtitleEn || activeSlide.subtitleBn}
-                                    </p>
-                                    <div className="pt-1 flex flex-wrap items-center gap-2.5 pointer-events-auto">
-                                      {slideClickable &&
-                                        (slideIsExternal ? (
-                                          <a
-                                            href={activeSlide.targetUrl}
-                                            target={activeSlide.openInNewTab ? '_blank' : '_self'}
-                                            rel="noopener noreferrer"
-                                            className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
-                                          >
-                                            <span>
-                                              {(lang === 'bn'
-                                                ? activeSlide.buttonTextBn
-                                                : activeSlide.buttonTextEn) || t(lang, 'shopNow')}
-                                            </span>
-                                            <ArrowRight className="w-4 h-4" />
-                                          </a>
-                                        ) : (
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setRoute(activeSlide.ctaRoute || 'services');
-                                            }}
-                                            className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
-                                          >
-                                            <span>
-                                              {(lang === 'bn'
-                                                ? activeSlide.buttonTextBn
-                                                : activeSlide.buttonTextEn) || t(lang, 'shopNow')}
-                                            </span>
-                                            <ArrowRight className="w-4 h-4" />
-                                          </button>
-                                        ))}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setRoute('add-money');
-                                        }}
-                                        className="px-4 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs sm:text-sm font-bold backdrop-blur-xs"
-                                      >
-                                        + {t(lang, 'navAddMoney')}
-                                      </button>
-                                    </div>
-                                  </div>
-
-                                  <ul className="hidden md:flex flex-col gap-1.5 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15 text-xs text-white font-semibold shrink-0">
-                                    {[
-                                      lang === 'bn' ? 'ফ্রি ফায়ার, PUBG, MLBB ও Valorant' : 'Free Fire, PUBG, MLBB & Valorant',
-                                      lang === 'bn' ? 'Netflix, Spotify, YouTube ও Chorki' : 'Netflix, Spotify, YouTube & Chorki',
-                                      lang === 'bn' ? 'টেলিগ্রাম প্রিমিয়াম, স্টার্স ও ভিআইপি' : 'Telegram Premium, Stars & VIP',
-                                      lang === 'bn' ? 'যাচাইকৃত বিকাশ, নগদ ও রকেট পেমেন্ট' : 'Verified bKash, Nagad & Rocket',
-                                    ].map((line) => (
-                                      <li key={line} className="flex items-center gap-2">
-                                        <CheckCircle2 className="w-4 h-4 text-[#FACC15] shrink-0" />
-                                        <span>{line}</span>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </div>
-                              </div>
-                            );
-                          })()}
-
-                          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                          <div className="flex items-center justify-between gap-3">
                             <form onSubmit={handleHomeSearchSubmit} className="relative w-full sm:max-w-md">
                               <Search className="w-4 h-4 text-[#777777] absolute left-3.5 top-1/2 -translate-y-1/2" />
                               <input
@@ -1180,22 +1007,6 @@ export default function App() {
                                 {lang === 'bn' ? 'খুঁজুন' : 'Search'}
                               </button>
                             </form>
-
-                            {activeHeroSlides.length > 1 && (
-                              <div className="flex justify-center gap-1.5">
-                                {activeHeroSlides.map((s, idx) => (
-                                  <button
-                                    key={s.id}
-                                    type="button"
-                                    onClick={() => setHeroSlide(idx)}
-                                    aria-label={`Slide ${idx + 1}`}
-                                    className={`h-1.5 rounded-full transition-all ${
-                                      safeHeroIndex === idx ? 'w-6 bg-[#FF8500]' : 'w-2.5 bg-gray-300 dark:bg-slate-700'
-                                    }`}
-                                  />
-                                ))}
-                              </div>
-                            )}
                           </div>
                         </section>
                       );
