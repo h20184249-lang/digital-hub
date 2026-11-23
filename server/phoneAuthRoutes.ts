@@ -8661,5 +8661,280 @@ export function createPhoneAuthAndAppRouter(): express.Router {
     }
   });
 
+  // =========================================================================
+  // DEVELOPER TEAM RANK & BADGE SYSTEM ENDPOINTS
+  // =========================================================================
+
+  interface DeveloperDbRow {
+    id: string;
+    name: string;
+    title: string;
+    rank: string;
+    verified: number;
+    bio: string;
+    photo_url: string;
+    social_links_json: string;
+    sort_order: number;
+    active: number;
+    created_at: number;
+    updated_at: number;
+  }
+
+  const DEVELOPER_ORDER_SQL =
+    "CASE rank WHEN 'gold' THEN 4 WHEN 'silver' THEN 3 WHEN 'blue' THEN 2 ELSE 1 END DESC, sort_order ASC, created_at ASC";
+
+  const DEFAULT_TITLE_BY_RANK: Record<'gold' | 'silver' | 'blue' | 'verified', string> = {
+    gold: 'Lead Developer / Team Leader',
+    silver: 'Senior Developer / Specialist',
+    blue: 'Junior Developer / Developer',
+    verified: 'Developer',
+  };
+
+  const normalizeDevRankServer = (raw: unknown): 'gold' | 'silver' | 'blue' | 'verified' => {
+    const val = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    if (val === 'gold' || val === 'silver' || val === 'blue' || val === 'verified') return val;
+    return 'verified';
+  };
+
+  const sanitizeDevSocialLinks = (raw: unknown): Record<string, string> => {
+    if (!raw || typeof raw !== 'object') return {};
+    const allowedKeys = ['github', 'linkedin', 'portfolio', 'telegram', 'facebook', 'x'] as const;
+    const out: Record<string, string> = {};
+    const src = raw as Record<string, unknown>;
+    for (const k of allowedKeys) {
+      const val = typeof src[k] === 'string' ? src[k].trim().slice(0, 300) : '';
+      if (!val) continue;
+      if (/^https?:\/\/[^\s]+$/i.test(val)) {
+        out[k] = val;
+      }
+    }
+    return out;
+  };
+
+  const mapDeveloperRow = (row: DeveloperDbRow) => {
+    let socialLinks: Record<string, string> = {};
+    try {
+      const parsed = JSON.parse(row.social_links_json || '{}');
+      socialLinks = sanitizeDevSocialLinks(parsed);
+    } catch {
+      socialLinks = {};
+    }
+    return {
+      id: row.id,
+      name: row.name || '',
+      title: row.title || '',
+      rank: normalizeDevRankServer(row.rank),
+      verified: Number(row.verified) === 1,
+      bio: row.bio || '',
+      photoUrl: row.photo_url || '',
+      socialLinks,
+      sortOrder: Number(row.sort_order || 0),
+      active: Number(row.active) !== 0,
+      createdAt: Number(row.created_at || 0),
+      updatedAt: Number(row.updated_at || 0),
+    };
+  };
+
+  router.get('/developers', async (_req, res) => {
+    try {
+      const db = await getAppDatabase();
+      const rows = await db.all<DeveloperDbRow>(
+        `SELECT * FROM developers WHERE active = 1 ORDER BY ${DEVELOPER_ORDER_SQL}`
+      );
+      res.json({ ok: true, developers: rows.map(mapDeveloperRow) });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load developer team.');
+    }
+  });
+
+  router.get('/admin/developers', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db } = admin;
+      const rows = await db.all<DeveloperDbRow>(
+        `SELECT * FROM developers ORDER BY ${DEVELOPER_ORDER_SQL}`
+      );
+      res.json({ ok: true, developers: rows.map(mapDeveloperRow) });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load developer roster.');
+    }
+  });
+
+  router.post('/admin/developers', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db, user } = admin;
+      const body = (req.body || {}) as Record<string, unknown>;
+
+      const name = String(body.name || '').trim().slice(0, 120);
+      if (name.length < 2) {
+        return res.status(400).json({ ok: false, error: 'Developer name must be at least 2 characters.' });
+      }
+
+      const rank = normalizeDevRankServer(body.rank);
+      const rawTitle = String(body.title || '').trim().slice(0, 120);
+      const title = rawTitle || DEFAULT_TITLE_BY_RANK[rank];
+      const verified = body.verified === true || body.verified === 1 || body.verified === 'true';
+      const active = body.active === false || body.active === 0 || body.active === 'false' ? false : true;
+      const bio = String(body.bio || '').trim().slice(0, 400);
+      const photoUrl = String(body.photoUrl || '').trim().slice(0, 300000);
+
+      if (photoUrl && !isSafePackageAssetUrl(photoUrl)) {
+        return res.status(400).json({ ok: false, error: 'Invalid developer photo URL or format.' });
+      }
+
+      const cleanSocial = sanitizeDevSocialLinks(body.socialLinks);
+      const socialJson = JSON.stringify(cleanSocial);
+      const sortOrderRaw = Number(body.sortOrder);
+      const sortOrder =
+        Number.isFinite(sortOrderRaw) && sortOrderRaw >= 0
+          ? Math.min(100000, Math.round(sortOrderRaw))
+          : 0;
+
+      const rawId = typeof body.id === 'string' ? body.id.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100) : '';
+      const id = rawId || generateSecureId('dev');
+      const now = Date.now();
+
+      const existing = await db.first<DeveloperDbRow>('SELECT * FROM developers WHERE id = ?', [id]);
+      const createdAt = existing?.created_at ? Number(existing.created_at) : now;
+
+      await db.run(
+        `INSERT INTO developers (id, name, title, rank, verified, bio, photo_url, social_links_json, sort_order, active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           title = excluded.title,
+           rank = excluded.rank,
+           verified = excluded.verified,
+           bio = excluded.bio,
+           photo_url = excluded.photo_url,
+           social_links_json = excluded.social_links_json,
+           sort_order = excluded.sort_order,
+           active = excluded.active,
+           updated_at = excluded.updated_at`,
+        [
+          id,
+          name,
+          title,
+          rank,
+          verified ? 1 : 0,
+          bio,
+          photoUrl,
+          socialJson,
+          sortOrder,
+          active ? 1 : 0,
+          createdAt,
+          now,
+        ]
+      );
+
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        existing ? 'DEVELOPER_UPDATED' : 'DEVELOPER_CREATED',
+        'developers',
+        id,
+        `${existing ? 'Updated' : 'Added'} developer ${name} (${rank})`,
+        {
+          previousValue: existing ? `${existing.rank}|active=${existing.active}` : '',
+          newValue: `${rank}|verified=${verified}|active=${active}`,
+        }
+      );
+
+      const savedRow = await db.first<DeveloperDbRow>('SELECT * FROM developers WHERE id = ?', [id]);
+      res.json({
+        ok: true,
+        developer: savedRow
+          ? mapDeveloperRow(savedRow)
+          : {
+              id,
+              name,
+              title,
+              rank,
+              verified,
+              bio,
+              photoUrl,
+              socialLinks: cleanSocial,
+              sortOrder,
+              active,
+              createdAt,
+              updatedAt: now,
+            },
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to save developer profile.');
+    }
+  });
+
+  router.post('/admin/developers/reorder', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db, user } = admin;
+      const body = (req.body || {}) as { items?: Array<{ id?: string; sortOrder?: number }> };
+      const items = Array.isArray(body.items) ? body.items.slice(0, 200) : [];
+      if (items.length === 0) {
+        return res.status(400).json({ ok: false, error: 'Reorder items are required.' });
+      }
+      const now = Date.now();
+      for (const item of items) {
+        const devId = typeof item.id === 'string' ? item.id.trim().slice(0, 100) : '';
+        if (!devId) continue;
+        const nextOrder = Math.max(0, Math.min(100000, Math.round(Number(item.sortOrder) || 0)));
+        await db.run('UPDATE developers SET sort_order = ?, updated_at = ? WHERE id = ?', [
+          nextOrder,
+          now,
+          devId,
+        ]);
+      }
+
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        'DEVELOPERS_REORDERED',
+        'developers',
+        'batch',
+        `Updated display order for ${items.length} developer profile(s)`
+      );
+
+      res.json({ ok: true });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to reorder developers.');
+    }
+  });
+
+  router.delete('/admin/developers/:id', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db, user } = admin;
+      const devId = String(req.params.id || '').trim().slice(0, 100);
+      if (!devId) {
+        return res.status(400).json({ ok: false, error: 'Developer ID is required.' });
+      }
+      const existing = await db.first<DeveloperDbRow>('SELECT * FROM developers WHERE id = ?', [devId]);
+      if (!existing) {
+        return res.status(404).json({ ok: false, error: 'Developer not found.' });
+      }
+      await db.run('DELETE FROM developers WHERE id = ?', [devId]);
+      await insertAuditLog(
+        db,
+        user.uid,
+        getUserPrimaryIdentifier(user),
+        'DEVELOPER_DELETED',
+        'developers',
+        devId,
+        `Deleted developer ${existing.name}`
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to delete developer profile.');
+    }
+  });
+
   return router;
 }

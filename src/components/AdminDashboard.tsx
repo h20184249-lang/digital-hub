@@ -6,6 +6,7 @@ import {
   BarChart3,
   Bell,
   CheckCircle2,
+  Code2,
   Coins,
   CreditCard,
   Database,
@@ -118,6 +119,7 @@ import {
 } from './admin/AdminSystemPanels';
 import { AdminPackagesPanel } from './admin/AdminPackagesPanel';
 import { AdminBannerManagerPanel } from './admin/AdminBannerManagerPanel';
+import { AdminDevelopersPanel } from './admin/AdminDevelopersPanel';
 import { AdminGlobalSearch } from './admin/AdminGlobalSearch';
 import { AdminBackupPanel } from './admin/AdminBackupPanel';
 import { ConfirmDialog } from './admin/ConfirmDialog';
@@ -153,6 +155,7 @@ type AdminSection =
   | 'categories'
   | 'orders'
   | 'users'
+  | 'developers'
   | 'banners'
   | 'advertisements'
   | 'homepage_editor'
@@ -438,6 +441,7 @@ export function AdminDashboard({
       badge: kpis.pendingOrders || undefined,
     },
     { id: 'users', label: 'Users', labelBn: 'ইউজার ম্যানেজমেন্ট', icon: Users, badge: kpis.totalUsers },
+    { id: 'developers', label: 'Developer Management', labelBn: 'ডেভেলপার ম্যানেজমেন্ট', icon: Code2 },
     { id: 'banners', label: 'Banner Management', labelBn: 'ব্যানার ম্যানেজমেন্ট', icon: ImageIcon },
     { id: 'advertisements', label: 'Advertisements', labelBn: 'বিজ্ঞাপন ও ব্যানার', icon: Megaphone },
     { id: 'homepage_editor', label: 'Homepage Editor', labelBn: 'হোমপেজ এডিটর', icon: LayoutGrid },
@@ -1163,6 +1167,14 @@ export function AdminDashboard({
               lang={lang}
               referrals={referrals}
               settings={settings}
+              onSuccess={showSuccess}
+              onError={showError}
+            />
+          )}
+
+          {section === 'developers' && (
+            <AdminDevelopersPanel
+              lang={lang}
               onSuccess={showSuccess}
               onError={showError}
             />

@@ -1226,3 +1226,30 @@ export interface AppBrokenReport {
   status: 'open' | 'resolved' | string;
   createdAt: number;
 }
+
+export type DeveloperRank = 'verified' | 'blue' | 'silver' | 'gold';
+
+export interface DeveloperSocialLinks {
+  github?: string;
+  linkedin?: string;
+  portfolio?: string;
+  telegram?: string;
+  facebook?: string;
+  x?: string;
+}
+
+export interface DeveloperProfile {
+  id: string;
+  name: string;
+  title: string;
+  rank: DeveloperRank;
+  verified: boolean;
+  bio: string;
+  photoUrl: string;
+  socialLinks?: DeveloperSocialLinks;
+  sortOrder: number;
+  active: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+}
+

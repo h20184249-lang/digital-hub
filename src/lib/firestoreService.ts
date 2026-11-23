@@ -53,6 +53,7 @@ import {
   Coupon,
   DailyRewardClaimRecord,
   DailyRewardStatus,
+  DeveloperProfile,
   DownloadHistoryItem,
   GameItem,
   GameMetaPayload,
@@ -2899,6 +2900,80 @@ export async function adminSaveHeroBanner(banner: HeroBanner, _isNew: boolean): 
 
 export async function adminDeleteHeroBanner(bannerId: string): Promise<void> {
   await deleteCatalogOverride('heroBanners', bannerId);
+}
+
+// =========================================================================
+// DEVELOPER TEAM RANK & BADGE SYSTEM
+// =========================================================================
+
+export function subscribeDevelopers(
+  cb: (items: DeveloperProfile[]) => void,
+  includeInactive = false
+): Unsubscribe {
+  let active = true;
+  const endpoint = includeInactive ? '/api/admin/developers' : '/api/developers';
+  const load = async () => {
+    try {
+      const res = await apiJson<{ ok: true; developers: DeveloperProfile[] }>(endpoint, {
+        method: 'GET',
+      });
+      if (active) {
+        cb(Array.isArray(res.developers) ? res.developers : []);
+      }
+    } catch {
+      if (active) cb([]);
+    }
+  };
+  void load();
+  const unsubCat = subscribeCatalogInvalidation(() => {
+    void load();
+  });
+  const unsubDash = subscribeDashboardInvalidation(() => {
+    void load();
+  });
+  const onFocus = () => {
+    void load();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', onFocus);
+  }
+  return () => {
+    active = false;
+    unsubCat();
+    unsubDash();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', onFocus);
+    }
+  };
+}
+
+export async function adminSaveDeveloper(dev: DeveloperProfile): Promise<DeveloperProfile> {
+  const res = await apiJson<{ ok: true; developer: DeveloperProfile }>('/api/admin/developers', {
+    method: 'POST',
+    body: dev,
+  });
+  notifyCatalogInvalidation();
+  notifyDashboardInvalidation();
+  return res.developer;
+}
+
+export async function adminReorderDevelopers(
+  items: Array<{ id: string; sortOrder: number }>
+): Promise<void> {
+  await apiJson('/api/admin/developers/reorder', {
+    method: 'POST',
+    body: { items },
+  });
+  notifyCatalogInvalidation();
+  notifyDashboardInvalidation();
+}
+
+export async function adminDeleteDeveloper(id: string): Promise<void> {
+  await apiJson(`/api/admin/developers/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  notifyCatalogInvalidation();
+  notifyDashboardInvalidation();
 }
 
 export async function fetchDailyRewardStatusServer(): Promise<DailyRewardStatus | null> {

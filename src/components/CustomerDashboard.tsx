@@ -92,6 +92,7 @@ import { NativeAdRow } from './AutomaticAdEngine';
 import { ManagedPlacementSlot } from './AdUnitFrame';
 import { PaymentProviderLogo } from './BrandLogos';
 import { getDhakaDateString } from '../lib/adProviderConfig';
+import { DeveloperTeamSection } from './DeveloperTeamSection';
 
 interface CustomerDashboardProps {
   initialTab?:
@@ -429,21 +430,24 @@ export function CustomerDashboard({
 
   if (!user) {
     return (
-      <div className="max-w-xl mx-auto py-12 px-4">
-        <div className="dh-card rounded-3xl p-8 text-center space-y-4">
-          <div className="w-14 h-14 rounded-2xl bg-[#FFF3E5] text-[#FF8500] flex items-center justify-center mx-auto">
-            <UserIcon className="w-7 h-7" />
+      <div className="max-w-7xl mx-auto py-10 px-4 sm:px-6 space-y-8">
+        <div className="max-w-xl mx-auto">
+          <div className="dh-card rounded-3xl p-8 text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-[#FFF3E5] text-[#FF8500] flex items-center justify-center mx-auto">
+              <UserIcon className="w-7 h-7" />
+            </div>
+            <h2 className="text-xl font-bold text-[#172033]">{t(lang, 'loginRequiredTitle')}</h2>
+            <p className="text-sm text-[#777777]">{t(lang, 'loginRequiredDesc')}</p>
+            <button
+              type="button"
+              onClick={onOpenAuth}
+              className="px-6 py-2.5 rounded-xl dh-orange-gradient text-white font-bold text-sm"
+            >
+              {t(lang, 'signIn')}
+            </button>
           </div>
-          <h2 className="text-xl font-bold text-[#172033]">{t(lang, 'loginRequiredTitle')}</h2>
-          <p className="text-sm text-[#777777]">{t(lang, 'loginRequiredDesc')}</p>
-          <button
-            type="button"
-            onClick={onOpenAuth}
-            className="px-6 py-2.5 rounded-xl dh-orange-gradient text-white font-bold text-sm"
-          >
-            {t(lang, 'signIn')}
-          </button>
         </div>
+        {initialTab !== 'orders' && <DeveloperTeamSection lang={lang} />}
       </div>
     );
   }
@@ -1312,6 +1316,8 @@ export function CustomerDashboard({
             lang={lang}
             maxCards={2}
           />
+
+          <DeveloperTeamSection lang={lang} />
         </div>
       )}
 
@@ -2424,6 +2430,7 @@ export function CustomerDashboard({
       )}
 
       {tab === 'profile' && (
+        <div className="space-y-6">
         <div className="space-y-6 max-w-2xl">
           <form onSubmit={handleProfileSave} className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
             <h2 className="text-lg font-bold text-[#172033]">
@@ -2768,6 +2775,9 @@ export function CustomerDashboard({
               </div>
             )}
           </div>
+        </div>
+
+        <DeveloperTeamSection lang={lang} />
         </div>
       )}
 
