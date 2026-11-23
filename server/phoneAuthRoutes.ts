@@ -7084,6 +7084,23 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           typeof body.data.endDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.data.endDate.trim())
             ? body.data.endDate.trim()
             : '';
+        const allowedIcons = new Set([
+          'sparkles',
+          'gamepad',
+          'gift',
+          'flame',
+          'zap',
+          'crown',
+          'tv',
+          'star',
+          'shopping',
+          'shield',
+          'smartphone',
+          'award',
+        ]);
+        const rawIcon = String(body.data.iconName || 'sparkles').trim().toLowerCase();
+        const cleanIcon = allowedIcons.has(rawIcon) ? rawIcon : 'sparkles';
+        const imageFit = body.data.imageFit === 'contain' ? 'contain' : 'cover';
 
         payloadToSave = {
           id: docId,
@@ -7099,6 +7116,10 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           ctaRoute: linkType === 'internal_route' ? String(body.data.ctaRoute || 'services').trim().slice(0, 64) : undefined,
           targetUrl: linkType === 'external_url' ? cleanTargetUrl : undefined,
           openInNewTab: Boolean(body.data.openInNewTab ?? linkType === 'external_url'),
+          clickable: body.data.clickable !== false,
+          iconName: cleanIcon,
+          showIcon: body.data.showIcon !== false,
+          imageFit,
           imageUrl,
           ...(mobileImageUrl ? { mobileImageUrl } : {}),
           deviceVisibility,

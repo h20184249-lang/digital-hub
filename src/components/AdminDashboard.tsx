@@ -438,7 +438,7 @@ export function AdminDashboard({
       badge: kpis.pendingOrders || undefined,
     },
     { id: 'users', label: 'Users', labelBn: 'ইউজার ম্যানেজমেন্ট', icon: Users, badge: kpis.totalUsers },
-    { id: 'banners', label: 'Hero Banners', labelBn: 'হিরো ব্যানার', icon: ImageIcon },
+    { id: 'banners', label: 'Banner Management', labelBn: 'ব্যানার ম্যানেজমেন্ট', icon: ImageIcon },
     { id: 'advertisements', label: 'Advertisements', labelBn: 'বিজ্ঞাপন ও ব্যানার', icon: Megaphone },
     { id: 'homepage_editor', label: 'Homepage Editor', labelBn: 'হোমপেজ এডিটর', icon: LayoutGrid },
     { id: 'settings', label: 'Settings', labelBn: 'ওয়েবসাইট সেটিংস', icon: Settings },

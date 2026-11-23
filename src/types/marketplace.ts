@@ -419,6 +419,20 @@ export interface Banner {
 
 export type HeroBannerLinkType = 'internal_route' | 'external_url';
 export type HeroBannerDevice = 'both' | 'desktop' | 'mobile';
+export type HeroBannerImageFit = 'cover' | 'contain';
+export type HeroBannerIconName =
+  | 'sparkles'
+  | 'gamepad'
+  | 'gift'
+  | 'flame'
+  | 'zap'
+  | 'crown'
+  | 'tv'
+  | 'star'
+  | 'shopping'
+  | 'shield'
+  | 'smartphone'
+  | 'award';
 
 export interface HeroBanner {
   id: string;
@@ -434,6 +448,10 @@ export interface HeroBanner {
   ctaRoute?: AppRoute;
   targetUrl?: string;
   openInNewTab?: boolean;
+  clickable?: boolean;
+  iconName?: HeroBannerIconName;
+  showIcon?: boolean;
+  imageFit?: HeroBannerImageFit;
   imageUrl: string;
   mobileImageUrl?: string;
   deviceVisibility: HeroBannerDevice;

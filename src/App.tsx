@@ -98,6 +98,7 @@ import { mergeAdUnitsWithOverrides } from './lib/adProviderConfig';
 import { DEFAULT_GAMES_CATALOG } from './lib/gamesCatalog';
 import { MOBILE_APPS_CATALOG, type MobileAppItem } from './lib/mobileAppsCatalog';
 import { t } from './lib/i18n';
+import { HeroBannerIconBadge } from './lib/heroBannerIcons';
 import { useOnlineStatus, useSwUpdatePrompt } from './hooks/usePWAInstall';
 import { Navbar } from './components/Navbar';
 import { BannerSlotView } from './components/BannerSlotView';
@@ -990,121 +991,177 @@ export default function App() {
                     case 'hero':
                       return (
                         <section key="hero" className="space-y-3">
-                          {activeSlide && (
-                            <div className="relative rounded-3xl overflow-hidden shadow-lg bg-[#172033] min-h-[220px] sm:min-h-[280px] flex items-center group">
-                              <img
-                                src={
-                                  isMobileViewport && activeSlide.mobileImageUrl
-                                    ? activeSlide.mobileImageUrl
-                                    : activeSlide.imageUrl || STUDIO_IMAGES.hero
+                          {activeSlide && (() => {
+                            const slideFitContain = activeSlide.imageFit === 'contain';
+                            const slideClickable = activeSlide.clickable !== false;
+                            const slideShowIcon = activeSlide.showIcon !== false;
+                            const slideIsExternal =
+                              activeSlide.linkType === 'external_url' && Boolean(activeSlide.targetUrl);
+
+                            return (
+                              <div
+                                onClick={
+                                  slideClickable && !slideIsExternal
+                                    ? () => setRoute(activeSlide.ctaRoute || 'services')
+                                    : undefined
                                 }
-                                alt={lang === 'bn' ? activeSlide.titleBn : activeSlide.titleEn}
-                                onError={(e) => {
-                                  e.currentTarget.src = STUDIO_IMAGES.hero;
-                                }}
-                                className="absolute inset-0 w-full h-full object-cover opacity-55 transition-all duration-500"
-                              />
-                              <div className="absolute inset-0 bg-gradient-to-r from-[#172033] via-[#172033]/85 to-[#172033]/40" />
+                                className={`relative rounded-3xl overflow-hidden shadow-lg bg-[#172033] min-h-[220px] sm:min-h-[280px] flex items-center group ${
+                                  slideClickable ? 'cursor-pointer' : 'cursor-default'
+                                }`}
+                              >
+                                <img
+                                  src={
+                                    isMobileViewport && activeSlide.mobileImageUrl
+                                      ? activeSlide.mobileImageUrl
+                                      : activeSlide.imageUrl || STUDIO_IMAGES.hero
+                                  }
+                                  alt={lang === 'bn' ? activeSlide.titleBn : activeSlide.titleEn}
+                                  onError={(e) => {
+                                    e.currentTarget.src = STUDIO_IMAGES.hero;
+                                  }}
+                                  className={`absolute inset-0 w-full h-full transition-all duration-500 ${
+                                    slideFitContain
+                                      ? 'object-contain object-center opacity-90'
+                                      : 'object-cover opacity-55'
+                                  }`}
+                                />
+                                <div
+                                  className={`absolute inset-0 ${
+                                    slideFitContain
+                                      ? 'bg-gradient-to-r from-[#172033]/90 via-[#172033]/55 to-transparent'
+                                      : 'bg-gradient-to-r from-[#172033] via-[#172033]/85 to-[#172033]/40'
+                                  }`}
+                                />
 
-                              {activeHeroSlides.length > 1 && (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setHeroSlide(
-                                        (s) => (s - 1 + activeHeroSlides.length) % activeHeroSlides.length
-                                      )
-                                    }
-                                    aria-label="Previous slide"
-                                    className="hidden sm:flex absolute left-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/35 hover:bg-[#FF8500] text-white items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                  >
-                                    <ArrowLeft className="w-4 h-4" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setHeroSlide((s) => (s + 1) % activeHeroSlides.length)
-                                    }
-                                    aria-label="Next slide"
-                                    className="hidden sm:flex absolute right-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/35 hover:bg-[#FF8500] text-white items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                  >
-                                    <ArrowRight className="w-4 h-4" />
-                                  </button>
-                                </>
-                              )}
+                                {slideClickable && slideIsExternal && (
+                                  <a
+                                    href={activeSlide.targetUrl}
+                                    target={activeSlide.openInNewTab ? '_blank' : '_self'}
+                                    rel="noopener noreferrer"
+                                    aria-label={lang === 'bn' ? activeSlide.titleBn : activeSlide.titleEn}
+                                    className="absolute inset-0 z-10"
+                                  />
+                                )}
 
-                              <div className="relative z-10 w-full p-5 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5">
-                                <div className="max-w-xl space-y-2.5">
-                                  {(activeSlide.badgeBn || activeSlide.badgeEn) && (
-                                    <span className="inline-block px-2.5 py-0.5 rounded-md bg-[#FF8500] text-white text-[11px] font-extrabold tracking-wide">
-                                      {lang === 'bn'
-                                        ? activeSlide.badgeBn || activeSlide.badgeEn
-                                        : activeSlide.badgeEn || activeSlide.badgeBn}
-                                    </span>
-                                  )}
-                                  <h1 className="text-xl sm:text-3xl font-extrabold text-white leading-tight">
-                                    {lang === 'bn'
-                                      ? activeSlide.titleBn || activeSlide.titleEn
-                                      : activeSlide.titleEn || activeSlide.titleBn}
-                                  </h1>
-                                  <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
-                                    {lang === 'bn'
-                                      ? activeSlide.subtitleBn || activeSlide.subtitleEn
-                                      : activeSlide.subtitleEn || activeSlide.subtitleBn}
-                                  </p>
-                                  <div className="pt-1 flex flex-wrap items-center gap-2.5">
-                                    {activeSlide.linkType === 'external_url' && activeSlide.targetUrl ? (
-                                      <a
-                                        href={activeSlide.targetUrl}
-                                        target={activeSlide.openInNewTab ? '_blank' : '_self'}
-                                        rel="noopener noreferrer"
-                                        className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
-                                      >
-                                        <span>
-                                          {(lang === 'bn' ? activeSlide.buttonTextBn : activeSlide.buttonTextEn) ||
-                                            t(lang, 'shopNow')}
-                                        </span>
-                                        <ArrowRight className="w-4 h-4" />
-                                      </a>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() => setRoute(activeSlide.ctaRoute || 'services')}
-                                        className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
-                                      >
-                                        <span>
-                                          {(lang === 'bn' ? activeSlide.buttonTextBn : activeSlide.buttonTextEn) ||
-                                            t(lang, 'shopNow')}
-                                        </span>
-                                        <ArrowRight className="w-4 h-4" />
-                                      </button>
-                                    )}
+                                {activeHeroSlides.length > 1 && (
+                                  <>
                                     <button
                                       type="button"
-                                      onClick={() => setRoute('add-money')}
-                                      className="px-4 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs sm:text-sm font-bold backdrop-blur-xs"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setHeroSlide(
+                                          (s) => (s - 1 + activeHeroSlides.length) % activeHeroSlides.length
+                                        );
+                                      }}
+                                      aria-label="Previous slide"
+                                      className="hidden sm:flex absolute left-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/35 hover:bg-[#FF8500] text-white items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                                     >
-                                      + {t(lang, 'navAddMoney')}
+                                      <ArrowLeft className="w-4 h-4" />
                                     </button>
-                                  </div>
-                                </div>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setHeroSlide((s) => (s + 1) % activeHeroSlides.length);
+                                      }}
+                                      aria-label="Next slide"
+                                      className="hidden sm:flex absolute right-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/35 hover:bg-[#FF8500] text-white items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                    >
+                                      <ArrowRight className="w-4 h-4" />
+                                    </button>
+                                  </>
+                                )}
 
-                                <ul className="hidden md:flex flex-col gap-1.5 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15 text-xs text-white font-semibold shrink-0">
-                                  {[
-                                    lang === 'bn' ? 'ফ্রি ফায়ার, PUBG, MLBB ও Valorant' : 'Free Fire, PUBG, MLBB & Valorant',
-                                    lang === 'bn' ? 'Netflix, Spotify, YouTube ও Chorki' : 'Netflix, Spotify, YouTube & Chorki',
-                                    lang === 'bn' ? 'টেলিগ্রাম প্রিমিয়াম, স্টার্স ও ভিআইপি' : 'Telegram Premium, Stars & VIP',
-                                    lang === 'bn' ? 'যাচাইকৃত বিকাশ, নগদ ও রকেট পেমেন্ট' : 'Verified bKash, Nagad & Rocket',
-                                  ].map((line) => (
-                                    <li key={line} className="flex items-center gap-2">
-                                      <CheckCircle2 className="w-4 h-4 text-[#FACC15] shrink-0" />
-                                      <span>{line}</span>
-                                    </li>
-                                  ))}
-                                </ul>
+                                <div className="relative z-20 pointer-events-none w-full p-5 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5">
+                                  <div className="max-w-xl space-y-2.5">
+                                    {(activeSlide.badgeBn || activeSlide.badgeEn || slideShowIcon) && (
+                                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#FF8500] text-white text-[11px] font-extrabold tracking-wide">
+                                        {slideShowIcon && (
+                                          <HeroBannerIconBadge
+                                            name={activeSlide.iconName}
+                                            className="w-3.5 h-3.5 shrink-0"
+                                          />
+                                        )}
+                                        <span>
+                                          {(lang === 'bn'
+                                            ? activeSlide.badgeBn || activeSlide.badgeEn
+                                            : activeSlide.badgeEn || activeSlide.badgeBn) || 'DIGITAL HUB BD'}
+                                        </span>
+                                      </span>
+                                    )}
+                                    <h1 className="text-xl sm:text-3xl font-extrabold text-white leading-tight">
+                                      {lang === 'bn'
+                                        ? activeSlide.titleBn || activeSlide.titleEn
+                                        : activeSlide.titleEn || activeSlide.titleBn}
+                                    </h1>
+                                    <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
+                                      {lang === 'bn'
+                                        ? activeSlide.subtitleBn || activeSlide.subtitleEn
+                                        : activeSlide.subtitleEn || activeSlide.subtitleBn}
+                                    </p>
+                                    <div className="pt-1 flex flex-wrap items-center gap-2.5 pointer-events-auto">
+                                      {slideClickable &&
+                                        (slideIsExternal ? (
+                                          <a
+                                            href={activeSlide.targetUrl}
+                                            target={activeSlide.openInNewTab ? '_blank' : '_self'}
+                                            rel="noopener noreferrer"
+                                            className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
+                                          >
+                                            <span>
+                                              {(lang === 'bn'
+                                                ? activeSlide.buttonTextBn
+                                                : activeSlide.buttonTextEn) || t(lang, 'shopNow')}
+                                            </span>
+                                            <ArrowRight className="w-4 h-4" />
+                                          </a>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setRoute(activeSlide.ctaRoute || 'services');
+                                            }}
+                                            className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
+                                          >
+                                            <span>
+                                              {(lang === 'bn'
+                                                ? activeSlide.buttonTextBn
+                                                : activeSlide.buttonTextEn) || t(lang, 'shopNow')}
+                                            </span>
+                                            <ArrowRight className="w-4 h-4" />
+                                          </button>
+                                        ))}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setRoute('add-money');
+                                        }}
+                                        className="px-4 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs sm:text-sm font-bold backdrop-blur-xs"
+                                      >
+                                        + {t(lang, 'navAddMoney')}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <ul className="hidden md:flex flex-col gap-1.5 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15 text-xs text-white font-semibold shrink-0">
+                                    {[
+                                      lang === 'bn' ? 'ফ্রি ফায়ার, PUBG, MLBB ও Valorant' : 'Free Fire, PUBG, MLBB & Valorant',
+                                      lang === 'bn' ? 'Netflix, Spotify, YouTube ও Chorki' : 'Netflix, Spotify, YouTube & Chorki',
+                                      lang === 'bn' ? 'টেলিগ্রাম প্রিমিয়াম, স্টার্স ও ভিআইপি' : 'Telegram Premium, Stars & VIP',
+                                      lang === 'bn' ? 'যাচাইকৃত বিকাশ, নগদ ও রকেট পেমেন্ট' : 'Verified bKash, Nagad & Rocket',
+                                    ].map((line) => (
+                                      <li key={line} className="flex items-center gap-2">
+                                        <CheckCircle2 className="w-4 h-4 text-[#FACC15] shrink-0" />
+                                        <span>{line}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            );
+                          })()}
 
                           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
                             <form onSubmit={handleHomeSearchSubmit} className="relative w-full sm:max-w-md">
