@@ -1,5 +1,6 @@
 import { FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   ArrowRight,
   Award,
   CheckCircle2,
@@ -43,6 +44,7 @@ import {
   Coupon,
   DownloadHistoryItem,
   GameItem,
+  HeroBanner,
   HomepageSectionConfig,
   Language,
   ManagedAdUnitConfig,
@@ -72,6 +74,7 @@ import {
   subscribeCoupons,
   subscribeDashboardInvalidation,
   subscribeGames,
+  subscribeHeroBanners,
   subscribeManagedAdUnits,
   subscribeMobileApps,
   subscribePaymentMethods,
@@ -85,6 +88,7 @@ import {
   DEFAULT_BANNERS,
   DEFAULT_CATEGORIES,
   DEFAULT_COUPONS,
+  DEFAULT_HERO_BANNERS,
   DEFAULT_HOMEPAGE_SECTIONS,
   DEFAULT_PRODUCTS,
   DEFAULT_SITE_SETTINGS,
@@ -110,6 +114,8 @@ import { MobileAppDownloadCard } from './components/MobileAppDownloadCard';
 import { CapCutRechargeSection } from './components/CapCutRechargeSection';
 import { MobileAppStoreSection } from './components/MobileAppStoreSection';
 import { GamesStoreSection } from './components/GamesStoreSection';
+import { DailyRewardWidget } from './components/DailyRewardWidget';
+import { HomeAnnouncementsBar } from './components/HomeAnnouncementsBar';
 import { CategoryCatalogPage, ProductCard } from './components/StorefrontPages';
 import { ServiceBrandLogo } from './components/BrandLogos';
 import {
@@ -197,6 +203,10 @@ export default function App() {
   const [adNetworks, setAdNetworks] = useState<AdNetworkConfig[]>(DEFAULT_AD_NETWORKS);
   const [adUnitOverrides, setAdUnitOverrides] = useState<ManagedAdUnitConfig[]>([]);
   const [banners, setBanners] = useState<Banner[]>(DEFAULT_BANNERS);
+  const [heroBanners, setHeroBanners] = useState<HeroBanner[]>(DEFAULT_HERO_BANNERS);
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
   const [coupons, setCoupons] = useState<Coupon[]>(DEFAULT_COUPONS);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [settings, setSettings] = useState<SiteSettings>(DEFAULT_SITE_SETTINGS);
@@ -312,6 +322,9 @@ export default function App() {
     const u11 = subscribePaymentMethods(setPaymentMethods);
     const u12 = subscribeMobileApps(setMobileApps, false);
     const u13 = subscribeGames(setGames, false);
+    const u14 = subscribeHeroBanners(setHeroBanners);
+    const onResize = () => setIsMobileViewport(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
     return () => {
       u1();
       u2();
@@ -326,6 +339,8 @@ export default function App() {
       u11();
       u12();
       u13();
+      u14();
+      window.removeEventListener('resize', onResize);
     };
   }, []);
 
@@ -492,10 +507,43 @@ export default function App() {
     };
   }, [user?.uid, refreshCustomerDashboard]);
 
+  const activeHeroSlides = useMemo(() => {
+    let todayDhaka = '';
+    try {
+      todayDhaka = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Dhaka',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    } catch {
+      todayDhaka = new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
+    }
+    return heroBanners
+      .filter((b) => {
+        if (!b.enabled) return false;
+        if (b.startDate && b.startDate > todayDhaka) return false;
+        if (b.endDate && b.endDate < todayDhaka) return false;
+        if (b.deviceVisibility === 'mobile' && !isMobileViewport) return false;
+        if (b.deviceVisibility === 'desktop' && isMobileViewport) return false;
+        return true;
+      })
+      .sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99));
+  }, [heroBanners, isMobileViewport]);
+
+  const heroIntervalMs = useMemo(
+    () => Math.min(20000, Math.max(2000, Number(settings.heroAutoPlayMs || 5500) || 5500)),
+    [settings.heroAutoPlayMs]
+  );
+
   useEffect(() => {
-    const timer = setInterval(() => setHeroSlide((s) => (s + 1) % 3), 5500);
+    if (activeHeroSlides.length <= 1) return;
+    const timer = setInterval(
+      () => setHeroSlide((s) => (s + 1) % activeHeroSlides.length),
+      heroIntervalMs
+    );
     return () => clearInterval(timer);
-  }, []);
+  }, [activeHeroSlides.length, heroIntervalMs]);
 
   const detailProduct = useMemo(
     () => products.find((p) => p.id === detailProductId) || null,
@@ -716,40 +764,8 @@ export default function App() {
     [products]
   );
 
-  const heroSlides = [
-    {
-      badge: 'DIGITAL HUB',
-      title: lang === 'bn' ? 'আপনার সম্পূর্ণ ডিজিটাল সার্ভিস ও গেমিং মার্কেটপ্লেস' : 'Your Complete Digital & Gaming Marketplace',
-      subtitle:
-        lang === 'bn'
-          ? 'ফ্রি ফায়ার ডায়মন্ড, PUBG UC, গিফট কার্ড, Netflix, Telegram Premium, AI Tools এবং সোশ্যাল সার্ভিস এক ঠিকানায়।'
-          : 'Free Fire Diamonds, PUBG UC, Gift Cards, Netflix, Telegram Premium, AI Tools & SMM Services.',
-      image: STUDIO_IMAGES.hero,
-      ctaRoute: 'gaming-store' as AppRoute,
-    },
-    {
-      badge: lang === 'bn' ? 'গেমিং টপ-আপ' : 'INSTANT GAMING TOP-UP',
-      title: lang === 'bn' ? 'ফ্রি ফায়ার, PUBG, Valorant ও গিফট কার্ড' : 'Free Fire, PUBG, Valorant & Gift Cards',
-      subtitle:
-        lang === 'bn'
-          ? 'অফিশিয়াল প্লেয়ার UID টপ-আপ এবং ভেরিফায়েড বিকাশ, নগদ ও রকেট পেমেন্ট।'
-          : 'Authorized Player UID top-ups and vouchers backed by verified bKash, Nagad & Rocket.',
-      image: STUDIO_IMAGES.gameBattle,
-      ctaRoute: 'gift-cards' as AppRoute,
-    },
-    {
-      badge: lang === 'bn' ? 'ওটিটি, এআই ও টেলিগ্রাম' : 'OTT, AI & TELEGRAM',
-      title: lang === 'bn' ? 'স্ট্রিমিং পাস, ChatGPT Plus ও টেলিগ্রাম স্টোর' : 'Streaming Passes, ChatGPT & Telegram Store',
-      subtitle:
-        lang === 'bn'
-          ? 'ক্রিয়েটর ও গেমারদের জন্য নিরাপদ ডিজিটাল সাবস্ক্রিপশন এবং দ্রুত ডেলিভারি।'
-          : 'Authorized streaming, AI suites, and Telegram packages delivered safely.',
-      image: STUDIO_IMAGES.streaming,
-      ctaRoute: 'streaming-store' as AppRoute,
-    },
-  ];
-
-  const activeSlide = heroSlides[heroSlide] || heroSlides[0];
+  const safeHeroIndex = activeHeroSlides.length > 0 ? heroSlide % activeHeroSlides.length : 0;
+  const activeSlide = activeHeroSlides[safeHeroIndex] || null;
 
   const quickButtons: { label: string; route: AppRoute; icon: typeof Send }[] = [
     { label: lang === 'bn' ? 'গেমিং টপ-আপ' : 'Gaming Top-Up', route: 'gaming-store', icon: Gamepad2 },
@@ -966,6 +982,7 @@ export default function App() {
         {route === 'home' && (
           <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
             <div className="min-w-0 space-y-6 sm:space-y-8">
+              <HomeAnnouncementsBar announcements={announcements} lang={lang} />
               {orderedHomepageSections
                 .filter((sec) => sec.visible)
                 .map((sec) => {
@@ -973,62 +990,121 @@ export default function App() {
                     case 'hero':
                       return (
                         <section key="hero" className="space-y-3">
-                          <div className="relative rounded-3xl overflow-hidden shadow-lg bg-[#172033] min-h-[220px] sm:min-h-[280px] flex items-center">
-                            <img
-                              src={activeSlide.image}
-                              alt={activeSlide.title}
-                              onError={(e) => {
-                                e.currentTarget.src = STUDIO_IMAGES.hero;
-                              }}
-                              className="absolute inset-0 w-full h-full object-cover opacity-55"
-                            />
-                            <div className="absolute inset-0 bg-gradient-to-r from-[#172033] via-[#172033]/85 to-[#172033]/40" />
+                          {activeSlide && (
+                            <div className="relative rounded-3xl overflow-hidden shadow-lg bg-[#172033] min-h-[220px] sm:min-h-[280px] flex items-center group">
+                              <img
+                                src={
+                                  isMobileViewport && activeSlide.mobileImageUrl
+                                    ? activeSlide.mobileImageUrl
+                                    : activeSlide.imageUrl || STUDIO_IMAGES.hero
+                                }
+                                alt={lang === 'bn' ? activeSlide.titleBn : activeSlide.titleEn}
+                                onError={(e) => {
+                                  e.currentTarget.src = STUDIO_IMAGES.hero;
+                                }}
+                                className="absolute inset-0 w-full h-full object-cover opacity-55 transition-all duration-500"
+                              />
+                              <div className="absolute inset-0 bg-gradient-to-r from-[#172033] via-[#172033]/85 to-[#172033]/40" />
 
-                            <div className="relative z-10 w-full p-5 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5">
-                              <div className="max-w-xl space-y-2.5">
-                                <span className="inline-block px-2.5 py-0.5 rounded-md bg-[#FF8500] text-white text-[11px] font-extrabold tracking-wide">
-                                  {activeSlide.badge}
-                                </span>
-                                <h1 className="text-xl sm:text-3xl font-extrabold text-white leading-tight">
-                                  {activeSlide.title}
-                                </h1>
-                                <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
-                                  {activeSlide.subtitle}
-                                </p>
-                                <div className="pt-1 flex flex-wrap items-center gap-2.5">
+                              {activeHeroSlides.length > 1 && (
+                                <>
                                   <button
                                     type="button"
-                                    onClick={() => setRoute(activeSlide.ctaRoute)}
-                                    className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
+                                    onClick={() =>
+                                      setHeroSlide(
+                                        (s) => (s - 1 + activeHeroSlides.length) % activeHeroSlides.length
+                                      )
+                                    }
+                                    aria-label="Previous slide"
+                                    className="hidden sm:flex absolute left-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/35 hover:bg-[#FF8500] text-white items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                                   >
-                                    <span>{t(lang, 'shopNow')}</span>
+                                    <ArrowLeft className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setHeroSlide((s) => (s + 1) % activeHeroSlides.length)
+                                    }
+                                    aria-label="Next slide"
+                                    className="hidden sm:flex absolute right-3 top-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-black/35 hover:bg-[#FF8500] text-white items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                  >
                                     <ArrowRight className="w-4 h-4" />
                                   </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setRoute('add-money')}
-                                    className="px-4 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs sm:text-sm font-bold backdrop-blur-xs"
-                                  >
-                                    + {t(lang, 'navAddMoney')}
-                                  </button>
-                                </div>
-                              </div>
+                                </>
+                              )}
 
-                              <ul className="hidden md:flex flex-col gap-1.5 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15 text-xs text-white font-semibold shrink-0">
-                                {[
-                                  lang === 'bn' ? 'ফ্রি ফায়ার, PUBG, MLBB ও Valorant' : 'Free Fire, PUBG, MLBB & Valorant',
-                                  lang === 'bn' ? 'Netflix, Spotify, YouTube ও Chorki' : 'Netflix, Spotify, YouTube & Chorki',
-                                  lang === 'bn' ? 'টেলিগ্রাম প্রিমিয়াম, স্টার্স ও ভিআইপি' : 'Telegram Premium, Stars & VIP',
-                                  lang === 'bn' ? 'যাচাইকৃত বিকাশ, নগদ ও রকেট পেমেন্ট' : 'Verified bKash, Nagad & Rocket',
-                                ].map((line) => (
-                                  <li key={line} className="flex items-center gap-2">
-                                    <CheckCircle2 className="w-4 h-4 text-[#FACC15] shrink-0" />
-                                    <span>{line}</span>
-                                  </li>
-                                ))}
-                              </ul>
+                              <div className="relative z-10 w-full p-5 sm:p-8 flex flex-col md:flex-row md:items-center justify-between gap-5">
+                                <div className="max-w-xl space-y-2.5">
+                                  {(activeSlide.badgeBn || activeSlide.badgeEn) && (
+                                    <span className="inline-block px-2.5 py-0.5 rounded-md bg-[#FF8500] text-white text-[11px] font-extrabold tracking-wide">
+                                      {lang === 'bn'
+                                        ? activeSlide.badgeBn || activeSlide.badgeEn
+                                        : activeSlide.badgeEn || activeSlide.badgeBn}
+                                    </span>
+                                  )}
+                                  <h1 className="text-xl sm:text-3xl font-extrabold text-white leading-tight">
+                                    {lang === 'bn'
+                                      ? activeSlide.titleBn || activeSlide.titleEn
+                                      : activeSlide.titleEn || activeSlide.titleBn}
+                                  </h1>
+                                  <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
+                                    {lang === 'bn'
+                                      ? activeSlide.subtitleBn || activeSlide.subtitleEn
+                                      : activeSlide.subtitleEn || activeSlide.subtitleBn}
+                                  </p>
+                                  <div className="pt-1 flex flex-wrap items-center gap-2.5">
+                                    {activeSlide.linkType === 'external_url' && activeSlide.targetUrl ? (
+                                      <a
+                                        href={activeSlide.targetUrl}
+                                        target={activeSlide.openInNewTab ? '_blank' : '_self'}
+                                        rel="noopener noreferrer"
+                                        className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
+                                      >
+                                        <span>
+                                          {(lang === 'bn' ? activeSlide.buttonTextBn : activeSlide.buttonTextEn) ||
+                                            t(lang, 'shopNow')}
+                                        </span>
+                                        <ArrowRight className="w-4 h-4" />
+                                      </a>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => setRoute(activeSlide.ctaRoute || 'services')}
+                                        className="px-4 sm:px-5 py-2 rounded-full bg-[#FACC15] hover:bg-[#fde047] text-[#172033] text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shadow-md"
+                                      >
+                                        <span>
+                                          {(lang === 'bn' ? activeSlide.buttonTextBn : activeSlide.buttonTextEn) ||
+                                            t(lang, 'shopNow')}
+                                        </span>
+                                        <ArrowRight className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => setRoute('add-money')}
+                                      className="px-4 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs sm:text-sm font-bold backdrop-blur-xs"
+                                    >
+                                      + {t(lang, 'navAddMoney')}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <ul className="hidden md:flex flex-col gap-1.5 bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/15 text-xs text-white font-semibold shrink-0">
+                                  {[
+                                    lang === 'bn' ? 'ফ্রি ফায়ার, PUBG, MLBB ও Valorant' : 'Free Fire, PUBG, MLBB & Valorant',
+                                    lang === 'bn' ? 'Netflix, Spotify, YouTube ও Chorki' : 'Netflix, Spotify, YouTube & Chorki',
+                                    lang === 'bn' ? 'টেলিগ্রাম প্রিমিয়াম, স্টার্স ও ভিআইপি' : 'Telegram Premium, Stars & VIP',
+                                    lang === 'bn' ? 'যাচাইকৃত বিকাশ, নগদ ও রকেট পেমেন্ট' : 'Verified bKash, Nagad & Rocket',
+                                  ].map((line) => (
+                                    <li key={line} className="flex items-center gap-2">
+                                      <CheckCircle2 className="w-4 h-4 text-[#FACC15] shrink-0" />
+                                      <span>{line}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
                             </div>
-                          </div>
+                          )}
 
                           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
                             <form onSubmit={handleHomeSearchSubmit} className="relative w-full sm:max-w-md">
@@ -1038,7 +1114,7 @@ export default function App() {
                                 value={homeSearch}
                                 onChange={(e) => setHomeSearch(e.target.value)}
                                 placeholder={t(lang, 'searchPlaceholder')}
-                                className="w-full pl-10 pr-24 py-2.5 rounded-2xl bg-white border border-[#E6ECFA] text-xs sm:text-sm shadow-xs focus:outline-none focus:border-[#FF8500]"
+                                className="w-full pl-10 pr-24 py-2.5 rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-700 text-xs sm:text-sm shadow-xs focus:outline-none focus:border-[#FF8500]"
                               />
                               <button
                                 type="submit"
@@ -1048,21 +1124,37 @@ export default function App() {
                               </button>
                             </form>
 
-                            <div className="flex justify-center gap-1.5">
-                              {heroSlides.map((s, idx) => (
-                                <button
-                                  key={s.badge}
-                                  type="button"
-                                  onClick={() => setHeroSlide(idx)}
-                                  aria-label={`Slide ${idx + 1}`}
-                                  className={`h-1.5 rounded-full transition-all ${
-                                    heroSlide === idx ? 'w-6 bg-[#FF8500]' : 'w-2.5 bg-gray-300'
-                                  }`}
-                                />
-                              ))}
-                            </div>
+                            {activeHeroSlides.length > 1 && (
+                              <div className="flex justify-center gap-1.5">
+                                {activeHeroSlides.map((s, idx) => (
+                                  <button
+                                    key={s.id}
+                                    type="button"
+                                    onClick={() => setHeroSlide(idx)}
+                                    aria-label={`Slide ${idx + 1}`}
+                                    className={`h-1.5 rounded-full transition-all ${
+                                      safeHeroIndex === idx ? 'w-6 bg-[#FF8500]' : 'w-2.5 bg-gray-300 dark:bg-slate-700'
+                                    }`}
+                                  />
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </section>
+                      );
+
+                    case 'daily_reward':
+                      return (
+                        <DailyRewardWidget
+                          key="daily_reward"
+                          lang={lang}
+                          user={user}
+                          onOpenAuth={() => {
+                            setAuthInitialMode('login');
+                            setAuthModalOpen(true);
+                          }}
+                          onClaimed={(msg) => showToast(msg)}
+                        />
                       );
 
                     case 'quick_categories':

@@ -114,6 +114,11 @@ interface EffectiveSiteSettings {
   watchEarnDailyCoinLimit: number;
   rewardedAdDailyLimit: number;
   watchEarnMinRedeemCoins: number;
+  heroAutoPlayMs: number;
+  dailyRewardEnabled: boolean;
+  dailyRewardCoins: number;
+  streakEnabled: boolean;
+  streakDay7BonusCoins: number;
 }
 
 function getDhakaDateString(ms: number = Date.now()): string {
@@ -127,6 +132,15 @@ function getDhakaDateString(ms: number = Date.now()): string {
   } catch {
     return new Date(ms + 6 * 60 * 60 * 1000).toISOString().slice(0, 10);
   }
+}
+
+function isAnnouncementActiveNow(raw: Record<string, unknown>, todayDhaka: string): boolean {
+  if (!raw || raw.active === false) return false;
+  const startDate = typeof raw.startDate === 'string' ? raw.startDate.trim() : '';
+  const expiresAt = typeof raw.expiresAt === 'string' ? raw.expiresAt.trim() : '';
+  if (startDate && startDate > todayDhaka) return false;
+  if (expiresAt && expiresAt < todayDhaka) return false;
+  return true;
 }
 
 interface AttemptRow {
@@ -332,6 +346,11 @@ async function getGlobalSiteSettings(db: AppDatabase): Promise<EffectiveSiteSett
     watchEarnDailyCoinLimit: Math.max(10, Math.floor(Number(raw.watchEarnDailyCoinLimit ?? 100) || 100)),
     rewardedAdDailyLimit: Math.min(20, Math.max(1, Math.floor(Number(raw.rewardedAdDailyLimit ?? 10) || 10))),
     watchEarnMinRedeemCoins: Math.max(10, Math.floor(Number(raw.watchEarnMinRedeemCoins ?? 50) || 50)),
+    heroAutoPlayMs: Math.min(20000, Math.max(2000, Math.floor(Number(raw.heroAutoPlayMs ?? 5500) || 5500))),
+    dailyRewardEnabled: raw.dailyRewardEnabled !== false,
+    dailyRewardCoins: Math.min(10000, Math.max(1, Math.floor(Number(raw.dailyRewardCoins ?? 10) || 10))),
+    streakEnabled: raw.streakEnabled !== false,
+    streakDay7BonusCoins: Math.min(10000, Math.max(0, Math.floor(Number(raw.streakDay7BonusCoins ?? 20) || 0))),
   };
 }
 
@@ -1999,7 +2018,9 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         rewardClaims: rewardClaimRows.map((r) => parseJsonSafe(r.payload_json, {})),
         viewingSessions: viewingSessionRows.map((r) => parseJsonSafe(r.payload_json, {})),
         adRewardTransactions: adRewardTxRows.map((r) => parseJsonSafe(r.payload_json, {})),
-        announcements: announcementRows.map((r) => parseJsonSafe(r.payload_json, {})),
+        announcements: announcementRows
+          .map((r) => parseJsonSafe<Record<string, unknown>>(r.payload_json, {}))
+          .filter((a) => isAnnouncementActiveNow(a, getDhakaDateString())),
         favoriteAppIds: favoriteRows.map((r) => r.app_id),
         totalDownloads: Number(downloadCountRow?.cnt || 0),
         downloadHistory: downloadHistoryRows.map((row) => ({
@@ -3693,6 +3714,361 @@ export function createPhoneAuthAndAppRouter(): express.Router {
   });
 
   // =========================================================================
+  // 8B. DAILY LOGIN REWARD (10 COINS + STREAK SYSTEM, ASIA/DHAKA SYNCED)
+  // =========================================================================
+  async function computeDailyRewardStatus(
+    db: AppDatabase,
+    userId: string | null,
+    siteSettings: EffectiveSiteSettings
+  ) {
+    const now = Date.now();
+    const todayDate = getDhakaDateString(now);
+    const todayStartMs = getDhakaDayStartMs(now);
+    const yesterdayDate = getDhakaDateString(todayStartMs - 1000);
+    const nextResetAt = todayStartMs + 24 * 60 * 60 * 1000;
+
+    let claimedToday = false;
+    let currentStreak = 0;
+    let longestStreak = 0;
+    let lastClaimDate = '';
+    let totalClaims = 0;
+    let coinsAvailable = 0;
+    let todayClaim: Record<string, unknown> | null = null;
+
+    if (userId) {
+      const [claimRow, streakRow, balRow] = await Promise.all([
+        db.first<{
+          id: string;
+          user_id: string;
+          claim_date: string;
+          streak_day: number;
+          base_coins: number;
+          bonus_coins: number;
+          total_coins: number;
+          status: string;
+          transaction_id: string;
+          created_at: number;
+        }>('SELECT * FROM daily_login_claims WHERE user_id = ? AND claim_date = ? LIMIT 1', [
+          userId,
+          todayDate,
+        ]),
+        db.first<{
+          current_streak: number;
+          longest_streak: number;
+          last_claim_date: string;
+          total_claims: number;
+        }>('SELECT * FROM daily_login_streaks WHERE user_id = ? LIMIT 1', [userId]),
+        db.first<{ coins_available: number }>(
+          'SELECT coins_available FROM watch_earn_balances WHERE user_id = ? LIMIT 1',
+          [userId]
+        ),
+      ]);
+
+      coinsAvailable = Number(balRow?.coins_available || 0);
+      totalClaims = Number(streakRow?.total_claims || 0);
+      longestStreak = Number(streakRow?.longest_streak || 0);
+      lastClaimDate = String(streakRow?.last_claim_date || '');
+
+      if (claimRow) {
+        claimedToday = true;
+        todayClaim = {
+          id: claimRow.id,
+          userId: claimRow.user_id,
+          claimDate: claimRow.claim_date,
+          streakDay: Number(claimRow.streak_day || 1),
+          baseCoins: Number(claimRow.base_coins || siteSettings.dailyRewardCoins),
+          bonusCoins: Number(claimRow.bonus_coins || 0),
+          totalCoins: Number(claimRow.total_coins || siteSettings.dailyRewardCoins),
+          status: claimRow.status || 'Credited',
+          transactionId: claimRow.transaction_id || claimRow.id,
+          createdAt: Number(claimRow.created_at || now),
+        };
+      }
+
+      if (streakRow) {
+        if (lastClaimDate === todayDate || lastClaimDate === yesterdayDate) {
+          currentStreak = Number(streakRow.current_streak || 0);
+        } else {
+          currentStreak = 0;
+        }
+      }
+    }
+
+    const cycleCompletedDays = claimedToday
+      ? currentStreak > 0
+        ? ((currentStreak - 1) % 7) + 1
+        : 1
+      : currentStreak % 7;
+    const nextClaimDayInCycle = claimedToday ? Math.min(7, cycleCompletedDays) : cycleCompletedDays + 1;
+
+    const weekDays = Array.from({ length: 7 }, (_, idx) => {
+      const dayNumber = idx + 1;
+      const isBonusMilestone = siteSettings.streakEnabled && dayNumber === 7 && siteSettings.streakDay7BonusCoins > 0;
+      const coins = siteSettings.dailyRewardCoins + (isBonusMilestone ? siteSettings.streakDay7BonusCoins : 0);
+      const claimed = claimedToday ? dayNumber <= cycleCompletedDays : dayNumber <= cycleCompletedDays;
+      const isCurrent = !claimedToday && dayNumber === nextClaimDayInCycle;
+      return {
+        dayNumber,
+        labelEn: `Day ${dayNumber}`,
+        labelBn: `দিন ${dayNumber}`,
+        coins,
+        claimed,
+        isCurrent,
+        isBonusMilestone,
+      };
+    });
+
+    return {
+      enabled: siteSettings.dailyRewardEnabled,
+      dailyCoins: siteSettings.dailyRewardCoins,
+      streakEnabled: siteSettings.streakEnabled,
+      streakDay7BonusCoins: siteSettings.streakDay7BonusCoins,
+      todayDate,
+      nextResetAt,
+      isAuthenticated: Boolean(userId),
+      claimedToday,
+      currentStreak,
+      longestStreak,
+      lastClaimDate,
+      totalClaims,
+      coinsAvailable,
+      todayClaim,
+      weekDays,
+    };
+  }
+
+  router.get('/rewards/daily-status', async (req, res) => {
+    try {
+      const session = await resolveSessionFromRequest(req).catch(() => null);
+      const db = session ? session.db : await getAppDatabase();
+      const siteSettings = await getGlobalSiteSettings(db);
+      const status = await computeDailyRewardStatus(db, session?.user.uid || null, siteSettings);
+      res.json({ ok: true, status });
+    } catch (err) {
+      handleRouteError(res, err, 'ডেইলি রিওয়ার্ড স্ট্যাটাস লোড করা যায়নি।');
+    }
+  });
+
+  router.post('/rewards/daily-claim', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'ডেইলি লগইন রিওয়ার্ড পেতে অনুগ্রহ করে লগইন করুন।' });
+        return;
+      }
+      const { db, user } = resolved;
+      if (user.status === 'suspended') {
+        res.status(403).json({ ok: false, error: 'আপনার অ্যাকাউন্ট সাময়িকভাবে সাসপেন্ড আছে।' });
+        return;
+      }
+      const siteSettings = await getGlobalSiteSettings(db);
+      if (!siteSettings.dailyRewardEnabled) {
+        res.status(403).json({ ok: false, error: 'ডেইলি লগইন রিওয়ার্ড বর্তমানে বন্ধ আছে।' });
+        return;
+      }
+
+      const now = Date.now();
+      const claimDate = getDhakaDateString(now);
+      const todayStartMs = getDhakaDayStartMs(now);
+      const yesterdayDate = getDhakaDateString(todayStartMs - 1000);
+
+      const streakRow = await db.first<{
+        current_streak: number;
+        longest_streak: number;
+        last_claim_date: string;
+        total_claims: number;
+      }>('SELECT * FROM daily_login_streaks WHERE user_id = ? LIMIT 1', [user.uid]);
+
+      const nextStreak =
+        streakRow && streakRow.last_claim_date === yesterdayDate
+          ? Number(streakRow.current_streak || 0) + 1
+          : streakRow && streakRow.last_claim_date === claimDate
+            ? Number(streakRow.current_streak || 1)
+            : 1;
+      const longestStreak = Math.max(Number(streakRow?.longest_streak || 0), nextStreak);
+      const prevTotalClaims = Number(streakRow?.total_claims || 0);
+
+      const baseCoins = siteSettings.dailyRewardCoins;
+      const bonusCoins =
+        siteSettings.streakEnabled && nextStreak % 7 === 0 ? siteSettings.streakDay7BonusCoins : 0;
+      const totalCoins = baseCoins + bonusCoins;
+      const claimId = generateSecureId('dlc', 8);
+      const rtxId = generateSecureId('dlr', 8);
+
+      // Atomic daily claim uniqueness guard: UNIQUE(user_id, claim_date)
+      const insertClaim = await db.run(
+        `INSERT OR IGNORE INTO daily_login_claims (
+          id, user_id, claim_date, streak_day, base_coins, bonus_coins, total_coins, status, transaction_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Credited', ?, ?)`,
+        [claimId, user.uid, claimDate, nextStreak, baseCoins, bonusCoins, totalCoins, rtxId, now]
+      );
+
+      if (insertClaim.changes === 0) {
+        const status = await computeDailyRewardStatus(db, user.uid, siteSettings);
+        res.status(409).json({
+          ok: false,
+          alreadyClaimed: true,
+          error: "Today's reward already claimed.",
+          status,
+        });
+        return;
+      }
+
+      await db.run(
+        `INSERT INTO daily_login_streaks (user_id, current_streak, longest_streak, last_claim_date, total_claims, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           current_streak = excluded.current_streak,
+           longest_streak = MAX(daily_login_streaks.longest_streak, excluded.longest_streak),
+           last_claim_date = excluded.last_claim_date,
+           total_claims = daily_login_streaks.total_claims + 1,
+           updated_at = excluded.updated_at`,
+        [user.uid, nextStreak, longestStreak, claimDate, prevTotalClaims + 1, now]
+      );
+
+      await db.run(
+        `INSERT INTO watch_earn_balances (user_id, coins_available, coins_lifetime_earned, coins_redeemed, updated_at)
+         VALUES (?, ?, ?, 0, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           coins_available = watch_earn_balances.coins_available + ?,
+           coins_lifetime_earned = watch_earn_balances.coins_lifetime_earned + ?,
+           updated_at = excluded.updated_at`,
+        [user.uid, totalCoins, totalCoins, now, totalCoins, totalCoins]
+      );
+
+      const coinsPerBdt = siteSettings.watchEarnCoinsPerBdt || 10;
+      const baseNote = `Daily Login Reward (${claimDate}) • Day ${nextStreak}`;
+      const basePayload = {
+        id: rtxId,
+        sessionId: claimId,
+        refId: claimId,
+        userId: user.uid,
+        userEmail: getUserPrimaryIdentifier(user),
+        adTitle: 'Daily Login Reward',
+        provider: 'DAILY_LOGIN',
+        type: 'daily_login_reward',
+        coins: baseCoins,
+        bdtEquivalent: Number((baseCoins / coinsPerBdt).toFixed(2)),
+        status: 'Credited',
+        note: bonusCoins > 0 ? `${baseNote} (+${baseCoins} base + ${bonusCoins} Day-7 bonus)` : baseNote,
+        createdAt: now,
+      };
+      await db.run(
+        'INSERT INTO ad_reward_transactions (id, user_id, type, status, coins, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [rtxId, user.uid, 'daily_login_reward', 'Credited', baseCoins, JSON.stringify(basePayload), now]
+      );
+
+      if (bonusCoins > 0) {
+        const bonusTxId = generateSecureId('dls', 8);
+        const bonusPayload = {
+          id: bonusTxId,
+          sessionId: claimId,
+          refId: claimId,
+          userId: user.uid,
+          userEmail: getUserPrimaryIdentifier(user),
+          adTitle: `7-Day Streak Milestone Bonus (Day ${nextStreak})`,
+          provider: 'STREAK_BONUS',
+          type: 'daily_login_streak_bonus',
+          coins: bonusCoins,
+          bdtEquivalent: Number((bonusCoins / coinsPerBdt).toFixed(2)),
+          status: 'Credited',
+          note: `Streak milestone Day ${nextStreak} bonus (+${bonusCoins} coins)`,
+          createdAt: now + 1,
+        };
+        await db.run(
+          'INSERT INTO ad_reward_transactions (id, user_id, type, status, coins, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [bonusTxId, user.uid, 'daily_login_streak_bonus', 'Credited', bonusCoins, JSON.stringify(bonusPayload), now + 1]
+        );
+      }
+
+      await insertNotification(
+        db,
+        user.uid,
+        `ডেইলি লগইন রিওয়ার্ড: +${totalCoins} কয়েন!`,
+        `Daily Login Reward: +${totalCoins} Coins!`,
+        bonusCoins > 0
+          ? `আপনার আজকের +${baseCoins} কয়েন এবং ৭ দিনের স্ট্রিক বোনাস +${bonusCoins} কয়েন (মোট +${totalCoins} কয়েন) অ্যাকাউন্টে যুক্ত হয়েছে।`
+          : `আজকের ডেইলি লগইন রিওয়ার্ড +${totalCoins} কয়েন (স্ট্রিক: দিন ${nextStreak}) আপনার অ্যাকাউন্টে যুক্ত হয়েছে।`,
+        bonusCoins > 0
+          ? `You earned +${baseCoins} daily coins plus +${bonusCoins} streak milestone bonus (Total +${totalCoins} coins).`
+          : `You claimed +${totalCoins} daily login coins (Streak: Day ${nextStreak}).`,
+        'reward'
+      );
+
+      const status = await computeDailyRewardStatus(db, user.uid, siteSettings);
+      res.status(201).json({
+        ok: true,
+        alreadyClaimed: false,
+        claimId,
+        transactionId: rtxId,
+        baseCoins,
+        bonusCoins,
+        totalCoins,
+        streakDay: nextStreak,
+        status,
+        message:
+          bonusCoins > 0
+            ? `অভিনন্দন! +${baseCoins} ডেইলি কয়েন এবং +${bonusCoins} স্ট্রিক বোনাস সহ মোট +${totalCoins} কয়েন যুক্ত হয়েছে।`
+            : `অভিনন্দন! +${totalCoins} কয়েন আপনার অ্যাকাউন্টে যুক্ত হয়েছে।`,
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'ডেইলি রিওয়ার্ড ক্লেইম সম্পন্ন করা যায়নি।');
+    }
+  });
+
+  router.get('/me/coin-history', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'লগইন প্রয়োজন।' });
+        return;
+      }
+      const { db, user } = resolved;
+      const siteSettings = await getGlobalSiteSettings(db);
+      const [balRow, txRows, streakStatus] = await Promise.all([
+        db.first<{
+          coins_available: number;
+          coins_lifetime_earned: number;
+          coins_redeemed: number;
+        }>('SELECT * FROM watch_earn_balances WHERE user_id = ? LIMIT 1', [user.uid]),
+        db.all<{
+          id: string;
+          type: string;
+          status: string;
+          coins: number;
+          payload_json: string;
+          created_at: number;
+        }>(
+          'SELECT id, type, status, coins, payload_json, created_at FROM ad_reward_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 200',
+          [user.uid]
+        ),
+        computeDailyRewardStatus(db, user.uid, siteSettings),
+      ]);
+
+      res.json({
+        ok: true,
+        coinsAvailable: Number(balRow?.coins_available || 0),
+        coinsLifetimeEarned: Number(balRow?.coins_lifetime_earned || 0),
+        coinsRedeemed: Number(balRow?.coins_redeemed || 0),
+        dailyRewardStatus: streakStatus,
+        transactions: txRows.map((row) => {
+          const parsed = parseJsonSafe<Record<string, unknown>>(row.payload_json, {});
+          return {
+            ...parsed,
+            id: String(parsed.id || row.id),
+            type: String(parsed.type || row.type),
+            status: String(parsed.status || row.status || 'Credited'),
+            coins: Number(parsed.coins ?? row.coins ?? 0),
+            createdAt: Number(parsed.createdAt || row.created_at || 0),
+          };
+        }),
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'কয়েন হিস্ট্রি লোড করা যায়নি।');
+    }
+  });
+
+  // =========================================================================
   // 9. PUBLIC CATALOG OVERRIDES & APPROVED REVIEWS
   // =========================================================================
   router.get('/payment-methods', async (_req, res) => {
@@ -3773,11 +4149,14 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       }
 
       const mappedPaymentMethods = pmRows.map(mapPaymentMethodRow);
+      const todayDhaka = getDhakaDateString();
       res.json({
         ok: true,
         overrides,
         reviews: reviewRows.map((r) => parseJsonSafe(r.payload_json, {})),
-        announcements: announcementRows.map((r) => parseJsonSafe(r.payload_json, {})),
+        announcements: announcementRows
+          .map((r) => parseJsonSafe<Record<string, unknown>>(r.payload_json, {}))
+          .filter((a) => isAnnouncementActiveNow(a, todayDhaka)),
         paymentMethods: mappedPaymentMethods.filter((m) => m.enabled),
         allPaymentMethods: mappedPaymentMethods,
       });
@@ -5529,23 +5908,43 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         messageBn?: string;
         messageEn?: string;
         type?: string;
+        imageUrl?: string;
+        startDate?: string;
+        expiresAt?: string;
+        dismissible?: boolean;
+        active?: boolean;
       };
+      const imageUrl = String(body.imageUrl || '').trim();
+      if (imageUrl && !isSafePackageAssetUrl(imageUrl)) {
+        res.status(400).json({ ok: false, error: 'Invalid announcement image URL.' });
+        return;
+      }
       const now = Date.now();
       const id = generateSecureId('ann', 8);
+      const isActive = body.active !== false;
       const payload = {
         id,
-        titleBn: String(body.titleBn || '').slice(0, 200),
-        titleEn: String(body.titleEn || '').slice(0, 200),
-        messageBn: String(body.messageBn || '').slice(0, 1000),
-        messageEn: String(body.messageEn || '').slice(0, 1000),
-        type: String(body.type || 'info'),
-        active: true,
+        titleBn: String(body.titleBn || '').trim().slice(0, 200),
+        titleEn: String(body.titleEn || '').trim().slice(0, 200),
+        messageBn: String(body.messageBn || '').trim().slice(0, 1000),
+        messageEn: String(body.messageEn || '').trim().slice(0, 1000),
+        type: String(body.type || 'general').trim().slice(0, 32),
+        ...(imageUrl ? { imageUrl } : {}),
+        ...(typeof body.startDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.startDate.trim())
+          ? { startDate: body.startDate.trim() }
+          : {}),
+        ...(typeof body.expiresAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.expiresAt.trim())
+          ? { expiresAt: body.expiresAt.trim() }
+          : {}),
+        dismissible: body.dismissible !== false,
+        active: isActive,
         createdBy: user.uid,
         createdAt: now,
+        updatedAt: now,
       };
       await db.run(
-        'INSERT INTO announcements (id, active, payload_json, created_at) VALUES (?, 1, ?, ?)',
-        [id, JSON.stringify(payload), now]
+        'INSERT INTO announcements (id, active, payload_json, created_at) VALUES (?, ?, ?, ?)',
+        [id, isActive ? 1 : 0, JSON.stringify(payload), now]
       );
       await insertAuditLog(
         db,
@@ -5557,9 +5956,96 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         `Published announcement: ${payload.titleEn || payload.titleBn}`,
         { newValue: payload.titleEn || payload.titleBn }
       );
-      res.status(201).json({ ok: true, id });
+      res.status(201).json({ ok: true, id, announcement: payload });
     } catch (err) {
       handleRouteError(res, err, 'Failed to broadcast announcement.');
+    }
+  });
+
+  router.put('/admin/announcements/:id', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const id = String(req.params.id || '').trim();
+      const row = await admin.db.first<{ payload_json: string; created_at: number }>(
+        'SELECT payload_json, created_at FROM announcements WHERE id = ? LIMIT 1',
+        [id]
+      );
+      if (!row) {
+        res.status(404).json({ ok: false, error: 'Announcement not found.' });
+        return;
+      }
+      const existing = parseJsonSafe<Record<string, unknown>>(row.payload_json, {});
+      const body = (req.body || {}) as {
+        titleBn?: string;
+        titleEn?: string;
+        messageBn?: string;
+        messageEn?: string;
+        type?: string;
+        imageUrl?: string;
+        startDate?: string;
+        expiresAt?: string;
+        dismissible?: boolean;
+        active?: boolean;
+      };
+      const imageUrl = body.imageUrl !== undefined ? String(body.imageUrl || '').trim() : String(existing.imageUrl || '');
+      if (imageUrl && !isSafePackageAssetUrl(imageUrl)) {
+        res.status(400).json({ ok: false, error: 'Invalid announcement image URL.' });
+        return;
+      }
+      const now = Date.now();
+      const nextActive = typeof body.active === 'boolean' ? body.active : existing.active !== false;
+      const cleanStartDate =
+        body.startDate !== undefined
+          ? /^\d{4}-\d{2}-\d{2}$/.test(String(body.startDate || '').trim())
+            ? String(body.startDate).trim()
+            : ''
+          : String(existing.startDate || '');
+      const cleanExpiresAt =
+        body.expiresAt !== undefined
+          ? /^\d{4}-\d{2}-\d{2}$/.test(String(body.expiresAt || '').trim())
+            ? String(body.expiresAt).trim()
+            : ''
+          : String(existing.expiresAt || '');
+
+      const nextPayload: Record<string, unknown> = {
+        ...existing,
+        id,
+        titleBn: body.titleBn !== undefined ? String(body.titleBn).trim().slice(0, 200) : existing.titleBn,
+        titleEn: body.titleEn !== undefined ? String(body.titleEn).trim().slice(0, 200) : existing.titleEn,
+        messageBn: body.messageBn !== undefined ? String(body.messageBn).trim().slice(0, 1000) : existing.messageBn,
+        messageEn: body.messageEn !== undefined ? String(body.messageEn).trim().slice(0, 1000) : existing.messageEn,
+        type: body.type !== undefined ? String(body.type).trim().slice(0, 32) : existing.type,
+        dismissible: typeof body.dismissible === 'boolean' ? body.dismissible : existing.dismissible !== false,
+        active: nextActive,
+        createdAt: existing.createdAt || row.created_at || now,
+        updatedAt: now,
+      };
+      if (imageUrl) nextPayload.imageUrl = imageUrl;
+      else delete nextPayload.imageUrl;
+      if (cleanStartDate) nextPayload.startDate = cleanStartDate;
+      else delete nextPayload.startDate;
+      if (cleanExpiresAt) nextPayload.expiresAt = cleanExpiresAt;
+      else delete nextPayload.expiresAt;
+
+      await admin.db.run('UPDATE announcements SET active = ?, payload_json = ? WHERE id = ?', [
+        nextActive ? 1 : 0,
+        JSON.stringify(nextPayload),
+        id,
+      ]);
+      await insertAuditLog(
+        admin.db,
+        admin.user.uid,
+        getUserPrimaryIdentifier(admin.user),
+        'ANNOUNCEMENT_UPDATED',
+        'announcements',
+        id,
+        `Updated announcement: ${String(nextPayload.titleEn || nextPayload.titleBn || id)}`,
+        { newValue: String(nextPayload.titleEn || nextPayload.titleBn || id) }
+      );
+      res.json({ ok: true, announcement: nextPayload });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to update announcement.');
     }
   });
 
@@ -6275,6 +6761,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         'adNetworks',
         'managedAdUnits',
         'banners',
+        'heroBanners',
         'coupons',
         'settings',
         'adRevenueEntries',
@@ -6564,12 +7051,77 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         };
       }
 
+      if (col === 'heroBanners') {
+        const imageUrl = String(body.data.imageUrl || '').trim();
+        const mobileImageUrl = String(body.data.mobileImageUrl || '').trim();
+        if (!imageUrl || !isSafePackageAssetUrl(imageUrl) || (mobileImageUrl && !isSafePackageAssetUrl(mobileImageUrl))) {
+          res.status(400).json({ ok: false, error: 'Valid Hero Banner image (uploaded asset or https:// URL) is required.' });
+          return;
+        }
+        const linkType = body.data.linkType === 'external_url' ? 'external_url' : 'internal_route';
+        let cleanTargetUrl = '';
+        if (linkType === 'external_url') {
+          const rawTarget = String(body.data.targetUrl || '').trim();
+          try {
+            const parsedUrl = new URL(rawTarget);
+            if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
+              res.status(400).json({ ok: false, error: 'External destination URL must use https:// or http://.' });
+              return;
+            }
+            cleanTargetUrl = parsedUrl.toString().slice(0, 600);
+          } catch {
+            res.status(400).json({ ok: false, error: 'Valid external URL is required.' });
+            return;
+          }
+        }
+        const deviceRaw = String(body.data.deviceVisibility || 'both');
+        const deviceVisibility = deviceRaw === 'desktop' || deviceRaw === 'mobile' ? deviceRaw : 'both';
+        const cleanStart =
+          typeof body.data.startDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.data.startDate.trim())
+            ? body.data.startDate.trim()
+            : '';
+        const cleanEnd =
+          typeof body.data.endDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.data.endDate.trim())
+            ? body.data.endDate.trim()
+            : '';
+
+        payloadToSave = {
+          id: docId,
+          badgeBn: String(body.data.badgeBn || '').trim().slice(0, 80),
+          badgeEn: String(body.data.badgeEn || '').trim().slice(0, 80),
+          titleBn: String(body.data.titleBn || body.data.titleEn || 'ডিজিটাল সার্ভিস').trim().slice(0, 180),
+          titleEn: String(body.data.titleEn || body.data.titleBn || 'Digital Services').trim().slice(0, 180),
+          subtitleBn: String(body.data.subtitleBn || '').trim().slice(0, 320),
+          subtitleEn: String(body.data.subtitleEn || '').trim().slice(0, 320),
+          buttonTextBn: String(body.data.buttonTextBn || 'এখনই দেখুন').trim().slice(0, 60),
+          buttonTextEn: String(body.data.buttonTextEn || 'Explore Now').trim().slice(0, 60),
+          linkType,
+          ctaRoute: linkType === 'internal_route' ? String(body.data.ctaRoute || 'services').trim().slice(0, 64) : undefined,
+          targetUrl: linkType === 'external_url' ? cleanTargetUrl : undefined,
+          openInNewTab: Boolean(body.data.openInNewTab ?? linkType === 'external_url'),
+          imageUrl,
+          ...(mobileImageUrl ? { mobileImageUrl } : {}),
+          deviceVisibility,
+          sortOrder: Math.max(0, Math.floor(Number(body.data.sortOrder ?? 1) || 1)),
+          enabled: body.data.enabled !== false,
+          ...(cleanStart ? { startDate: cleanStart } : {}),
+          ...(cleanEnd ? { endDate: cleanEnd } : {}),
+          createdAt: typeof body.data.createdAt === 'number' && body.data.createdAt > 0 ? body.data.createdAt : now,
+          updatedAt: now,
+        };
+      }
+
       if (col === 'settings' && docId === 'global') {
         payloadToSave = {
           ...payloadToSave,
           rewardedAdDailyLimit: Math.min(20, Math.max(1, Math.floor(Number(payloadToSave.rewardedAdDailyLimit ?? 10) || 10))),
           watchEarnCoinsPerAd: Math.max(1, Math.floor(Number(payloadToSave.watchEarnCoinsPerAd ?? 5) || 5)),
           watchEarnCoinsPerBdt: Math.max(1, Math.floor(Number(payloadToSave.watchEarnCoinsPerBdt ?? 10) || 10)),
+          heroAutoPlayMs: Math.min(20000, Math.max(2000, Math.floor(Number(payloadToSave.heroAutoPlayMs ?? 5500) || 5500))),
+          dailyRewardEnabled: payloadToSave.dailyRewardEnabled !== false,
+          dailyRewardCoins: Math.min(10000, Math.max(1, Math.floor(Number(payloadToSave.dailyRewardCoins ?? 10) || 10))),
+          streakEnabled: payloadToSave.streakEnabled !== false,
+          streakDay7BonusCoins: Math.min(10000, Math.max(0, Math.floor(Number(payloadToSave.streakDay7BonusCoins ?? 20) || 0))),
         };
       }
 
@@ -6632,6 +7184,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         col === 'settings' ||
         col === 'advertisements' ||
         col === 'banners' ||
+        col === 'heroBanners' ||
         col === 'managedAdUnits' ||
         col === 'categories' ||
         col === 'mobileApps' ||
@@ -7376,6 +7929,43 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           .sort((a, b) => b.count - a.count)
           .slice(0, limit);
 
+      const todayDhaka = getDhakaDateString(now);
+      const [
+        todayDailyClaimsRow,
+        totalDailyClaimsRow,
+        totalDailyCoinsRow,
+        heroBannerRows,
+        activeAnnRows,
+      ] = await Promise.all([
+        db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM daily_login_claims WHERE claim_date = ?', [
+          todayDhaka,
+        ]),
+        db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM daily_login_claims'),
+        db.first<{ totalCoins: number }>('SELECT COALESCE(SUM(total_coins), 0) AS totalCoins FROM daily_login_claims'),
+        db.all<{ payload_json: string }>(
+          `SELECT payload_json FROM catalog_overrides WHERE collection = 'heroBanners' AND deleted = 0`
+        ),
+        db.all<{ payload_json: string }>('SELECT payload_json FROM announcements WHERE active = 1'),
+      ]);
+
+      const activeHeroBannersCount =
+        heroBannerRows.length > 0
+          ? heroBannerRows
+              .map((r) => parseJsonSafe<Record<string, unknown>>(r.payload_json, {}))
+              .filter((b) => {
+                if (b.enabled === false) return false;
+                const s = typeof b.startDate === 'string' ? b.startDate.trim() : '';
+                const e = typeof b.endDate === 'string' ? b.endDate.trim() : '';
+                if (s && s > todayDhaka) return false;
+                if (e && e < todayDhaka) return false;
+                return true;
+              }).length
+          : 3;
+
+      const publishedAnnouncementsCount = activeAnnRows
+        .map((r) => parseJsonSafe<Record<string, unknown>>(r.payload_json, {}))
+        .filter((a) => isAnnouncementActiveNow(a, todayDhaka)).length;
+
       res.json({
         ok: true,
         range: { from: rangeFrom, to: rangeTo },
@@ -7392,6 +7982,11 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           todayDownloads: todayDownloadClicks,
           totalRewardClaims: Number(rewardClaimsRow?.cnt || 0),
           totalCoinsDistributed: Number(coinsTotalRow?.totalCoins || 0),
+          todayDailyRewardClaims: Number(todayDailyClaimsRow?.cnt || 0),
+          totalDailyRewardClaims: Number(totalDailyClaimsRow?.cnt || 0),
+          totalDailyRewardCoins: Number(totalDailyCoinsRow?.totalCoins || 0),
+          activeHeroBanners: activeHeroBannersCount,
+          publishedAnnouncements: publishedAnnouncementsCount,
           pendingWithdrawals: Number(pendingWithdrawalsRow?.cnt || 0),
           pendingTickets: Number(pendingTicketsRow?.cnt || 0),
         },
@@ -7948,6 +8543,100 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       res.json({ ok: true, previousCoins: prevCoins, coinsAvailable: nextCoins, transactionId: txId });
     } catch (err) {
       handleRouteError(res, err, 'Failed to adjust user coins.');
+    }
+  });
+
+  router.get('/admin/rewards/daily-claims', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db } = admin;
+      const dateFilter = String(req.query.date || '').trim();
+      const searchFilter = String(req.query.search || '').trim().toLowerCase();
+      const limit = Math.min(500, Math.max(20, Number(req.query.limit || 200) || 200));
+      const todayDate = getDhakaDateString();
+
+      const whereParts: string[] = [];
+      const params: unknown[] = [];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateFilter)) {
+        whereParts.push('c.claim_date = ?');
+        params.push(dateFilter);
+      }
+      if (searchFilter) {
+        whereParts.push('(LOWER(c.user_id) LIKE ? OR LOWER(COALESCE(u.display_name, \'\')) LIKE ? OR LOWER(COALESCE(u.email, \'\')) LIKE ?)');
+        const like = `%${searchFilter}%`;
+        params.push(like, like, like);
+      }
+      const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+      const [claimRows, todayCountRow, todayCoinsRow, totalCountRow, totalCoinsRow, activeStreaksRow] =
+        await Promise.all([
+          db.all<{
+            id: string;
+            user_id: string;
+            claim_date: string;
+            streak_day: number;
+            base_coins: number;
+            bonus_coins: number;
+            total_coins: number;
+            status: string;
+            transaction_id: string;
+            created_at: number;
+            display_name: string | null;
+            email: string | null;
+            phone_e164: string | null;
+          }>(
+            `SELECT c.*, u.display_name, u.email, u.phone_e164
+             FROM daily_login_claims c
+             LEFT JOIN users u ON u.uid = c.user_id
+             ${whereClause}
+             ORDER BY c.created_at DESC
+             LIMIT ?`,
+            [...params, limit]
+          ),
+          db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM daily_login_claims WHERE claim_date = ?', [
+            todayDate,
+          ]),
+          db.first<{ totalCoins: number }>(
+            'SELECT COALESCE(SUM(total_coins), 0) AS totalCoins FROM daily_login_claims WHERE claim_date = ?',
+            [todayDate]
+          ),
+          db.first<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM daily_login_claims'),
+          db.first<{ totalCoins: number }>(
+            'SELECT COALESCE(SUM(total_coins), 0) AS totalCoins FROM daily_login_claims'
+          ),
+          db.first<{ cnt: number }>(
+            'SELECT COUNT(*) AS cnt FROM daily_login_streaks WHERE current_streak >= 2'
+          ),
+        ]);
+
+      res.json({
+        ok: true,
+        todayDate,
+        stats: {
+          todayClaims: Number(todayCountRow?.cnt || 0),
+          todayCoinsDistributed: Number(todayCoinsRow?.totalCoins || 0),
+          totalClaims: Number(totalCountRow?.cnt || 0),
+          totalCoinsDistributed: Number(totalCoinsRow?.totalCoins || 0),
+          activeStreaks: Number(activeStreaksRow?.cnt || 0),
+        },
+        claims: claimRows.map((c) => ({
+          id: c.id,
+          userId: c.user_id,
+          displayName: c.display_name || c.user_id,
+          contact: c.email || extractPublicPhone(c.phone_e164) || c.user_id,
+          claimDate: c.claim_date,
+          streakDay: Number(c.streak_day || 1),
+          baseCoins: Number(c.base_coins || 10),
+          bonusCoins: Number(c.bonus_coins || 0),
+          totalCoins: Number(c.total_coins || 10),
+          status: c.status || 'Credited',
+          transactionId: c.transaction_id || c.id,
+          createdAt: Number(c.created_at || 0),
+        })),
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load daily reward claims.');
     }
   });
 

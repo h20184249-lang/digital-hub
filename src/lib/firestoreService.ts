@@ -19,6 +19,7 @@ import {
   DEFAULT_BANNERS,
   DEFAULT_CATEGORIES,
   DEFAULT_COUPONS,
+  DEFAULT_HERO_BANNERS,
   DEFAULT_PRODUCTS,
   DEFAULT_SITE_SETTINGS,
 } from './seedData';
@@ -40,6 +41,7 @@ import {
   Advertisement,
   AnalyticsEventType,
   Announcement,
+  AnnouncementType,
   AppBrokenReport,
   AppMetaPayload,
   AppNotification,
@@ -49,9 +51,12 @@ import {
   CartItem,
   Category,
   Coupon,
+  DailyRewardClaimRecord,
+  DailyRewardStatus,
   DownloadHistoryItem,
   GameItem,
   GameMetaPayload,
+  HeroBanner,
   ManagedAdUnitConfig,
   Order,
   OrderStatus,
@@ -176,7 +181,7 @@ export function notifyCatalogInvalidation(): void {
 
 async function apiJson<T>(
   path: string,
-  options: { method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'; body?: unknown } = {}
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'; body?: unknown } = {}
 ): Promise<T> {
   const method = options.method || 'GET';
   const resp = await fetch(apiUrl(path), {
@@ -754,12 +759,31 @@ export function subscribeManagedAdUnits(cb: (items: ManagedAdUnitConfig[]) => vo
   };
 }
 
+function getDhakaTodayIso(): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Dhaka',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+  } catch {
+    return new Date(Date.now() + 6 * 3600 * 1000).toISOString().slice(0, 10);
+  }
+}
+
 export function subscribeAnnouncements(cb: (items: Announcement[]) => void): Unsubscribe {
   const emit = async (force = false) => {
     const { announcements } = await fetchCatalogOverrides(force);
+    const today = getDhakaTodayIso();
     cb(
       announcements
-        .filter((a) => a.active)
+        .filter((a) => {
+          if (!a.active) return false;
+          if (a.startDate && a.startDate > today) return false;
+          if (a.expiresAt && a.expiresAt < today) return false;
+          return true;
+        })
         .sort((a, b) => getTimeMs(b.createdAt) - getTimeMs(a.createdAt))
     );
   };
@@ -773,6 +797,26 @@ export function subscribeAnnouncements(cb: (items: Announcement[]) => void): Uns
   return () => {
     unsub1();
     unsub2();
+  };
+}
+
+export function subscribeHeroBanners(cb: (items: HeroBanner[]) => void): Unsubscribe {
+  const emit = async (force = false) => {
+    const { overrides } = await fetchCatalogOverrides(force);
+    const rows = overrides.heroBanners || [];
+    if (rows.length === 0) {
+      cb(DEFAULT_HERO_BANNERS);
+      return;
+    }
+    const merged = applyCollectionOverrides(DEFAULT_HERO_BANNERS, rows);
+    cb(merged.sort((a, b) => (a.sortOrder ?? 99) - (b.sortOrder ?? 99)));
+  };
+  emit(false).catch(() => cb(DEFAULT_HERO_BANNERS));
+  const unsubCat = subscribeCatalogInvalidation(() => {
+    emit(true).catch(() => {});
+  });
+  return () => {
+    unsubCat();
   };
 }
 
@@ -2425,7 +2469,12 @@ export async function adminBroadcastAnnouncementServer(params: {
   titleEn: string;
   messageBn: string;
   messageEn: string;
-  type: 'info' | 'promo' | 'policy' | 'maintenance';
+  type: AnnouncementType;
+  imageUrl?: string;
+  startDate?: string;
+  expiresAt?: string;
+  dismissible?: boolean;
+  active?: boolean;
 }): Promise<{ id: string }> {
   const res = await apiJson<{ ok: true; id: string }>('/api/admin/broadcast-announcement', {
     method: 'POST',
@@ -2434,6 +2483,29 @@ export async function adminBroadcastAnnouncementServer(params: {
   notifyDashboardInvalidation();
   notifyCatalogInvalidation();
   return { id: res.id };
+}
+
+export async function adminUpdateAnnouncementServer(
+  id: string,
+  params: {
+    titleBn?: string;
+    titleEn?: string;
+    messageBn?: string;
+    messageEn?: string;
+    type?: AnnouncementType;
+    imageUrl?: string;
+    startDate?: string;
+    expiresAt?: string;
+    dismissible?: boolean;
+    active?: boolean;
+  }
+): Promise<void> {
+  await apiJson(`/api/admin/announcements/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: params,
+  });
+  notifyDashboardInvalidation();
+  notifyCatalogInvalidation();
 }
 
 export async function adminToggleAnnouncementActive(id: string, active: boolean): Promise<void> {
@@ -2819,6 +2891,130 @@ export async function adminSaveBanner(banner: Banner, _isNew: boolean): Promise<
 
 export async function adminDeleteBanner(bannerId: string): Promise<void> {
   await deleteCatalogOverride('banners', bannerId);
+}
+
+export async function adminSaveHeroBanner(banner: HeroBanner, _isNew: boolean): Promise<void> {
+  await saveCatalogOverride('heroBanners', banner.id, banner as unknown as Record<string, unknown>);
+}
+
+export async function adminDeleteHeroBanner(bannerId: string): Promise<void> {
+  await deleteCatalogOverride('heroBanners', bannerId);
+}
+
+export async function fetchDailyRewardStatusServer(): Promise<DailyRewardStatus | null> {
+  try {
+    const res = await apiJson<{ ok: true; status: DailyRewardStatus }>('/api/rewards/daily-status', {
+      method: 'GET',
+    });
+    return res.status;
+  } catch {
+    return null;
+  }
+}
+
+export async function claimDailyRewardServer(): Promise<{
+  ok: boolean;
+  alreadyClaimed?: boolean;
+  claimId?: string;
+  transactionId?: string;
+  baseCoins?: number;
+  bonusCoins?: number;
+  totalCoins?: number;
+  streakDay?: number;
+  status?: DailyRewardStatus;
+  message?: string;
+  error?: string;
+}> {
+  const resp = await fetch(apiUrl('/api/rewards/daily-claim'), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const data = (await resp.json().catch(() => ({}))) as {
+    ok?: boolean;
+    alreadyClaimed?: boolean;
+    claimId?: string;
+    transactionId?: string;
+    baseCoins?: number;
+    bonusCoins?: number;
+    totalCoins?: number;
+    streakDay?: number;
+    status?: DailyRewardStatus;
+    message?: string;
+    error?: string;
+  };
+  notifyDashboardInvalidation();
+  return {
+    ok: Boolean(resp.ok && data.ok),
+    alreadyClaimed: data.alreadyClaimed,
+    claimId: data.claimId,
+    transactionId: data.transactionId,
+    baseCoins: data.baseCoins,
+    bonusCoins: data.bonusCoins,
+    totalCoins: data.totalCoins,
+    streakDay: data.streakDay,
+    status: data.status,
+    message: data.message,
+    error: data.error,
+  };
+}
+
+export async function fetchMyCoinHistoryServer(): Promise<{
+  coinsAvailable: number;
+  coinsLifetimeEarned: number;
+  coinsRedeemed: number;
+  dailyRewardStatus: DailyRewardStatus | null;
+  transactions: AdRewardTransaction[];
+} | null> {
+  try {
+    const res = await apiJson<{
+      ok: true;
+      coinsAvailable: number;
+      coinsLifetimeEarned: number;
+      coinsRedeemed: number;
+      dailyRewardStatus: DailyRewardStatus | null;
+      transactions: AdRewardTransaction[];
+    }>('/api/me/coin-history', { method: 'GET' });
+    return res;
+  } catch {
+    return null;
+  }
+}
+
+export async function adminFetchDailyRewardClaims(params?: {
+  date?: string;
+  search?: string;
+  limit?: number;
+}): Promise<{
+  todayDate: string;
+  stats: {
+    todayClaims: number;
+    todayCoinsDistributed: number;
+    totalClaims: number;
+    totalCoinsDistributed: number;
+    activeStreaks: number;
+  };
+  claims: DailyRewardClaimRecord[];
+}> {
+  const q = new URLSearchParams();
+  if (params?.date) q.set('date', params.date);
+  if (params?.search) q.set('search', params.search);
+  if (params?.limit) q.set('limit', String(params.limit));
+  const qs = q.toString();
+  const res = await apiJson<{
+    ok: true;
+    todayDate: string;
+    stats: {
+      todayClaims: number;
+      todayCoinsDistributed: number;
+      totalClaims: number;
+      totalCoinsDistributed: number;
+      activeStreaks: number;
+    };
+    claims: DailyRewardClaimRecord[];
+  }>(`/api/admin/rewards/daily-claims${qs ? `?${qs}` : ''}`, { method: 'GET' });
+  return { todayDate: res.todayDate, stats: res.stats, claims: res.claims };
 }
 
 export async function adminSaveCoupon(coupon: Coupon, _isNew: boolean): Promise<void> {

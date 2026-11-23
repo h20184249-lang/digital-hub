@@ -417,6 +417,77 @@ export interface Banner {
   updatedAt?: unknown;
 }
 
+export type HeroBannerLinkType = 'internal_route' | 'external_url';
+export type HeroBannerDevice = 'both' | 'desktop' | 'mobile';
+
+export interface HeroBanner {
+  id: string;
+  badgeBn: string;
+  badgeEn: string;
+  titleBn: string;
+  titleEn: string;
+  subtitleBn: string;
+  subtitleEn: string;
+  buttonTextBn: string;
+  buttonTextEn: string;
+  linkType: HeroBannerLinkType;
+  ctaRoute?: AppRoute;
+  targetUrl?: string;
+  openInNewTab?: boolean;
+  imageUrl: string;
+  mobileImageUrl?: string;
+  deviceVisibility: HeroBannerDevice;
+  sortOrder: number;
+  enabled: boolean;
+  startDate?: string;
+  endDate?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface DailyRewardDayItem {
+  dayNumber: number;
+  labelEn: string;
+  labelBn: string;
+  coins: number;
+  claimed: boolean;
+  isCurrent: boolean;
+  isBonusMilestone: boolean;
+}
+
+export interface DailyRewardClaimRecord {
+  id: string;
+  userId: string;
+  displayName?: string;
+  contact?: string;
+  claimDate: string;
+  streakDay: number;
+  baseCoins: number;
+  bonusCoins: number;
+  totalCoins: number;
+  status: 'Credited' | 'Rejected' | string;
+  transactionId: string;
+  createdAt: number;
+}
+
+export interface DailyRewardStatus {
+  enabled: boolean;
+  dailyCoins: number;
+  streakEnabled: boolean;
+  streakDay7BonusCoins: number;
+  todayDate: string;
+  nextResetAt: number;
+  isAuthenticated: boolean;
+  claimedToday: boolean;
+  currentStreak: number;
+  longestStreak: number;
+  lastClaimDate: string;
+  totalClaims: number;
+  coinsAvailable: number;
+  todayClaim?: DailyRewardClaimRecord | null;
+  weekDays: DailyRewardDayItem[];
+}
+
 export type AdSlotCategory =
   | 'main_ad'
   | 'reward_ad'
@@ -502,9 +573,17 @@ export interface AdRewardTransaction {
   provider: string;
   coins: number;
   bdtEquivalent: number;
-  type: 'coin_credit' | 'watch_earn_credit' | 'coin_redemption';
+  type:
+    | 'coin_credit'
+    | 'watch_earn_credit'
+    | 'coin_redemption'
+    | 'daily_login_reward'
+    | 'daily_login_streak_bonus'
+    | 'admin_coin_credit'
+    | 'admin_coin_deduct';
   status: 'Pending Credit' | 'Credited' | 'Rejected';
   note?: string;
+  refId?: string;
   createdAt?: unknown;
 }
 
@@ -651,6 +730,11 @@ export interface SiteSettings {
   watchEarnCoinsPerBdt?: number;
   watchEarnDailyCoinLimit?: number;
   watchEarnMinRedeemCoins?: number;
+  heroAutoPlayMs?: number;
+  dailyRewardEnabled?: boolean;
+  dailyRewardCoins?: number;
+  streakEnabled?: boolean;
+  streakDay7BonusCoins?: number;
   adsEnabled: boolean;
   maintenanceMode?: boolean;
   defaultTheme?: 'light' | 'dark';
@@ -678,6 +762,7 @@ export interface SiteSettings {
 
 export type HomepageSectionId =
   | 'hero'
+  | 'daily_reward'
   | 'quick_categories'
   | 'browse_23'
   | 'pwa_card'
@@ -775,16 +860,31 @@ export interface WithdrawalRequest {
   updatedAt?: unknown;
 }
 
+export type AnnouncementType =
+  | 'info'
+  | 'promo'
+  | 'policy'
+  | 'maintenance'
+  | 'general'
+  | 'offer'
+  | 'update'
+  | 'important';
+
 export interface Announcement {
   id: string;
   titleBn: string;
   titleEn: string;
   messageBn: string;
   messageEn: string;
-  type: 'info' | 'promo' | 'policy' | 'maintenance';
+  type: AnnouncementType;
+  imageUrl?: string;
+  startDate?: string;
+  expiresAt?: string;
+  dismissible?: boolean;
   createdBy: string;
   active: boolean;
   createdAt?: unknown;
+  updatedAt?: unknown;
 }
 
 export interface RewardedAdClaim {
@@ -950,6 +1050,11 @@ export interface AdminAnalyticsPayload {
     todayDownloads: number;
     totalRewardClaims: number;
     totalCoinsDistributed: number;
+    todayDailyRewardClaims?: number;
+    totalDailyRewardClaims?: number;
+    totalDailyRewardCoins?: number;
+    activeHeroBanners?: number;
+    publishedAnnouncements?: number;
     pendingWithdrawals: number;
     pendingTickets: number;
   };

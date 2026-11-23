@@ -2,7 +2,10 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Bell,
+  Calendar,
   CheckCircle2,
+  Edit3,
+  Image as ImageIcon,
   KeyRound,
   Lock,
   MessageSquare,
@@ -18,11 +21,13 @@ import {
   Trash2,
   Unlock,
   Upload,
+  X,
   XCircle,
 } from 'lucide-react';
 import {
   AdminSecurityPayload,
   Announcement,
+  AnnouncementType,
   AuditLog,
   Category,
   Coupon,
@@ -57,11 +62,14 @@ import {
   adminToggleAnnouncementActive,
   adminToggleReviewApproval,
   adminUnlockAuthAttempt,
+  adminUpdateAnnouncementServer,
   adminUpdateOrderStatus,
+  adminUploadMediaAsset,
   adminVerifyPaymentServer,
   compressImageToDataUrl,
   formatDateShort,
   generateId,
+  optimizePackageLogoFile,
 } from '../../lib/firestoreService';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -98,13 +106,64 @@ export function AdminNotificationsPanel({
   const [messageBn, setMessageBn] = useState('');
   const [sending, setSending] = useState(false);
 
-  // Announcement Form
-  const [annType, setAnnType] = useState<'info' | 'promo' | 'policy' | 'maintenance'>('info');
+  // Announcement Form (Create + Edit)
+  const [editingAnnId, setEditingAnnId] = useState<string | null>(null);
+  const [annType, setAnnType] = useState<AnnouncementType>('general');
   const [annTitleEn, setAnnTitleEn] = useState('');
   const [annTitleBn, setAnnTitleBn] = useState('');
   const [annMsgEn, setAnnMsgEn] = useState('');
   const [annMsgBn, setAnnMsgBn] = useState('');
+  const [annImageUrl, setAnnImageUrl] = useState('');
+  const [annStartDate, setAnnStartDate] = useState('');
+  const [annExpiresAt, setAnnExpiresAt] = useState('');
+  const [annDismissible, setAnnDismissible] = useState(true);
+  const [annActive, setAnnActive] = useState(true);
+  const [uploadingAnnImg, setUploadingAnnImg] = useState(false);
   const [postingAnn, setPostingAnn] = useState(false);
+
+  const resetAnnForm = () => {
+    setEditingAnnId(null);
+    setAnnType('general');
+    setAnnTitleEn('');
+    setAnnTitleBn('');
+    setAnnMsgEn('');
+    setAnnMsgBn('');
+    setAnnImageUrl('');
+    setAnnStartDate('');
+    setAnnExpiresAt('');
+    setAnnDismissible(true);
+    setAnnActive(true);
+  };
+
+  const handleUploadAnnouncementImage = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadingAnnImg(true);
+    try {
+      const optimized = await optimizePackageLogoFile(file, 1024);
+      const uploaded = await adminUploadMediaAsset(optimized);
+      setAnnImageUrl(uploaded.url);
+      onSuccess('Announcement image uploaded.');
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to upload announcement image.');
+    } finally {
+      setUploadingAnnImg(false);
+    }
+  };
+
+  const todayDhakaIso = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Dhaka',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date());
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  }, []);
 
   const filteredPickerUsers = useMemo(() => {
     const q = userPickerSearch.trim().toLowerCase();
@@ -169,25 +228,40 @@ export function AdminNotificationsPanel({
     }
   };
 
-  const handleCreateAnnouncement = async (e: FormEvent) => {
+  const handleSaveAnnouncement = async (e: FormEvent) => {
     e.preventDefault();
-    if (!annTitleEn.trim() || !annMsgEn.trim()) return;
+    if (!annTitleEn.trim() || !annMsgEn.trim()) {
+      onError('Announcement title and message are required.');
+      return;
+    }
+    if (annStartDate && annExpiresAt && annExpiresAt < annStartDate) {
+      onError('Expiration date cannot be earlier than start date.');
+      return;
+    }
     setPostingAnn(true);
     try {
-      await adminBroadcastAnnouncementServer({
+      const payload = {
         titleEn: annTitleEn.trim(),
         titleBn: annTitleBn.trim() || annTitleEn.trim(),
         messageEn: annMsgEn.trim(),
         messageBn: annMsgBn.trim() || annMsgEn.trim(),
         type: annType,
-      });
-      onSuccess('Public site announcement published.');
-      setAnnTitleEn('');
-      setAnnTitleBn('');
-      setAnnMsgEn('');
-      setAnnMsgBn('');
+        imageUrl: annImageUrl.trim(),
+        startDate: annStartDate.trim(),
+        expiresAt: annExpiresAt.trim(),
+        dismissible: annDismissible,
+        active: annActive,
+      };
+      if (editingAnnId) {
+        await adminUpdateAnnouncementServer(editingAnnId, payload);
+        onSuccess('Public site announcement updated.');
+      } else {
+        await adminBroadcastAnnouncementServer(payload);
+        onSuccess('Public site announcement published.');
+      }
+      resetAnnForm();
     } catch (err) {
-      onError(err instanceof Error ? err.message : 'Failed to publish announcement.');
+      onError(err instanceof Error ? err.message : 'Failed to save announcement.');
     } finally {
       setPostingAnn(false);
     }
@@ -397,20 +471,41 @@ export function AdminNotificationsPanel({
 
       {/* Public Announcements Manager */}
       <form
-        onSubmit={handleCreateAnnouncement}
+        onSubmit={handleSaveAnnouncement}
         className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-3"
       >
-        <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100">
-          {lang === 'bn' ? 'সাইট অ্যানাউন্সমেন্ট ব্যানার' : 'Site-Wide Announcements'}
-        </h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100">
+            {editingAnnId
+              ? lang === 'bn'
+                ? 'অ্যানাউন্সমেন্ট এডিট করুন'
+                : 'Edit Site Announcement'
+              : lang === 'bn'
+                ? 'সাইট অ্যানাউন্সমেন্ট ব্যানার'
+                : 'Site-Wide Announcements'}
+          </h3>
+          {editingAnnId && (
+            <button
+              type="button"
+              onClick={resetAnnForm}
+              className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 font-bold inline-flex items-center gap-1 cursor-pointer"
+            >
+              <X className="w-3 h-3" /> Cancel Edit
+            </button>
+          )}
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <select
             value={annType}
-            onChange={(e) => setAnnType(e.target.value as 'info' | 'promo' | 'policy' | 'maintenance')}
+            onChange={(e) => setAnnType(e.target.value as AnnouncementType)}
             className="px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
           >
-            <option value="info">Info</option>
-            <option value="promo">Promo</option>
+            <option value="general">General</option>
+            <option value="offer">Special Offer</option>
+            <option value="update">Platform Update</option>
+            <option value="important">Important Alert</option>
+            <option value="info">Info (Legacy)</option>
+            <option value="promo">Promo (Legacy)</option>
             <option value="policy">Policy</option>
             <option value="maintenance">Maintenance</option>
           </select>
@@ -445,61 +540,192 @@ export function AdminNotificationsPanel({
             className="px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
           />
         </div>
-        <div className="flex justify-end">
+
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-1">
+          <div className="sm:col-span-2 flex items-center gap-2">
+            <input
+              type="text"
+              value={annImageUrl}
+              onChange={(e) => setAnnImageUrl(e.target.value)}
+              placeholder="Optional announcement image URL or upload..."
+              className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+            />
+            <label className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-bold inline-flex items-center gap-1 cursor-pointer hover:border-[#FF8500] shrink-0">
+              <Upload className="w-3.5 h-3.5 text-[#FF8500]" />
+              <span>{uploadingAnnImg ? '...' : 'Image'}</span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                disabled={uploadingAnnImg}
+                onChange={(e) => void handleUploadAnnouncementImage(e)}
+              />
+            </label>
+          </div>
+          <div>
+            <input
+              type="date"
+              value={annStartDate}
+              onChange={(e) => setAnnStartDate(e.target.value)}
+              title="Start Date (optional)"
+              className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+            />
+          </div>
+          <div>
+            <input
+              type="date"
+              value={annExpiresAt}
+              onChange={(e) => setAnnExpiresAt(e.target.value)}
+              title="Expiration Date (optional)"
+              className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="inline-flex items-center gap-2 font-bold cursor-pointer">
+              <input
+                type="checkbox"
+                checked={annDismissible}
+                onChange={(e) => setAnnDismissible(e.target.checked)}
+                className="accent-[#FF8500]"
+              />
+              <span>Dismissible by visitors</span>
+            </label>
+            <label className="inline-flex items-center gap-2 font-bold cursor-pointer">
+              <input
+                type="checkbox"
+                checked={annActive}
+                onChange={(e) => setAnnActive(e.target.checked)}
+                className="accent-[#FF8500]"
+              />
+              <span>Published / Active</span>
+            </label>
+          </div>
           <button
             type="submit"
-            disabled={postingAnn}
-            className="px-4 py-2 rounded-xl bg-[#172033] dark:bg-[#FF8500] text-white font-bold disabled:opacity-50"
+            disabled={postingAnn || uploadingAnnImg}
+            className="px-4 py-2 rounded-xl bg-[#172033] dark:bg-[#FF8500] text-white font-bold disabled:opacity-50 cursor-pointer"
           >
-            {postingAnn ? 'Publishing...' : 'Publish Announcement'}
+            {postingAnn
+              ? 'Saving...'
+              : editingAnnId
+                ? 'Update Announcement'
+                : 'Publish Announcement'}
           </button>
         </div>
       </form>
 
       <div className="space-y-2.5">
-        {announcements.map((a) => (
-          <div
-            key={a.id}
-            className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-          >
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 font-bold uppercase text-[10px]">
-                  {a.type}
-                </span>
-                <p className="font-bold text-[#172033] dark:text-slate-100">{a.titleEn}</p>
+        {announcements.map((a) => {
+          const isScheduled = Boolean(a.startDate && a.startDate > todayDhakaIso);
+          const isExpired = Boolean(a.expiresAt && a.expiresAt < todayDhakaIso);
+          return (
+            <div
+              key={a.id}
+              className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+            >
+              <div className="flex items-start gap-3 min-w-0">
+                {a.imageUrl && (
+                  <img
+                    src={a.imageUrl}
+                    alt={a.titleEn}
+                    className="w-12 h-12 rounded-xl object-cover shrink-0 border border-[#E6ECFA] dark:border-slate-700"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                )}
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 font-bold uppercase text-[10px]">
+                      {a.type}
+                    </span>
+                    {!a.active ? (
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold text-[10px]">
+                        Paused
+                      </span>
+                    ) : isExpired ? (
+                      <span className="px-2 py-0.5 rounded-md bg-red-50 dark:bg-red-950/40 text-[#DC2626] font-bold text-[10px]">
+                        Expired {a.expiresAt}
+                      </span>
+                    ) : isScheduled ? (
+                      <span className="px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 font-bold text-[10px]">
+                        Starts {a.startDate}
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-bold text-[10px]">
+                        Live on Homepage
+                      </span>
+                    )}
+                    <p className="font-bold text-[#172033] dark:text-slate-100 truncate">{a.titleEn}</p>
+                  </div>
+                  <p className="text-[#777777] dark:text-slate-400 mt-0.5">{a.messageEn}</p>
+                  {(a.startDate || a.expiresAt || a.dismissible === false) && (
+                    <p className="text-[10px] font-mono-num text-[#777777] dark:text-slate-400 mt-1 flex items-center gap-2">
+                      {(a.startDate || a.expiresAt) && (
+                        <span className="inline-flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
+                          {a.startDate || 'Now'} → {a.expiresAt || 'No expiry'}
+                        </span>
+                      )}
+                      {a.dismissible === false && <span>· Pinned (non-dismissible)</span>}
+                    </p>
+                  )}
+                </div>
               </div>
-              <p className="text-[#777777] dark:text-slate-400 mt-0.5">{a.messageEn}</p>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingAnnId(a.id);
+                    setAnnType(a.type || 'general');
+                    setAnnTitleEn(a.titleEn || '');
+                    setAnnTitleBn(a.titleBn || '');
+                    setAnnMsgEn(a.messageEn || '');
+                    setAnnMsgBn(a.messageBn || '');
+                    setAnnImageUrl(a.imageUrl || '');
+                    setAnnStartDate(a.startDate || '');
+                    setAnnExpiresAt(a.expiresAt || '');
+                    setAnnDismissible(a.dismissible !== false);
+                    setAnnActive(a.active !== false);
+                  }}
+                  className="p-1.5 rounded-lg bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-200 cursor-pointer"
+                  title="Edit Announcement"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await adminToggleAnnouncementActive(a.id, !a.active);
+                    onSuccess(`Announcement ${!a.active ? 'activated' : 'paused'}.`);
+                  }}
+                  className={`px-3 py-1 rounded-lg font-bold cursor-pointer ${
+                    a.active
+                      ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                  }`}
+                >
+                  {a.active ? 'Active' : 'Paused'}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (editingAnnId === a.id) resetAnnForm();
+                    await adminDeleteAnnouncement(a.id);
+                    onSuccess('Announcement deleted.');
+                  }}
+                  className="p-1.5 rounded-lg bg-red-50 dark:bg-red-950/50 text-[#DC2626] cursor-pointer"
+                  title="Delete"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={async () => {
-                  await adminToggleAnnouncementActive(a.id, !a.active);
-                  onSuccess(`Announcement ${!a.active ? 'activated' : 'paused'}.`);
-                }}
-                className={`px-3 py-1 rounded-lg font-bold ${
-                  a.active
-                    ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                }`}
-              >
-                {a.active ? 'Active' : 'Paused'}
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  await adminDeleteAnnouncement(a.id);
-                  onSuccess('Announcement deleted.');
-                }}
-                className="p-1.5 rounded-lg bg-red-50 dark:bg-red-950/50 text-[#DC2626]"
-                title="Delete"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

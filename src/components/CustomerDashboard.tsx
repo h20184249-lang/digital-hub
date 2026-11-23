@@ -74,6 +74,7 @@ import {
   cancelCustomerOrder,
   compressImageToDataUrl,
   createSupportTicket,
+  fetchMyCoinHistoryServer,
   formatDateShort,
   getTimeMs,
   markAllNotificationsRead,
@@ -187,8 +188,23 @@ export function CustomerDashboard({
   const [copiedRef, setCopiedRef] = useState(false);
   const [copiedUid, setCopiedUid] = useState(false);
   const [notifFilter, setNotifFilter] = useState<'all' | 'new_app' | 'app_update' | 'announcement' | 'download' | 'payment' | 'support' | 'reward'>('all');
+  const [coinFilter, setCoinFilter] = useState<'all' | 'daily_login' | 'watch_earn' | 'bonus' | 'redemption'>('all');
+  const [liveCoinHistory, setLiveCoinHistory] = useState<AdRewardTransaction[] | null>(null);
+  const [liveCoinBalance, setLiveCoinBalance] = useState<number | null>(null);
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [unfavoritingId, setUnfavoritingId] = useState('');
+
+  useEffect(() => {
+    if (tab !== 'rewards' || !user) return;
+    fetchMyCoinHistoryServer()
+      .then((res) => {
+        if (res) {
+          setLiveCoinHistory(res.transactions);
+          setLiveCoinBalance(res.coinsAvailable);
+        }
+      })
+      .catch(() => {});
+  }, [tab, user?.uid, adRewardTransactions.length]);
 
   // Support ticket state
   const [ticketCategory, setTicketCategory] = useState('general');
@@ -1598,71 +1614,191 @@ export function CustomerDashboard({
           </div>
 
           {/* Complete Coin & Reward History Ledger */}
-          <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h2 className="text-lg font-bold text-[#172033] flex items-center gap-2">
-                  <Coins className="w-5 h-5 text-[#FF8500]" />
-                  {lang === 'bn' ? 'সম্পূর্ণ কয়েন ও রিওয়ার্ড হিস্টোরি' : 'Reward History & Coin Ledger'}
-                </h2>
-                <p className="text-xs text-[#777777]">
-                  {lang === 'bn'
-                    ? 'ওয়াচ অ্যান্ড আর্ন, অ্যাডমিন বোনাস এবং কয়েন রিডেম্পশন ইতিহাস'
-                    : 'Verified coin earnings, admin adjustments, and wallet redemptions'}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="px-3 py-1.5 rounded-xl bg-[#FFF7EE] border border-[#FF8500]/30 text-xs font-extrabold font-mono-num text-[#FF8500]">
-                  {wallet?.coinsAvailable || 0} Coins
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onNavigate('watch-earn')}
-                  className="px-3.5 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold"
-                >
-                  {lang === 'bn' ? 'আরও কয়েন আয়' : 'Earn More'}
-                </button>
-              </div>
-            </div>
+          {(() => {
+            const coinSourceTxs = liveCoinHistory ?? adRewardTransactions;
+            const filteredCoinTxs = coinSourceTxs.filter((ct) => {
+              if (coinFilter === 'all') return true;
+              if (coinFilter === 'daily_login') {
+                return ct.type === 'daily_login_reward' || ct.type === 'daily_login_streak_bonus';
+              }
+              if (coinFilter === 'watch_earn') {
+                return ct.type === 'watch_earn_credit' || ct.type === 'coin_credit';
+              }
+              if (coinFilter === 'bonus') {
+                return ct.type === 'admin_coin_credit' || ct.type === 'admin_coin_deduct';
+              }
+              if (coinFilter === 'redemption') {
+                return ct.type === 'coin_redemption';
+              }
+              return true;
+            });
 
-            {adRewardTransactions.length === 0 ? (
-              <p className="text-xs text-[#777777] py-4 text-center">
-                {lang === 'bn' ? 'এখনো কোনো কয়েন লেনদেন রেকর্ড হয়নি।' : 'No coin transactions recorded yet.'}
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {adRewardTransactions.slice(0, 20).map((ct) => {
-                  const isDebit = ct.type === 'coin_redemption' || ct.coins < 0;
-                  return (
-                    <div
-                      key={ct.id}
-                      className="p-3 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex items-center justify-between gap-3 text-xs"
+            const getCoinSourceMeta = (ct: AdRewardTransaction) => {
+              switch (ct.type) {
+                case 'daily_login_reward':
+                  return {
+                    label: lang === 'bn' ? 'ডেইলি লগইন' : 'Daily Login',
+                    badge: 'bg-amber-100 text-amber-800 border-amber-200',
+                  };
+                case 'daily_login_streak_bonus':
+                  return {
+                    label: lang === 'bn' ? 'স্ট্রিক বোনাস' : 'Streak Bonus',
+                    badge: 'bg-emerald-100 text-[#16A34A] border-emerald-200',
+                  };
+                case 'watch_earn_credit':
+                case 'coin_credit':
+                  return {
+                    label: lang === 'bn' ? 'ওয়াচ ও আর্ন' : 'Watch & Earn',
+                    badge: 'bg-blue-100 text-blue-700 border-blue-200',
+                  };
+                case 'admin_coin_credit':
+                case 'admin_coin_deduct':
+                  return {
+                    label: lang === 'bn' ? 'অ্যাডমিন সমন্বয়' : 'Admin Bonus',
+                    badge: 'bg-violet-100 text-violet-700 border-violet-200',
+                  };
+                case 'coin_redemption':
+                  return {
+                    label: lang === 'bn' ? 'কয়েন রিডিম' : 'Redemption',
+                    badge: 'bg-rose-100 text-rose-700 border-rose-200',
+                  };
+                default:
+                  return {
+                    label: ct.provider || 'REWARD',
+                    badge: 'bg-slate-100 text-slate-700 border-slate-200',
+                  };
+              }
+            };
+
+            const formatDhakaDateTime = (ts: unknown) => {
+              const ms = getTimeMs(ts);
+              if (!ms) return lang === 'bn' ? 'এইমাত্র' : 'Just now';
+              try {
+                return new Date(ms).toLocaleString(lang === 'bn' ? 'bn-BD' : 'en-US', {
+                  timeZone: 'Asia/Dhaka',
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                });
+              } catch {
+                return formatDateShort(ts, lang);
+              }
+            };
+
+            return (
+              <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h2 className="text-lg font-bold text-[#172033] flex items-center gap-2">
+                      <Coins className="w-5 h-5 text-[#FF8500]" />
+                      {lang === 'bn' ? 'সম্পূর্ণ কয়েন ও রিওয়ার্ড হিস্টোরি' : 'Coin Reward History & Ledger'}
+                    </h2>
+                    <p className="text-xs text-[#777777]">
+                      {lang === 'bn'
+                        ? 'ডেইলি লগইন, স্ট্রিক বোনাস, ওয়াচ অ্যান্ড আর্ন, অ্যাডমিন বোনাস এবং কয়েন রিডেম্পশন ইতিহাস'
+                        : 'Daily login rewards, streak bonuses, watch & earn, admin adjustments, and redemptions'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-3 py-1.5 rounded-xl bg-[#FFF7EE] border border-[#FF8500]/30 text-xs font-extrabold font-mono-num text-[#FF8500]">
+                      {liveCoinBalance ?? wallet?.coinsAvailable ?? 0} Coins
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('watch-earn')}
+                      className="px-3.5 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold"
                     >
-                      <div className="min-w-0">
-                        <p className="font-bold text-[#172033] truncate">{ct.note || ct.type.replace(/_/g, ' ')}</p>
-                        <p className="text-[11px] text-[#777777] font-mono-num">
-                          {ct.provider.toUpperCase()} · {formatDateShort(ct.createdAt, lang)}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span
-                          className={`font-mono-num font-extrabold ${
-                            isDebit ? 'text-[#DC2626]' : 'text-[#16A34A]'
-                          }`}
+                      {lang === 'bn' ? 'আরও কয়েন আয়' : 'Earn More'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                  {(
+                    [
+                      { id: 'all', bn: 'সব লেনদেন', en: 'All' },
+                      { id: 'daily_login', bn: 'ডেইলি লগইন ও স্ট্রিক', en: 'Daily & Streak' },
+                      { id: 'watch_earn', bn: 'ওয়াচ ও আর্ন', en: 'Watch & Earn' },
+                      { id: 'bonus', bn: 'অ্যাডমিন বোনাস', en: 'Admin Bonus' },
+                      { id: 'redemption', bn: 'কয়েন রিডিম', en: 'Redemptions' },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setCoinFilter(f.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap shrink-0 transition-colors ${
+                        coinFilter === f.id
+                          ? 'bg-[#FF8500] text-white'
+                          : 'bg-[#F3F6FF] border border-[#E6ECFA] text-[#475569] hover:border-[#FF8500]'
+                      }`}
+                    >
+                      {lang === 'bn' ? f.bn : f.en}
+                    </button>
+                  ))}
+                </div>
+
+                {filteredCoinTxs.length === 0 ? (
+                  <p className="text-xs text-[#777777] py-4 text-center">
+                    {lang === 'bn' ? 'এই ফিল্টারে কোনো কয়েন লেনদেন রেকর্ড নেই।' : 'No coin transactions recorded for this filter.'}
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {filteredCoinTxs.slice(0, 40).map((ct) => {
+                      const isDebit =
+                        ct.type === 'coin_redemption' ||
+                        ct.type === 'admin_coin_deduct' ||
+                        ct.coins < 0;
+                      const srcMeta = getCoinSourceMeta(ct);
+                      return (
+                        <div
+                          key={ct.id}
+                          className="p-3.5 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs"
                         >
-                          {isDebit ? '-' : '+'}
-                          {Math.abs(ct.coins)} Coins
-                        </span>
-                        <span className="px-2 py-0.5 rounded-md bg-white border border-[#E6ECFA] text-[10px] font-bold">
-                          {ct.status}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className={`px-2 py-0.5 rounded-md border text-[10px] font-extrabold ${srcMeta.badge}`}>
+                                {srcMeta.label}
+                              </span>
+                              <p className="font-bold text-[#172033] truncate">
+                                {ct.note || ct.adTitle || ct.type.replace(/_/g, ' ')}
+                              </p>
+                            </div>
+                            <p className="text-[11px] text-[#777777] font-mono-num">
+                              {formatDhakaDateTime(ct.createdAt)} · Ref: {ct.refId || ct.id}
+                            </p>
+                          </div>
+                          <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+                            <span
+                              className={`font-mono-num text-sm font-extrabold ${
+                                isDebit ? 'text-[#DC2626]' : 'text-[#16A34A]'
+                              }`}
+                            >
+                              {isDebit ? '-' : '+'}
+                              {Math.abs(ct.coins)} Coins
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${
+                                ct.status === 'Credited'
+                                  ? 'bg-emerald-50 border-emerald-200 text-[#16A34A]'
+                                  : ct.status === 'Rejected'
+                                    ? 'bg-red-50 border-red-200 text-[#DC2626]'
+                                    : 'bg-amber-50 border-amber-200 text-amber-800'
+                              }`}
+                            >
+                              {ct.status}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            );
+          })()}
         </div>
       )}
 
@@ -2019,21 +2155,34 @@ export function CustomerDashboard({
               </h2>
               <div className="space-y-2.5">
                 {announcements.map((ann) => (
-                  <div key={ann.id} className="p-3.5 rounded-2xl bg-[#FFF7EE] border border-[#FF8500]/30">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-bold text-[#172033]">
-                        <span className="px-2 py-0.5 rounded-md bg-[#172033] text-white text-[10px] uppercase mr-2">
-                          {ann.type}
+                  <div key={ann.id} className="p-3.5 rounded-2xl bg-[#FFF7EE] border border-[#FF8500]/30 flex items-start gap-3">
+                    {ann.imageUrl && (
+                      <img
+                        src={ann.imageUrl}
+                        alt={lang === 'bn' ? ann.titleBn : ann.titleEn}
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                        className="w-14 h-14 rounded-xl object-cover border border-[#FF8500]/30 shrink-0"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-bold text-[#172033]">
+                          <span className="px-2 py-0.5 rounded-md bg-[#172033] text-white text-[10px] uppercase mr-2">
+                            {ann.type}
+                          </span>
+                          {lang === 'bn' ? ann.titleBn : ann.titleEn}
+                        </p>
+                        <span className="text-[11px] text-[#777777] shrink-0 font-mono-num">
+                          {formatDateShort(ann.createdAt, lang)}
+                          {ann.expiresAt ? ` · ${lang === 'bn' ? 'মেয়াদ' : 'Exp'}: ${ann.expiresAt}` : ''}
                         </span>
-                        {lang === 'bn' ? ann.titleBn : ann.titleEn}
+                      </div>
+                      <p className="text-xs text-[#172033]/85 mt-1.5 whitespace-pre-line">
+                        {lang === 'bn' ? ann.messageBn : ann.messageEn}
                       </p>
-                      <span className="text-[11px] text-[#777777] shrink-0">
-                        {formatDateShort(ann.createdAt, lang)}
-                      </span>
                     </div>
-                    <p className="text-xs text-[#172033]/85 mt-1.5">
-                      {lang === 'bn' ? ann.messageBn : ann.messageEn}
-                    </p>
                   </div>
                 ))}
               </div>

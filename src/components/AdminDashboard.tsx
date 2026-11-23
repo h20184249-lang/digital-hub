@@ -13,6 +13,7 @@ import {
   FolderTree,
   Gamepad2,
   Gift,
+  Image as ImageIcon,
   LayoutDashboard,
   LayoutGrid,
   LifeBuoy,
@@ -116,6 +117,7 @@ import {
   AdminStorefrontPanel,
 } from './admin/AdminSystemPanels';
 import { AdminPackagesPanel } from './admin/AdminPackagesPanel';
+import { AdminBannerManagerPanel } from './admin/AdminBannerManagerPanel';
 import { AdminGlobalSearch } from './admin/AdminGlobalSearch';
 import { AdminBackupPanel } from './admin/AdminBackupPanel';
 import { ConfirmDialog } from './admin/ConfirmDialog';
@@ -151,6 +153,7 @@ type AdminSection =
   | 'categories'
   | 'orders'
   | 'users'
+  | 'banners'
   | 'advertisements'
   | 'homepage_editor'
   | 'settings'
@@ -435,6 +438,7 @@ export function AdminDashboard({
       badge: kpis.pendingOrders || undefined,
     },
     { id: 'users', label: 'Users', labelBn: 'ইউজার ম্যানেজমেন্ট', icon: Users, badge: kpis.totalUsers },
+    { id: 'banners', label: 'Hero Banners', labelBn: 'হিরো ব্যানার', icon: ImageIcon },
     { id: 'advertisements', label: 'Advertisements', labelBn: 'বিজ্ঞাপন ও ব্যানার', icon: Megaphone },
     { id: 'homepage_editor', label: 'Homepage Editor', labelBn: 'হোমপেজ এডিটর', icon: LayoutGrid },
     { id: 'settings', label: 'Settings', labelBn: 'ওয়েবসাইট সেটিংস', icon: Settings },
@@ -738,8 +742,8 @@ export function AdminDashboard({
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
                 {[
                   {
-                    label: lang === 'bn' ? 'মোট ইউজার' : 'Total Users',
-                    val: kpis.totalUsers.toLocaleString(),
+                    label: lang === 'bn' ? 'মোট ও আজকের ইউজার' : 'Total / Today New Users',
+                    val: `${kpis.totalUsers.toLocaleString()} (+${liveAnalytics?.kpis.todayNewUsers ?? 0})`,
                     sub: `${kpis.activeUsers} active · ${kpis.suspendedUsers} suspended`,
                     tone: 'text-[#172033] dark:text-slate-100',
                     target: 'users' as AdminSection,
@@ -750,6 +754,20 @@ export function AdminDashboard({
                     sub: `${kpis.pendingDeposits} pending deposit(s)`,
                     tone: 'text-[#FF8500]',
                     target: 'wallets' as AdminSection,
+                  },
+                  {
+                    label: lang === 'bn' ? 'ডেইলি লগইন ক্লেইম (আজ / মোট)' : 'Daily Reward Claims (Today / Total)',
+                    val: `${liveAnalytics?.kpis.todayDailyRewardClaims ?? 0} / ${liveAnalytics?.kpis.totalDailyRewardClaims ?? 0}`,
+                    sub: `${(liveAnalytics?.kpis.totalDailyRewardCoins ?? 0).toLocaleString()} coins distributed`,
+                    tone: 'text-indigo-600 dark:text-indigo-400',
+                    target: 'coins' as AdminSection,
+                  },
+                  {
+                    label: lang === 'bn' ? 'হিরো ব্যানার ও অ্যানাউন্সমেন্ট' : 'Hero Banners / Announcements',
+                    val: `${liveAnalytics?.kpis.activeHeroBanners ?? 0} / ${liveAnalytics?.kpis.publishedAnnouncements ?? announcements.filter((a) => a.active).length}`,
+                    sub: lang === 'bn' ? 'লাইভ প্রোমো ও নোটিশ' : 'Active homepage banners & notices',
+                    tone: 'text-emerald-600 dark:text-emerald-400',
+                    target: 'banners' as AdminSection,
                   },
                   {
                     label: lang === 'bn' ? 'পেন্ডিং উইথড্রয়াল' : 'Pending Withdrawals',
@@ -1116,6 +1134,7 @@ export function AdminDashboard({
             <AdminCoinManagementPanel
               lang={lang}
               users={users}
+              settings={settings}
               onSuccess={showSuccess}
               onError={showError}
             />
@@ -1143,6 +1162,15 @@ export function AdminDashboard({
             <AdminReferralsPanel
               lang={lang}
               referrals={referrals}
+              settings={settings}
+              onSuccess={showSuccess}
+              onError={showError}
+            />
+          )}
+
+          {section === 'banners' && (
+            <AdminBannerManagerPanel
+              lang={lang}
               settings={settings}
               onSuccess={showSuccess}
               onError={showError}

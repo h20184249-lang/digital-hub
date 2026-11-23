@@ -1,10 +1,13 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownToLine,
+  Calendar,
   CheckCircle2,
   Coins,
   Download,
+  Flame,
   Image as ImageIcon,
+  Save,
   Search,
   Wallet,
   X,
@@ -12,8 +15,10 @@ import {
 } from 'lucide-react';
 import {
   AdminCoinsOverview,
+  DailyRewardClaimRecord,
   Language,
   Payment,
+  SiteSettings,
   UserProfile,
   WalletAccount,
   WalletTransaction,
@@ -24,7 +29,9 @@ import {
   adminAdjustUserCoins,
   adminAdjustWalletBalance,
   adminFetchCoinsOverview,
+  adminFetchDailyRewardClaims,
   adminProcessWithdrawalServer,
+  adminSaveSiteSettings,
   adminVerifyAddMoneyServer,
   formatDateShort,
   getTimeMs,
@@ -1176,6 +1183,7 @@ export function AdminWithdrawalsPanel({
 interface AdminCoinManagementPanelProps {
   lang: Language;
   users: UserProfile[];
+  settings?: SiteSettings;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
 }
@@ -1183,6 +1191,7 @@ interface AdminCoinManagementPanelProps {
 export function AdminCoinManagementPanel({
   lang,
   users,
+  settings,
   onSuccess,
   onError,
 }: AdminCoinManagementPanelProps) {
@@ -1195,10 +1204,66 @@ export function AdminCoinManagementPanel({
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // Daily Login Reward Config
+  const [dailyEnabled, setDailyEnabled] = useState<boolean>(settings?.dailyRewardEnabled !== false);
+  const [dailyCoinsVal, setDailyCoinsVal] = useState<number>(
+    Math.max(1, Number(settings?.dailyRewardCoins ?? 10))
+  );
+  const [streakEnabledVal, setStreakEnabledVal] = useState<boolean>(settings?.streakEnabled !== false);
+  const [streakBonusVal, setStreakBonusVal] = useState<number>(
+    Math.max(0, Number(settings?.streakDay7BonusCoins ?? 20))
+  );
+  const [savingDailyCfg, setSavingDailyCfg] = useState(false);
+
+  // Daily Login Reward Claims Monitor
+  const [dailyClaimsDate, setDailyClaimsDate] = useState('');
+  const [dailyClaimsSearch, setDailyClaimsSearch] = useState('');
+  const [dailyClaimsLoading, setDailyClaimsLoading] = useState(false);
+  const [dailyClaimsData, setDailyClaimsData] = useState<{
+    todayDate: string;
+    stats: {
+      todayClaims: number;
+      todayCoinsDistributed: number;
+      totalClaims: number;
+      totalCoinsDistributed: number;
+      activeStreaks: number;
+    };
+    claims: DailyRewardClaimRecord[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!settings) return;
+    setDailyEnabled(settings.dailyRewardEnabled !== false);
+    setDailyCoinsVal(Math.max(1, Number(settings.dailyRewardCoins ?? 10)));
+    setStreakEnabledVal(settings.streakEnabled !== false);
+    setStreakBonusVal(Math.max(0, Number(settings.streakDay7BonusCoins ?? 20)));
+  }, [
+    settings?.dailyRewardEnabled,
+    settings?.dailyRewardCoins,
+    settings?.streakEnabled,
+    settings?.streakDay7BonusCoins,
+  ]);
+
+  const loadDailyClaims = async (dateFilter = dailyClaimsDate, searchFilter = dailyClaimsSearch) => {
+    setDailyClaimsLoading(true);
+    try {
+      const res = await adminFetchDailyRewardClaims({
+        date: dateFilter.trim() || undefined,
+        search: searchFilter.trim() || undefined,
+        limit: 100,
+      });
+      setDailyClaimsData(res);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to load daily login reward claims.');
+    } finally {
+      setDailyClaimsLoading(false);
+    }
+  };
+
   const loadOverview = async () => {
     setLoading(true);
     try {
-      const data = await adminFetchCoinsOverview();
+      const [data] = await Promise.all([adminFetchCoinsOverview(), loadDailyClaims()]);
       setOverview(data);
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Failed to load coins overview.');
@@ -1210,6 +1275,33 @@ export function AdminCoinManagementPanel({
   useEffect(() => {
     void loadOverview();
   }, []);
+
+  const handleSaveDailyConfig = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!settings) {
+      onError('Site settings context is unavailable.');
+      return;
+    }
+    const cleanDaily = Math.max(1, Math.min(1000, Math.round(Number(dailyCoinsVal) || 10)));
+    const cleanBonus = Math.max(0, Math.min(5000, Math.round(Number(streakBonusVal) || 0)));
+    setSavingDailyCfg(true);
+    try {
+      await adminSaveSiteSettings({
+        ...settings,
+        dailyRewardEnabled: dailyEnabled,
+        dailyRewardCoins: cleanDaily,
+        streakEnabled: streakEnabledVal,
+        streakDay7BonusCoins: cleanBonus,
+      });
+      onSuccess(
+        `Daily Login Reward settings updated (${cleanDaily} coins/day${streakEnabledVal ? ` + ${cleanBonus} Day-7 streak bonus` : ''}).`
+      );
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Failed to save Daily Login Reward config.');
+    } finally {
+      setSavingDailyCfg(false);
+    }
+  };
 
   const userById = useMemo(() => {
     const map = new Map<string, UserProfile>();
@@ -1277,8 +1369,97 @@ export function AdminCoinManagementPanel({
 
   return (
     <div className="space-y-5 text-xs">
+      {/* Daily Login Reward & Streak Config */}
+      {settings && (
+        <form
+          onSubmit={handleSaveDailyConfig}
+          className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-4"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-2">
+                <Flame className="w-4 h-4 text-[#FF8500]" />
+                <span>
+                  {lang === 'bn'
+                    ? 'ডেইলি লগইন রিওয়ার্ড ও স্ট্রিক কনফিগারেশন'
+                    : 'Daily Login Reward & 7-Day Streak Configuration'}
+                </span>
+              </h3>
+              <p className="text-[11px] text-[#777777] dark:text-slate-400 mt-0.5">
+                Configure daily claim coins (resets 00:00 Asia/Dhaka) and optional 7-day consecutive streak bonus.
+              </p>
+            </div>
+            <button
+              type="submit"
+              disabled={savingDailyCfg}
+              className="px-4 py-2 rounded-xl dh-orange-gradient text-white font-bold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>{savingDailyCfg ? 'Saving...' : 'Save Daily Reward Config'}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <label className="rounded-xl bg-[#F8FAFF] dark:bg-slate-800/60 border border-[#E6ECFA] dark:border-slate-700 p-3 flex items-center justify-between gap-2 cursor-pointer">
+              <div>
+                <p className="font-bold text-[#172033] dark:text-slate-100">Daily Reward Active</p>
+                <p className="text-[10px] text-[#777777] dark:text-slate-400">Allow users to claim once daily</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={dailyEnabled}
+                onChange={(e) => setDailyEnabled(e.target.checked)}
+                className="accent-[#FF8500] w-4 h-4"
+              />
+            </label>
+
+            <div className="rounded-xl bg-[#F8FAFF] dark:bg-slate-800/60 border border-[#E6ECFA] dark:border-slate-700 p-3">
+              <label className="block font-bold text-[#172033] dark:text-slate-100 mb-1">
+                Daily Claim Amount (Coins)
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                value={dailyCoinsVal}
+                onChange={(e) => setDailyCoinsVal(Number(e.target.value))}
+                className="w-full px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-700 font-mono-num font-bold"
+              />
+            </div>
+
+            <label className="rounded-xl bg-[#F8FAFF] dark:bg-slate-800/60 border border-[#E6ECFA] dark:border-slate-700 p-3 flex items-center justify-between gap-2 cursor-pointer">
+              <div>
+                <p className="font-bold text-[#172033] dark:text-slate-100">7-Day Streak System</p>
+                <p className="text-[10px] text-[#777777] dark:text-slate-400">Bonus coins on consecutive Day 7</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={streakEnabledVal}
+                onChange={(e) => setStreakEnabledVal(e.target.checked)}
+                className="accent-[#FF8500] w-4 h-4"
+              />
+            </label>
+
+            <div className="rounded-xl bg-[#F8FAFF] dark:bg-slate-800/60 border border-[#E6ECFA] dark:border-slate-700 p-3">
+              <label className="block font-bold text-[#172033] dark:text-slate-100 mb-1">
+                Day-7 Streak Bonus (Coins)
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={5000}
+                disabled={!streakEnabledVal}
+                value={streakBonusVal}
+                onChange={(e) => setStreakBonusVal(Number(e.target.value))}
+                className="w-full px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-700 font-mono-num font-bold disabled:opacity-50"
+              />
+            </div>
+          </div>
+        </form>
+      )}
+
       {/* KPI Totals */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4">
           <p className="text-[11px] font-bold text-[#777777] dark:text-slate-400">
             {lang === 'bn' ? 'মোট উপলব্ধ কয়েন' : 'Total Available Coins'}
@@ -1301,6 +1482,28 @@ export function AdminCoinManagementPanel({
           </p>
           <p className="text-2xl font-extrabold font-mono-num text-[#172033] dark:text-slate-100 mt-1">
             {totals.redeemed.toLocaleString()}
+          </p>
+        </div>
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4">
+          <p className="text-[11px] font-bold text-[#777777] dark:text-slate-400">
+            {lang === 'bn' ? 'আজকের ডেইলি ক্লেইম' : "Today's Daily Claims"}
+          </p>
+          <p className="text-2xl font-extrabold font-mono-num text-indigo-600 dark:text-indigo-400 mt-1">
+            {(dailyClaimsData?.stats.todayClaims ?? 0).toLocaleString()}
+          </p>
+          <p className="text-[10px] text-[#777777] font-mono-num">
+            +{(dailyClaimsData?.stats.todayCoinsDistributed ?? 0).toLocaleString()} coins today
+          </p>
+        </div>
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4">
+          <p className="text-[11px] font-bold text-[#777777] dark:text-slate-400">
+            {lang === 'bn' ? 'মোট ডেইলি রিওয়ার্ড কয়েন' : 'Total Daily Reward Coins'}
+          </p>
+          <p className="text-2xl font-extrabold font-mono-num text-amber-600 dark:text-amber-400 mt-1">
+            {(dailyClaimsData?.stats.totalCoinsDistributed ?? 0).toLocaleString()}
+          </p>
+          <p className="text-[10px] text-[#777777] font-mono-num">
+            {dailyClaimsData?.stats.totalClaims ?? 0} claims · {dailyClaimsData?.stats.activeStreaks ?? 0} streaks
           </p>
         </div>
       </div>
@@ -1399,6 +1602,115 @@ export function AdminCoinManagementPanel({
         </div>
       </div>
 
+      {/* Daily Login Claims Search & Date Monitor */}
+      <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 overflow-hidden">
+        <div className="px-4 py-3 border-b border-[#E6ECFA] dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+          <h4 className="font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-1.5">
+            <Calendar className="w-4 h-4 text-[#FF8500]" />
+            <span>
+              {lang === 'bn' ? 'ডেইলি লগইন ক্লেইম লগ' : 'Daily Login Reward Claims Monitor'}
+            </span>
+          </h4>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void loadDailyClaims(dailyClaimsDate, dailyClaimsSearch);
+            }}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <input
+              type="text"
+              value={dailyClaimsSearch}
+              onChange={(e) => setDailyClaimsSearch(e.target.value)}
+              placeholder="Search UID, name, phone, email..."
+              className="px-3 py-1.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700"
+            />
+            <input
+              type="date"
+              value={dailyClaimsDate}
+              onChange={(e) => setDailyClaimsDate(e.target.value)}
+              className="px-3 py-1.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-mono-num"
+            />
+            <button
+              type="submit"
+              disabled={dailyClaimsLoading}
+              className="px-3 py-1.5 rounded-xl bg-[#172033] dark:bg-[#FF8500] text-white font-bold cursor-pointer disabled:opacity-50"
+            >
+              {dailyClaimsLoading ? 'Filtering...' : 'Filter'}
+            </button>
+            {(dailyClaimsDate || dailyClaimsSearch) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDailyClaimsDate('');
+                  setDailyClaimsSearch('');
+                  void loadDailyClaims('', '');
+                }}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 font-bold cursor-pointer"
+              >
+                Reset
+              </button>
+            )}
+          </form>
+        </div>
+        <div className="overflow-x-auto max-h-80">
+          <table className="w-full text-left">
+            <thead className="bg-[#F8FAFF] dark:bg-slate-950 border-b border-[#E6ECFA] dark:border-slate-800 text-[11px] text-[#777777] sticky top-0">
+              <tr>
+                <th className="px-4 py-2.5">User</th>
+                <th className="px-4 py-2.5">Dhaka Date</th>
+                <th className="px-4 py-2.5">Streak</th>
+                <th className="px-4 py-2.5">Coins Credited</th>
+                <th className="px-4 py-2.5">Ref TxID</th>
+                <th className="px-4 py-2.5">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#E6ECFA] dark:divide-slate-800">
+              {!dailyClaimsData?.claims.length ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-[#777777]">
+                    {dailyClaimsLoading ? 'Loading daily reward claims...' : 'No daily login reward claims found.'}
+                  </td>
+                </tr>
+              ) : (
+                dailyClaimsData.claims.map((cl) => (
+                  <tr key={cl.id} className="hover:bg-[#F8FAFF] dark:hover:bg-slate-800/40">
+                    <td className="px-4 py-2.5">
+                      <p className="font-bold text-[#172033] dark:text-slate-100">
+                        {cl.displayName || cl.userId}
+                      </p>
+                      <p className="text-[10px] font-mono-num text-[#777777] dark:text-slate-400">
+                        {cl.contact || cl.userId}
+                      </p>
+                    </td>
+                    <td className="px-4 py-2.5 font-mono-num">{cl.claimDate}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="px-2 py-0.5 rounded-md bg-orange-50 dark:bg-orange-950/40 text-[#FF8500] font-bold">
+                        Day {cl.streakDay}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 font-mono-num font-extrabold text-emerald-600 dark:text-emerald-400">
+                      +{cl.totalCoins}
+                      {cl.bonusCoins > 0 && (
+                        <span className="ml-1 text-[10px] text-[#FF8500]">
+                          ({cl.baseCoins}+{cl.bonusCoins} bonus)
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono-num text-[10px] text-[#777777]">{cl.transactionId}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-bold text-[10px]">
+                        {cl.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* Recent Coin Transactions & Reward Claims */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5">
@@ -1421,10 +1733,12 @@ export function AdminCoinManagementPanel({
                   </div>
                   <span
                     className={`font-mono-num font-extrabold shrink-0 ${
-                      tx.type === 'coin_redemption' || tx.coins < 0 ? 'text-[#DC2626]' : 'text-emerald-600'
+                      tx.type === 'coin_redemption' || tx.type === 'admin_coin_deduct' || tx.coins < 0
+                        ? 'text-[#DC2626]'
+                        : 'text-emerald-600'
                     }`}
                   >
-                    {tx.type === 'coin_redemption' || tx.coins < 0 ? '-' : '+'}
+                    {tx.type === 'coin_redemption' || tx.type === 'admin_coin_deduct' || tx.coins < 0 ? '-' : '+'}
                     {Math.abs(tx.coins)} coins
                   </span>
                 </div>
