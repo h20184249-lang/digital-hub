@@ -143,7 +143,7 @@ function createJsonBodyParser(maxBytes: number): express.RequestHandler {
 export function createApiApp(): express.Express {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(createJsonBodyParser(4 * 1024 * 1024));
+  app.use(createJsonBodyParser(16 * 1024 * 1024));
 
   // Security headers
   app.use((_req, res, next) => {

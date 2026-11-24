@@ -36,11 +36,22 @@ import {
   OrderStatus,
   Payment,
   Product,
+  PushDeviceRecord,
   Review,
   SiteSettings,
   SupportTicket,
   UserProfile,
 } from '../../types/marketplace';
+import {
+  deleteAdminPushDevice,
+  fetchAdminPushDevices,
+  getExistingSubscription,
+  getNotificationPermission,
+  isPushSupported,
+  requestAndSubscribePush,
+  sendAdminTestPush,
+  unsubscribePush,
+} from '../../lib/pushClient';
 import {
   adminBroadcastAnnouncementServer,
   adminCompleteOrderWithRewardsServer,
@@ -726,6 +737,205 @@ export function AdminNotificationsPanel({
             </div>
           );
         })}
+      </div>
+
+      {/* Admin Instant Order Push Alerts & Device Registration */}
+      <AdminPushDevicesManager lang={lang} onSuccess={onSuccess} onError={onError} />
+    </div>
+  );
+}
+
+function AdminPushDevicesManager({
+  lang,
+  onSuccess,
+  onError,
+}: {
+  lang: Language;
+  onSuccess: (msg: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const [devices, setDevices] = useState<PushDeviceRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [registering, setRegistering] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [thisDeviceActive, setThisDeviceActive] = useState(false);
+  const supported = isPushSupported();
+  const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>(() => getNotificationPermission());
+
+  const loadDevices = async () => {
+    setLoading(true);
+    try {
+      const [list, existing] = await Promise.all([
+        fetchAdminPushDevices().catch(() => []),
+        getExistingSubscription().catch(() => null),
+      ]);
+      setDevices(list);
+      setPerm(getNotificationPermission());
+      const subPreview = existing?.endpoint ? existing.endpoint.slice(0, 64) : '';
+      setThisDeviceActive(
+        Boolean(subPreview && list.some((d) => d.active && d.endpointPreview === subPreview))
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadDevices();
+  }, []);
+
+  const handleRegisterAdminDevice = async () => {
+    setRegistering(true);
+    try {
+      await requestAndSubscribePush({ isAdminDevice: true });
+      onSuccess(
+        lang === 'bn'
+          ? 'এই ডিভাইসটি ইনস্ট্যান্ট অ্যাডমিন অর্ডার অ্যালার্টের জন্য যুক্ত হয়েছে!'
+          : 'Device registered for instant admin order push alerts!'
+      );
+      await loadDevices();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Could not enable push notifications on this device.');
+    } finally {
+      setRegistering(false);
+    }
+  };
+
+  const handleDisableThisDevice = async () => {
+    setRegistering(true);
+    try {
+      await unsubscribePush();
+      onSuccess('Unregistered this device from push alerts.');
+      await loadDevices();
+    } finally {
+      setRegistering(false);
+    }
+  };
+
+  const handleSendTest = async () => {
+    setTesting(true);
+    try {
+      const res = await sendAdminTestPush();
+      if (res.sent > 0) {
+        onSuccess(`Live test order alert dispatched to ${res.sent} registered admin device(s)!`);
+      } else {
+        onError('No active push subscription delivered. Register an admin device first.');
+      }
+      await loadDevices();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Test push failed.');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-2">
+            <Bell className="w-4 h-4 text-[#FF8500]" />
+            {lang === 'bn'
+              ? 'অ্যাডমিন ইনস্ট্যান্ট অর্ডার পুশ অ্যালার্ট ও ডিভাইস'
+              : 'Admin Instant Order Push Alerts & Registered Devices'}
+          </h3>
+          <p className="text-[11px] text-[#777777] dark:text-slate-400 mt-0.5">
+            {lang === 'bn'
+              ? 'যেকোনো কাস্টমার নতুন অর্ডার করলে তাৎক্ষণিক এই ডিভাইসে ব্রাউজার ও মোবাইল পুশ নোটিফিকেশন পাবেন।'
+              : 'Receive instant real-time Web Push alerts whenever a customer places a new order.'}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {supported && (
+            thisDeviceActive ? (
+              <button
+                type="button"
+                disabled={registering}
+                onClick={() => void handleDisableThisDevice()}
+                className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-bold text-[#DC2626] hover:bg-red-50 cursor-pointer"
+              >
+                Unregister This Device
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={registering}
+                onClick={() => void handleRegisterAdminDevice()}
+                className="px-4 py-2 rounded-xl dh-orange-gradient text-white font-bold inline-flex items-center gap-1.5 shadow-sm hover:opacity-95 disabled:opacity-50 cursor-pointer"
+              >
+                <Bell className="w-3.5 h-3.5" />
+                <span>
+                  {registering
+                    ? 'Registering...'
+                    : lang === 'bn'
+                      ? 'এই ডিভাইস অ্যাডমিন হিসেবে রেজিস্টার করুন'
+                      : 'Register This Device as Admin Device'}
+                </span>
+              </button>
+            )
+          )}
+          <button
+            type="button"
+            disabled={testing || devices.filter((d) => d.active).length === 0}
+            onClick={() => void handleSendTest()}
+            className="px-3.5 py-2 rounded-xl bg-[#172033] dark:bg-slate-800 text-white font-bold inline-flex items-center gap-1.5 hover:bg-[#FF8500] disabled:opacity-45 cursor-pointer transition-colors"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>{testing ? 'Sending...' : 'Send Live Test Order Alert'}</span>
+          </button>
+        </div>
+      </div>
+
+      {!supported ? (
+        <p className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl px-3 py-2">
+          Web Push API is unavailable in this browser context. Open over HTTPS or install PWA to register push devices.
+        </p>
+      ) : perm === 'denied' ? (
+        <p className="text-[11px] text-[#DC2626] bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 rounded-xl px-3 py-2">
+          Notification permission is blocked in browser settings. Allow notifications for this site and retry.
+        </p>
+      ) : null}
+
+      <div className="space-y-2">
+        {loading ? (
+          <p className="text-[11px] text-[#777777]">Loading registered admin push devices...</p>
+        ) : devices.length === 0 ? (
+          <p className="text-[11px] text-[#777777] py-2">
+            No admin devices registered yet. Click &ldquo;Register This Device as Admin Device&rdquo; above.
+          </p>
+        ) : (
+          devices.map((dev) => (
+            <div
+              key={dev.id}
+              className="p-3 rounded-xl bg-[#F3F6FF] dark:bg-slate-800/60 border border-[#E6ECFA] dark:border-slate-700 flex items-center justify-between gap-3"
+            >
+              <div className="min-w-0">
+                <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
+                  {dev.deviceLabel || 'Admin Browser'} ·{' '}
+                  <span className={dev.active ? 'text-emerald-600' : 'text-[#DC2626]'}>
+                    {dev.active ? 'Active' : 'Inactive'}
+                  </span>
+                </p>
+                <p className="text-[10px] font-mono-num text-[#777777] dark:text-slate-400 truncate">
+                  {dev.endpointPreview}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  await deleteAdminPushDevice(dev.id);
+                  onSuccess('Push device removed.');
+                  await loadDevices();
+                }}
+                className="p-1.5 rounded-lg bg-red-50 dark:bg-red-950/50 text-[#DC2626] hover:bg-red-100 shrink-0 cursor-pointer"
+                title="Remove device"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
@@ -1622,6 +1832,7 @@ interface AdminStorefrontPanelProps {
   tickets: SupportTicket[];
   reviews: Review[];
   defaultSubTab?: 'orders' | 'payments' | 'products' | 'categories' | 'coupons' | 'tickets' | 'reviews';
+  highlightedOrderId?: string;
   onSuccess: (msg: string) => void;
   onError: (msg: string) => void;
 }
@@ -1636,6 +1847,7 @@ export function AdminStorefrontPanel({
   tickets,
   reviews,
   defaultSubTab,
+  highlightedOrderId,
   onSuccess,
   onError,
 }: AdminStorefrontPanelProps) {
@@ -1645,6 +1857,14 @@ export function AdminStorefrontPanel({
   useEffect(() => {
     if (defaultSubTab) setSubTab(defaultSubTab);
   }, [defaultSubTab]);
+  useEffect(() => {
+    if (!highlightedOrderId || subTab !== 'orders') return;
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById(`admin-order-${highlightedOrderId}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [highlightedOrderId, subTab, orders.length]);
   const [orderNotes, setOrderNotes] = useState<Record<string, string>>({});
   const [ticketReplies, setTicketReplies] = useState<Record<string, string>>({});
   const [prodSearch, setProdSearch] = useState('');
@@ -1713,10 +1933,17 @@ export function AdminStorefrontPanel({
               No customer orders yet.
             </div>
           ) : (
-            orders.map((ord) => (
+            orders.map((ord) => {
+              const isHighlighted = Boolean(highlightedOrderId && ord.id === highlightedOrderId);
+              return (
               <div
+                id={`admin-order-${ord.id}`}
                 key={ord.id}
-                className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-4 space-y-2.5"
+                className={`rounded-2xl bg-white dark:bg-slate-900 border p-4 space-y-2.5 transition-all ${
+                  isHighlighted
+                    ? 'border-[#FF8500] ring-2 ring-[#FF8500]/40 bg-[#FFF8F0] dark:bg-orange-950/15'
+                    : 'border-[#E6ECFA] dark:border-slate-800'
+                }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -1760,6 +1987,7 @@ export function AdminStorefrontPanel({
                     className="px-2.5 py-1.5 rounded-lg bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 font-bold"
                   >
                     {[
+                      'New',
                       'Pending Payment',
                       'Verification Pending',
                       'Paid',
@@ -1816,7 +2044,8 @@ export function AdminStorefrontPanel({
                   )}
                 </div>
               </div>
-            ))
+              );
+            })
           )}
         </div>
       )}

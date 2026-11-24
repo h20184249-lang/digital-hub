@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ArrowDownToLine,
@@ -142,6 +142,9 @@ interface AdminDashboardProps {
   banners: Banner[];
   paymentMethods?: PaymentMethodConfig[];
   settings: SiteSettings;
+  initialSection?: string;
+  initialOrderId?: string;
+  deepLinkNonce?: number;
 }
 
 type AdminSection =
@@ -193,8 +196,13 @@ export function AdminDashboard({
   banners,
   paymentMethods = EMPTY_PAYMENT_METHODS,
   settings,
+  initialSection,
+  initialOrderId,
+  deepLinkNonce = 0,
 }: AdminDashboardProps) {
   const [section, setSection] = useState<AdminSection>('overview');
+  const [highlightedOrderId, setHighlightedOrderId] = useState<string>(initialOrderId || '');
+  const appliedDeepLinkNonceRef = useRef<number>(0);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [serverVerifiedAdmin, setServerVerifiedAdmin] = useState<boolean | null>(null);
   const [superAdminEmail, setSuperAdminEmail] = useState('');
@@ -226,6 +234,17 @@ export function AdminDashboard({
   const [maintenanceConfirmOpen, setMaintenanceConfirmOpen] = useState(false);
   const [maintenanceSaving, setMaintenanceSaving] = useState(false);
   const [packageSearchSeed, setPackageSearchSeed] = useState('');
+
+  useEffect(() => {
+    if (!deepLinkNonce || appliedDeepLinkNonceRef.current === deepLinkNonce) return;
+    appliedDeepLinkNonceRef.current = deepLinkNonce;
+    if (initialSection) {
+      setSection(initialSection as AdminSection);
+    }
+    if (initialOrderId) {
+      setHighlightedOrderId(initialOrderId);
+    }
+  }, [deepLinkNonce, initialSection, initialOrderId]);
 
   const showSuccess = (msg: string) => {
     setErrMsg('');
@@ -332,9 +351,22 @@ export function AdminDashboard({
     const pendingDeposits = walletTxs.filter(
       (tx) => tx.type === 'deposit' && tx.status === 'Verification Pending'
     ).length;
-    const pendingOrders = orders.filter(
-      (o) => o.status === 'Pending Payment' || o.status === 'Verification Pending' || o.status === 'Processing'
+    const newOrders = orders.filter(
+      (o) => o.status === 'New' || o.status === 'Verification Pending' || o.status === 'Pending Payment'
     ).length;
+    const pendingOrders = orders.filter(
+      (o) =>
+        o.status === 'New' ||
+        o.status === 'Pending Payment' ||
+        o.status === 'Verification Pending' ||
+        o.status === 'Processing'
+    ).length;
+    const completedOrders = orders.filter((o) => o.status === 'Completed').length;
+    const totalSalesBdt = orders
+      .filter((o) =>
+        ['Paid', 'Payment Approved', 'Processing', 'Completed'].includes(o.status)
+      )
+      .reduce((sum, o) => sum + (Number(o.totalPriceBdt) || 0), 0);
     const creditedReferralBdt = referrals
       .filter((r) => r.status === 'credited')
       .reduce((s, r) => s + (r.rewardAmountBdt || 0), 0);
@@ -348,7 +380,10 @@ export function AdminDashboard({
       paidWithdrawalCount: paidWithdrawals.length,
       paidWithdrawalAmount,
       pendingDeposits,
+      newOrders,
       pendingOrders,
+      completedOrders,
+      totalSalesBdt,
       totalReferrals: referrals.length,
       creditedReferralBdt,
       adImpressions: adAnalytics?.totalImpressions || 0,
@@ -742,15 +777,102 @@ export function AdminDashboard({
         <div className="p-4 sm:p-6 max-w-[1440px] w-full mx-auto space-y-6 flex-1">
           {section === 'overview' && (
             <div className="space-y-6">
-              {/* Primary 8 KPI Cards (100% Real DB Metrics) */}
+              {/* 6 Quick Mobile-Friendly Management Shortcut Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                {(
+                  [
+                    {
+                      id: 'banners' as AdminSection,
+                      icon: ImageIcon,
+                      title: lang === 'bn' ? 'ব্যানার ম্যানেজমেন্ট' : 'Banner Management',
+                      sub: lang === 'bn' ? 'হিরো ও ৩২০×৫০ অ্যাড' : 'Hero & 320×50 Ads',
+                    },
+                    {
+                      id: 'notifications' as AdminSection,
+                      icon: Bell,
+                      title: lang === 'bn' ? 'নোটিফিকেশন ও পুশ' : 'Notifications & Push',
+                      sub: lang === 'bn' ? 'ব্রডকাস্ট ও ডিভাইস' : 'Alerts & Devices',
+                    },
+                    {
+                      id: 'orders' as AdminSection,
+                      icon: ShoppingBag,
+                      title: lang === 'bn' ? 'অর্ডার ম্যানেজমেন্ট' : 'Order Management',
+                      sub: `${kpis.pendingOrders} pending`,
+                    },
+                    {
+                      id: 'users' as AdminSection,
+                      icon: Users,
+                      title: lang === 'bn' ? 'ইউজার ম্যানেজমেন্ট' : 'User Management',
+                      sub: `${kpis.totalUsers} registered`,
+                    },
+                    {
+                      id: 'packages' as AdminSection,
+                      icon: Package,
+                      title: lang === 'bn' ? 'সার্ভিস ম্যানেজমেন্ট' : 'Service Management',
+                      sub: `${products.length} services`,
+                    },
+                    {
+                      id: 'payment_methods' as AdminSection,
+                      icon: CreditCard,
+                      title: lang === 'bn' ? 'পেমেন্ট ম্যানেজমেন্ট' : 'Payment Management',
+                      sub: `${kpis.pendingDeposits} deposit req`,
+                    },
+                  ] as Array<{ id: AdminSection; icon: typeof ImageIcon; title: string; sub: string }>
+                ).map((card) => {
+                  const CardIcon = card.icon;
+                  return (
+                    <button
+                      key={card.id}
+                      type="button"
+                      onClick={() => setSection(card.id)}
+                      className="text-left rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-3.5 hover:border-[#FF8500] hover:shadow-sm transition-all flex items-center gap-2.5 cursor-pointer"
+                    >
+                      <div className="w-9 h-9 rounded-xl bg-[#FFF3E5] dark:bg-orange-950/40 text-[#FF8500] flex items-center justify-center shrink-0">
+                        <CardIcon className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-extrabold text-[#172033] dark:text-slate-100 truncate">
+                          {card.title}
+                        </p>
+                        <p className="text-[10px] text-[#777777] dark:text-slate-400 truncate font-mono-num">
+                          {card.sub}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Primary Business & Platform KPI Cards (100% Real DB Metrics) */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
                 {[
                   {
-                    label: lang === 'bn' ? 'মোট ও আজকের ইউজার' : 'Total / Today New Users',
-                    val: `${kpis.totalUsers.toLocaleString()} (+${liveAnalytics?.kpis.todayNewUsers ?? 0})`,
+                    label: lang === 'bn' ? 'মোট নিবন্ধিত ইউজার' : 'Total Registered Users',
+                    val: kpis.totalUsers.toLocaleString(),
                     sub: `${kpis.activeUsers} active · ${kpis.suspendedUsers} suspended`,
                     tone: 'text-[#172033] dark:text-slate-100',
                     target: 'users' as AdminSection,
+                  },
+                  {
+                    label: lang === 'bn' ? 'সক্রিয় ও আজকের নতুন ইউজার' : "Active / Today's New Users",
+                    val: `${kpis.activeUsers.toLocaleString()} / +${liveAnalytics?.kpis.todayNewUsers ?? 0}`,
+                    sub: lang === 'bn' ? 'সক্রিয় অ্যাকাউন্ট ও আজকের সাইনআপ' : 'Active accounts & today signups',
+                    tone: 'text-emerald-600 dark:text-emerald-400',
+                    target: 'users' as AdminSection,
+                  },
+                  {
+                    label: lang === 'bn' ? 'মোট অর্ডার ও নতুন অর্ডার' : 'Total Orders / New Orders',
+                    val: `${orders.length.toLocaleString()} (${kpis.newOrders} new)`,
+                    sub: `${kpis.pendingOrders} pending · ${kpis.completedOrders} completed`,
+                    tone: 'text-[#FF8500]',
+                    target: 'orders' as AdminSection,
+                  },
+                  {
+                    label: lang === 'bn' ? 'মোট বিক্রয় ও সম্পন্ন অর্ডার' : 'Total Sales / Completed',
+                    val: `৳${kpis.totalSalesBdt.toLocaleString()}`,
+                    sub: `${kpis.completedOrders} completed · ${kpis.pendingOrders} pending`,
+                    tone: 'text-emerald-600 dark:text-emerald-400',
+                    target: 'orders' as AdminSection,
                   },
                   {
                     label: lang === 'bn' ? 'মোট ইউজার ব্যালেন্স' : 'Total User Balances',
@@ -767,53 +889,18 @@ export function AdminDashboard({
                     target: 'coins' as AdminSection,
                   },
                   {
-                    label: lang === 'bn' ? 'হিরো ব্যানার ও অ্যানাউন্সমেন্ট' : 'Hero Banners / Announcements',
-                    val: `${liveAnalytics?.kpis.activeHeroBanners ?? 0} / ${liveAnalytics?.kpis.publishedAnnouncements ?? announcements.filter((a) => a.active).length}`,
-                    sub: lang === 'bn' ? 'লাইভ প্রোমো ও নোটিশ' : 'Active homepage banners & notices',
-                    tone: 'text-emerald-600 dark:text-emerald-400',
-                    target: 'banners' as AdminSection,
-                  },
-                  {
-                    label: lang === 'bn' ? 'পেন্ডিং উইথড্রয়াল' : 'Pending Withdrawals',
-                    val: `${kpis.pendingWithdrawalCount}`,
+                    label: lang === 'bn' ? 'পেন্ডিং ও পেইড উইথড্রয়াল' : 'Pending / Paid Withdrawals',
+                    val: `${kpis.pendingWithdrawalCount} / ৳${kpis.paidWithdrawalAmount.toLocaleString()}`,
                     sub: `৳${kpis.pendingWithdrawalAmount.toLocaleString()} awaiting payout`,
                     tone: 'text-amber-600 dark:text-amber-400',
                     target: 'withdrawals' as AdminSection,
                   },
                   {
-                    label: lang === 'bn' ? 'মোট পেইড উইথড্রয়াল' : 'Paid Withdrawals',
-                    val: `৳${kpis.paidWithdrawalAmount.toLocaleString()}`,
-                    sub: `${kpis.paidWithdrawalCount} completed payouts`,
-                    tone: 'text-emerald-600 dark:text-emerald-400',
-                    target: 'withdrawals' as AdminSection,
-                  },
-                  {
-                    label: lang === 'bn' ? 'মোট রেফারেল' : 'Total Referrals',
-                    val: `${kpis.totalReferrals}`,
-                    sub: `৳${kpis.creditedReferralBdt.toLocaleString()} credited`,
-                    tone: 'text-[#172033] dark:text-slate-100',
-                    target: 'referrals' as AdminSection,
-                  },
-                  {
                     label: lang === 'bn' ? 'বিজ্ঞাপন ভিউ ও ক্লিক' : 'Ad Views / Clicks',
                     val: `${kpis.adImpressions.toLocaleString()} / ${kpis.adClicks.toLocaleString()}`,
-                    sub: `CTR ${adAnalytics?.ctr ?? 0}% (D1 verified)`,
-                    tone: 'text-[#FF8500]',
-                    target: 'advertisements' as AdminSection,
-                  },
-                  {
-                    label: lang === 'bn' ? 'মোট লেনদেন' : 'Total Transactions',
-                    val: walletTxs.length.toLocaleString(),
-                    sub: `${payments.length} order payments`,
+                    sub: `CTR ${adAnalytics?.ctr ?? 0}% · ${kpis.totalReferrals} referrals`,
                     tone: 'text-[#172033] dark:text-slate-100',
-                    target: 'transactions' as AdminSection,
-                  },
-                  {
-                    label: lang === 'bn' ? 'স্টোর অর্ডার' : 'Storefront Orders',
-                    val: orders.length.toLocaleString(),
-                    sub: `${kpis.pendingOrders} pending processing`,
-                    tone: 'text-emerald-600 dark:text-emerald-400',
-                    target: 'storefront' as AdminSection,
+                    target: 'advertisements' as AdminSection,
                   },
                 ].map((kpi) => (
                   <button
@@ -957,8 +1044,53 @@ export function AdminDashboard({
                 orders={orders}
               />
 
-              {/* Bottom 2-Col: Recent Withdrawals & Recent Audit Logs */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Bottom 3-Col: Recent Orders, Recent Withdrawals & Recent Activities */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100">
+                      {lang === 'bn' ? 'সাম্প্রতিক অর্ডার' : 'Recent Orders'}
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setSection('orders')}
+                      className="text-xs font-bold text-[#FF8500] hover:underline"
+                    >
+                      Manage Orders →
+                    </button>
+                  </div>
+                  {orders.length === 0 ? (
+                    <p className="text-xs text-[#777777] py-4 text-center">No customer orders yet.</p>
+                  ) : (
+                    <div className="divide-y divide-[#E6ECFA] dark:divide-slate-800 text-xs">
+                      {orders.slice(0, 6).map((ord) => (
+                        <button
+                          key={ord.id}
+                          type="button"
+                          onClick={() => {
+                            setHighlightedOrderId(ord.id);
+                            setSection('orders');
+                          }}
+                          className="w-full py-2.5 flex items-center justify-between gap-2 text-left hover:bg-[#F3F6FF] dark:hover:bg-slate-800/50 rounded-lg px-1.5 transition-colors cursor-pointer"
+                        >
+                          <div className="min-w-0">
+                            <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
+                              #{ord.orderNumber} · {ord.productTitleEn || ord.productTitleBn}
+                            </p>
+                            <p className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400 truncate">
+                              {ord.customerName || ord.customerEmail || ord.customerId}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="font-mono-num font-extrabold text-[#FF8500]">৳{ord.totalPriceBdt}</p>
+                            <span className="text-[10px] font-bold text-[#777777]">{ord.status}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100">
@@ -976,7 +1108,7 @@ export function AdminDashboard({
                     <p className="text-xs text-[#777777] py-4 text-center">No withdrawals submitted yet.</p>
                   ) : (
                     <div className="divide-y divide-[#E6ECFA] dark:divide-slate-800 text-xs">
-                      {withdrawals.slice(0, 5).map((w) => (
+                      {withdrawals.slice(0, 6).map((w) => (
                         <div key={w.id} className="py-2.5 flex items-center justify-between gap-2">
                           <div className="min-w-0">
                             <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
@@ -999,7 +1131,7 @@ export function AdminDashboard({
                 <div className="rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-5 space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100">
-                      {lang === 'bn' ? 'সাম্প্রতিক অডিট লগ' : 'Recent Admin Activity'}
+                      {lang === 'bn' ? 'সাম্প্রতিক কার্যক্রম (Activity)' : 'Recent Activities'}
                     </h3>
                     <button
                       type="button"
@@ -1013,7 +1145,7 @@ export function AdminDashboard({
                     <p className="text-xs text-[#777777] py-4 text-center">No audit events recorded yet.</p>
                   ) : (
                     <div className="divide-y divide-[#E6ECFA] dark:divide-slate-800 text-xs">
-                      {auditLogs.slice(0, 5).map((log) => (
+                      {auditLogs.slice(0, 6).map((log) => (
                         <div key={log.id} className="py-2.5 flex items-center justify-between gap-2">
                           <div className="min-w-0">
                             <p className="font-bold text-[#172033] dark:text-slate-100 truncate">
@@ -1184,6 +1316,7 @@ export function AdminDashboard({
             <AdminBannerManagerPanel
               lang={lang}
               settings={settings}
+              banners={banners}
               onSuccess={showSuccess}
               onError={showError}
             />
@@ -1264,6 +1397,7 @@ export function AdminDashboard({
               tickets={tickets}
               reviews={reviews}
               defaultSubTab="orders"
+              highlightedOrderId={highlightedOrderId}
               onSuccess={showSuccess}
               onError={showError}
             />

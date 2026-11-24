@@ -12,7 +12,7 @@ export function DigitalHubLogo({ subtitle, compact = false, siteName, logoUrl }:
   const restWords = parts.slice(1).join(' ');
 
   return (
-    <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 select-none">
+    <div className="flex items-center gap-2 min-w-0 select-none shrink-0">
       {logoUrl ? (
         <img
           src={logoUrl}
@@ -22,8 +22,8 @@ export function DigitalHubLogo({ subtitle, compact = false, siteName, logoUrl }:
         />
       ) : (
         <svg
-          width={compact ? 32 : 40}
-          height={compact ? 32 : 40}
+          width={compact ? 30 : 40}
+          height={compact ? 30 : 40}
           viewBox="0 0 48 48"
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
@@ -47,14 +47,20 @@ export function DigitalHubLogo({ subtitle, compact = false, siteName, logoUrl }:
           />
         </svg>
       )}
-      <div className="min-w-0 leading-tight">
-        <div className="flex items-center gap-0.5 font-display font-extrabold tracking-tight text-sm sm:text-lg whitespace-nowrap">
+      <div className="min-w-0 leading-none">
+        <div
+          className={`flex items-center font-display font-extrabold tracking-tight whitespace-nowrap ${
+            compact ? 'text-sm sm:text-[15px] xl:text-base' : 'text-base sm:text-lg'
+          }`}
+        >
           <span className="text-[#172033] dark:text-slate-100">{firstWord}</span>
           {restWords && <span className="text-[#FF8500] ml-1">{restWords}</span>}
         </div>
         {subtitle && (
           <p
-            className={`${compact ? 'hidden sm:block' : 'block'} text-[10px] sm:text-[11px] font-medium text-[#777777] dark:text-slate-400 truncate max-w-[165px] sm:max-w-none`}
+            className={`${
+              compact ? 'hidden 2xl:block max-w-[148px]' : 'block mt-0.5'
+            } text-[10px] font-medium text-[#777777] dark:text-slate-400 truncate leading-tight`}
           >
             {subtitle}
           </p>

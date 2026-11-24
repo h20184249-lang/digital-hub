@@ -26,6 +26,15 @@ import {
   getEmptyPhoneStorageValue,
   getRuntimeEnvVar,
 } from './db.ts';
+import {
+  dispatchAdminDevicesPush,
+  dispatchBroadcastPush,
+  dispatchCustomerPush,
+  getOrCreateVapidConfig,
+  getUserNotificationPreferences,
+  PushSubscriptionRow,
+  saveUserNotificationPreferences,
+} from './webPush.ts';
 
 export interface SessionAuthUser {
   uid: string;
@@ -68,6 +77,7 @@ interface UserRow {
   admin_notes?: string | null;
   last_login_at?: number | null;
   last_login_ip?: string | null;
+  is_verified?: number | null;
   session_revoked_at: number;
   created_at: number;
   updated_at: number;
@@ -367,6 +377,7 @@ function toClientAuthUser(row: UserRow) {
     photoURL: row.photo_url || '',
     role: effectiveRole,
     status: row.status === 'suspended' ? 'suspended' : 'active',
+    verified: Number(row.is_verified || 0) === 1,
     referralCode: row.referral_code,
     createdAt: row.created_at,
   };
@@ -389,6 +400,7 @@ function toClientUserProfile(row: UserRow) {
     promotionalCredits: Number(row.promotional_credits || 0),
     language: row.language === 'en' ? ('en' as const) : ('bn' as const),
     status: row.status === 'suspended' ? ('suspended' as const) : ('active' as const),
+    verified: Number(row.is_verified || 0) === 1,
     adminNotes: row.admin_notes || '',
     lastLoginAt: Number(row.last_login_at || 0),
     lastLoginIp: row.last_login_ip || '',
@@ -673,7 +685,11 @@ async function insertNotification(
     | 'announcement'
     | 'download'
     | 'support'
-    | 'reward'
+    | 'reward',
+  options?: {
+    link?: string;
+    meta?: Record<string, unknown>;
+  }
 ): Promise<void> {
   const now = Date.now();
   const id = generateSecureId('notif', 8);
@@ -685,6 +701,8 @@ async function insertNotification(
     messageBn,
     messageEn,
     type,
+    ...(options?.link ? { link: options.link } : {}),
+    ...(options?.meta ? { meta: options.meta } : {}),
     read: false,
     createdAt: now,
   };
@@ -692,6 +710,81 @@ async function insertNotification(
     'INSERT INTO notifications (id, user_id, is_read, payload_json, created_at) VALUES (?, ?, 0, ?, ?)',
     [id, userId, JSON.stringify(payload), now]
   );
+}
+
+async function notifyAdminsNewOrder(
+  db: AppDatabase,
+  params: {
+    orderId: string;
+    orderNumber: string;
+    customerId: string;
+    customerName: string;
+    productTitleEn: string;
+    selectedPackageName?: string;
+    totalPriceBdt: number;
+    paymentMethod: string;
+    createdAt: number;
+  }
+): Promise<void> {
+  try {
+    const deepLink = `/?route=admin&section=orders&orderId=${encodeURIComponent(params.orderId)}`;
+    const orderTimeStr = new Date(params.createdAt).toLocaleString('en-US', {
+      timeZone: 'Asia/Dhaka',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const serviceLabel = params.selectedPackageName
+      ? `${params.productTitleEn} (${params.selectedPackageName})`
+      : params.productTitleEn;
+    const methodLabel = params.paymentMethod.toUpperCase();
+    const pushBody = `${params.customerName} (${params.customerId}) • #${params.orderNumber} • ${serviceLabel} • ৳${params.totalPriceBdt} via ${methodLabel} • ${orderTimeStr}`;
+
+    const superEmail = getConfiguredSuperAdminEmail().toLowerCase();
+    const adminUsers = await db.all<{ uid: string }>(
+      `SELECT uid FROM users WHERE status = 'active' AND (role IN ('admin', 'super_admin') OR LOWER(COALESCE(email_normalized, email)) = ?) LIMIT 50`,
+      [superEmail]
+    );
+    const seenUids = new Set<string>();
+    for (const au of adminUsers) {
+      if (!au.uid || seenUids.has(au.uid)) continue;
+      seenUids.add(au.uid);
+      await insertNotification(
+        db,
+        au.uid,
+        'DIGITAL HUB — নতুন অর্ডার এসেছে!',
+        'DIGITAL HUB — NEW ORDER!',
+        `${params.customerName} (${params.customerId}) • #${params.orderNumber} • ${serviceLabel} • ৳${params.totalPriceBdt} (${methodLabel})`,
+        pushBody,
+        'order',
+        {
+          link: deepLink,
+          meta: {
+            orderId: params.orderId,
+            orderNumber: params.orderNumber,
+            isAdminAlert: true,
+          },
+        }
+      );
+    }
+
+    await dispatchAdminDevicesPush(
+      db,
+      {
+        title: 'DIGITAL HUB — NEW ORDER!',
+        body: pushBody,
+        url: deepLink,
+        tag: `admin-order-${params.orderNumber}`,
+        orderId: params.orderId,
+        category: 'order',
+        requireInteraction: true,
+      },
+      `new_order_${params.orderId}`
+    );
+  } catch {
+    // Non-blocking admin alert
+  }
 }
 
 async function insertAuditLog(
@@ -2292,8 +2385,36 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         'Order Submitted',
         `অর্ডার #${orderNumber} (৳${totalPriceBdt}) পেমেন্ট যাচাইয়ের জন্য জমা হয়েছে।`,
         `Order #${orderNumber} (৳${totalPriceBdt}) submitted for payment verification.`,
-        'order'
+        'order',
+        { link: '/?route=account&tab=orders', meta: { orderId, orderNumber } }
       );
+
+      await Promise.all([
+        notifyAdminsNewOrder(db, {
+          orderId,
+          orderNumber,
+          customerId: user.uid,
+          customerName: user.displayName,
+          productTitleEn: orderObj.productTitleEn || orderObj.productTitleBn || 'Digital Service',
+          selectedPackageName: orderObj.selectedPackageName,
+          totalPriceBdt,
+          paymentMethod: method,
+          createdAt: now,
+        }),
+        dispatchCustomerPush(
+          db,
+          user.uid,
+          'order',
+          {
+            title: 'Order Submitted — DIGITAL HUB',
+            body: `Order #${orderNumber} (৳${totalPriceBdt}) submitted for verification.`,
+            url: '/?route=account&tab=orders',
+            orderId,
+            category: 'order',
+          },
+          `cust_order_submit_${orderId}`
+        ),
+      ]);
 
       await logServerAnalyticsEvent(db, req, {
         userId: user.uid,
@@ -2428,8 +2549,36 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         'Wallet Order Confirmed',
         `অর্ডার #${orderNumber} (৳${totalPriceBdt}) ওয়ালেট ব্যালেন্স থেকে পরিশোধিত হয়েছে।`,
         `Order #${orderNumber} (৳${totalPriceBdt}) paid instantly from wallet balance.`,
-        'order'
+        'order',
+        { link: '/?route=account&tab=orders', meta: { orderId, orderNumber } }
       );
+
+      await Promise.all([
+        notifyAdminsNewOrder(db, {
+          orderId,
+          orderNumber,
+          customerId: user.uid,
+          customerName: user.displayName,
+          productTitleEn: orderObj.productTitleEn || orderObj.productTitleBn || 'Digital Service',
+          selectedPackageName: orderObj.selectedPackageName,
+          totalPriceBdt,
+          paymentMethod: 'wallet',
+          createdAt: now,
+        }),
+        dispatchCustomerPush(
+          db,
+          user.uid,
+          'order',
+          {
+            title: 'Wallet Order Confirmed — DIGITAL HUB',
+            body: `Order #${orderNumber} (৳${totalPriceBdt}) paid from wallet.`,
+            url: '/?route=account&tab=orders',
+            orderId,
+            category: 'order',
+          },
+          `cust_wallet_order_${orderId}`
+        ),
+      ]);
 
       res.status(201).json({ ok: true, orderId, orderNumber });
     } catch (err) {
@@ -4093,7 +4242,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       const [overrideRows, reviewRows, announcementRows, pmRows] = await Promise.all([
         db.all<{ collection: string; doc_id: string; deleted: number; payload_json: string }>(
-          'SELECT collection, doc_id, deleted, payload_json FROM catalog_overrides'
+          `SELECT collection, doc_id, deleted, payload_json FROM catalog_overrides WHERE collection != 'system_secrets'`
         ),
         db.all<{ payload_json: string }>(
           'SELECT payload_json FROM reviews WHERE approved = 1 ORDER BY created_at DESC LIMIT 200'
@@ -4139,6 +4288,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       const overrides: Record<string, Array<{ id: string; deleted: boolean; data: unknown }>> = {};
       for (const r of overrideRows) {
+        if (r.collection === 'system_secrets') continue;
         if (!overrides[r.collection]) overrides[r.collection] = [];
         const parsed = parseJsonSafe(r.payload_json, {});
         overrides[r.collection].push({
@@ -4361,7 +4511,21 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           ? 'আপনার অর্ডারের পেমেন্ট অনুমোদিত হয়েছে।'
           : `আপনার পেমেন্ট প্রত্যাখ্যাত হয়েছে। কারণ: ${reason}`,
         decision === 'approve' ? 'Your payment has been approved.' : `Payment rejected: ${reason}`,
-        'payment'
+        'payment',
+        { link: '/?route=account&tab=orders', meta: { orderId: payRow.order_id } }
+      );
+      await dispatchCustomerPush(
+        db,
+        payRow.customer_id,
+        'payment',
+        {
+          title: decision === 'approve' ? 'Payment Approved — DIGITAL HUB' : 'Payment Rejected — DIGITAL HUB',
+          body: decision === 'approve' ? 'Your order payment has been approved.' : `Payment rejected: ${reason}`,
+          url: '/?route=account&tab=orders',
+          orderId: payRow.order_id,
+          category: 'payment',
+        },
+        `pay_verify_${paymentId}_${decision}`
       );
       await insertAuditLog(
         db,
@@ -4468,7 +4632,23 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         decision === 'approve'
           ? `৳${txRow.amount_bdt} credited to your wallet.`
           : `Deposit rejected: ${reason}`,
-        'wallet'
+        'wallet',
+        { link: '/?route=account&tab=wallet' }
+      );
+      await dispatchCustomerPush(
+        db,
+        txRow.user_id,
+        'wallet',
+        {
+          title: decision === 'approve' ? 'Wallet Deposit Approved' : 'Wallet Deposit Rejected',
+          body:
+            decision === 'approve'
+              ? `৳${txRow.amount_bdt} has been credited to your Digital Hub wallet.`
+              : `Deposit of ৳${txRow.amount_bdt} rejected: ${reason}`,
+          url: '/?route=account&tab=wallet',
+          category: 'payment',
+        },
+        `add_money_${walletTxId}_${decision}`
       );
       await insertAuditLog(
         db,
@@ -4527,6 +4707,32 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           now,
         });
       }
+      if (status !== existing.status) {
+        const orderNum = String(existing.orderNumber || orderId);
+        await insertNotification(
+          db,
+          row.customer_id,
+          `অর্ডার #${orderNum} স্ট্যাটাস আপডেট`,
+          `Order #${orderNum} Status Updated`,
+          `আপনার অর্ডার #${orderNum}-এর বর্তমান অবস্থা: ${status}`,
+          `Your order #${orderNum} is now ${status}.`,
+          'order',
+          { link: '/?route=account&tab=orders', meta: { orderId, orderNumber: orderNum } }
+        );
+        await dispatchCustomerPush(
+          db,
+          row.customer_id,
+          'order',
+          {
+            title: `Order #${orderNum} — ${status}`,
+            body: `Your order status has been updated to ${status}.`,
+            url: '/?route=account&tab=orders',
+            orderId,
+            category: 'order',
+          },
+          `ord_status_${orderId}_${status}_${now}`
+        );
+      }
       await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'ORDER_STATUS_UPDATED', 'orders', orderId, `Set status ${status}`);
       res.json({ ok: true });
     } catch (err) {
@@ -4572,14 +4778,29 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         metadata: { orderId },
         now,
       });
+      const completedOrderNum = String(existing.orderNumber || orderId);
       await insertNotification(
         db,
         row.customer_id,
         'অর্ডার সম্পন্ন হয়েছে',
         'Order Completed',
-        `আপনার অর্ডার #${String(existing.orderNumber || orderId)} সফলভাবে ডেলিভারি সম্পন্ন হয়েছে।`,
-        `Your order #${String(existing.orderNumber || orderId)} has been completed.`,
-        'order'
+        `আপনার অর্ডার #${completedOrderNum} সফলভাবে ডেলিভারি সম্পন্ন হয়েছে।`,
+        `Your order #${completedOrderNum} has been completed.`,
+        'order',
+        { link: '/?route=account&tab=orders', meta: { orderId, orderNumber: completedOrderNum } }
+      );
+      await dispatchCustomerPush(
+        db,
+        row.customer_id,
+        'order',
+        {
+          title: `Order #${completedOrderNum} Completed!`,
+          body: `Your order #${completedOrderNum} has been delivered and completed.`,
+          url: '/?route=account&tab=orders',
+          orderId,
+          category: 'order',
+        },
+        `ord_complete_${orderId}`
       );
       await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'ORDER_COMPLETED', 'orders', orderId, `Completed order ${orderId}`);
       res.json({ ok: true, awardedCashbackBdt: 0, awardedReferralBdt: 0 });
@@ -4651,6 +4872,30 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           [txId, row.customer_id, 'refund', amount, 'Approved', txId, JSON.stringify(wtx), now, now]
         );
       }
+      const cancelledOrderNum = String(existing.orderNumber || orderId);
+      await insertNotification(
+        db,
+        row.customer_id,
+        'অর্ডার বাতিল করা হয়েছে',
+        'Order Cancelled',
+        `অর্ডার #${cancelledOrderNum} বাতিল হয়েছে।${refundedBdt > 0 ? ` ৳${refundedBdt} ওয়ালেটে ফেরত দেওয়া হয়েছে।` : ''}`,
+        `Order #${cancelledOrderNum} cancelled.${refundedBdt > 0 ? ` ৳${refundedBdt} refunded to wallet.` : ''}`,
+        'order',
+        { link: '/?route=account&tab=orders', meta: { orderId, orderNumber: cancelledOrderNum } }
+      );
+      await dispatchCustomerPush(
+        db,
+        row.customer_id,
+        'order',
+        {
+          title: `Order #${cancelledOrderNum} Cancelled`,
+          body: refundedBdt > 0 ? `৳${refundedBdt} refunded to your wallet.` : cancelReason || 'Your order has been cancelled.',
+          url: '/?route=account&tab=orders',
+          orderId,
+          category: 'order',
+        },
+        `ord_cancel_${orderId}`
+      );
       await insertAuditLog(db, user.uid, getUserPrimaryIdentifier(user), 'ORDER_REFUND_CANCEL', 'orders', orderId, `Cancelled order ${orderId}`);
       res.json({ ok: true, status: 'Cancelled', refundedBdt });
     } catch (err) {
@@ -4969,6 +5214,7 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         phone?: string;
         language?: 'bn' | 'en';
         adminNotes?: string;
+        verified?: boolean;
         reason?: string;
       };
 
@@ -4980,6 +5226,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         body.language === 'en' ? 'en' : body.language === 'bn' ? 'bn' : targetRow.language === 'en' ? 'en' : 'bn';
       const nextNotes =
         typeof body.adminNotes === 'string' ? body.adminNotes.trim().slice(0, 2000) : targetRow.admin_notes || '';
+      const nextVerified =
+        typeof body.verified === 'boolean' ? (body.verified ? 1 : 0) : Number(targetRow.is_verified || 0);
 
       let nextPhone = targetRow.phone_e164;
       if (typeof body.phone === 'string' && body.phone.trim()) {
@@ -5003,8 +5251,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       const now = Date.now();
       await db.run(
-        'UPDATE users SET display_name = ?, phone_e164 = ?, language = ?, admin_notes = ?, updated_at = ? WHERE uid = ?',
-        [nextName, nextPhone, nextLanguage, nextNotes, now, targetUid]
+        'UPDATE users SET display_name = ?, phone_e164 = ?, language = ?, admin_notes = ?, is_verified = ?, updated_at = ? WHERE uid = ?',
+        [nextName, nextPhone, nextLanguage, nextNotes, nextVerified, now, targetUid]
       );
 
       await insertAuditLog(
@@ -5465,11 +5713,14 @@ export function createPhoneAuthAndAppRouter(): express.Router {
 
       let recipientCount = 0;
       let targetLabel = targetUid;
+      const deliveredUserIds: string[] = [];
+      const notifLink = '/?route=account&tab=notifications';
       if (targetUidsRaw.length > 0) {
         for (const uidItem of targetUidsRaw) {
           const exists = await db.first<{ uid: string }>('SELECT uid FROM users WHERE uid = ? LIMIT 1', [uidItem]);
           if (exists) {
-            await insertNotification(db, uidItem, titleBn, titleEn, messageBn, messageEn, type);
+            await insertNotification(db, uidItem, titleBn, titleEn, messageBn, messageEn, type, { link: notifLink });
+            deliveredUserIds.push(uidItem);
             recipientCount += 1;
           }
         }
@@ -5483,7 +5734,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           `SELECT uid FROM users WHERE status = 'active' LIMIT 1000`
         );
         for (const u of activeUsers) {
-          await insertNotification(db, u.uid, titleBn, titleEn, messageBn, messageEn, type);
+          await insertNotification(db, u.uid, titleBn, titleEn, messageBn, messageEn, type, { link: notifLink });
+          deliveredUserIds.push(u.uid);
           recipientCount += 1;
         }
       } else {
@@ -5492,9 +5744,23 @@ export function createPhoneAuthAndAppRouter(): express.Router {
           res.status(404).json({ ok: false, error: 'নির্বাচিত ব্যবহারকারী পাওয়া যায়নি।' });
           return;
         }
-        await insertNotification(db, targetUid, titleBn, titleEn, messageBn, messageEn, type);
+        await insertNotification(db, targetUid, titleBn, titleEn, messageBn, messageEn, type, { link: notifLink });
+        deliveredUserIds.push(targetUid);
         recipientCount = 1;
       }
+
+      await dispatchBroadcastPush(
+        db,
+        deliveredUserIds,
+        type,
+        {
+          title: titleEn || titleBn,
+          body: messageEn || messageBn,
+          url: notifLink,
+          category: type,
+        },
+        `admin_notif_${Date.now()}`
+      );
 
       await insertAuditLog(
         db,
@@ -5946,6 +6212,23 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         'INSERT INTO announcements (id, active, payload_json, created_at) VALUES (?, ?, ?, ?)',
         [id, isActive ? 1 : 0, JSON.stringify(payload), now]
       );
+      if (isActive) {
+        const activeUsers = await db.all<{ uid: string }>(
+          `SELECT uid FROM users WHERE status = 'active' LIMIT 1000`
+        );
+        await dispatchBroadcastPush(
+          db,
+          activeUsers.map((u) => u.uid),
+          payload.type === 'offer' || payload.type === 'promo' ? 'promo' : 'announcement',
+          {
+            title: payload.titleEn || payload.titleBn || 'Important Announcement — DIGITAL HUB',
+            body: payload.messageEn || payload.messageBn || 'Check the latest announcement on DIGITAL HUB.',
+            url: '/?route=home#latest-updates',
+            category: 'announcement',
+          },
+          `ann_${id}`
+        );
+      }
       await insertAuditLog(
         db,
         user.uid,
@@ -6506,8 +6789,8 @@ export function createPhoneAuthAndAppRouter(): express.Router {
         res.status(400).json({ ok: false, error: 'Uploaded image file is empty or corrupted.' });
         return;
       }
-      if (binary.length > 2 * 1024 * 1024) {
-        res.status(413).json({ ok: false, error: 'Image file exceeds the maximum 2MB size limit.' });
+      if (binary.length > 10 * 1024 * 1024) {
+        res.status(413).json({ ok: false, error: 'Image file exceeds the maximum 10MB size limit.' });
         return;
       }
 
@@ -8940,6 +9223,210 @@ export function createPhoneAuthAndAppRouter(): express.Router {
       res.json({ ok: true });
     } catch (err) {
       handleRouteError(res, err, 'Failed to delete developer profile.');
+    }
+  });
+
+  // =========================================================================
+  // REAL WEB PUSH / FCM SUBSCRIPTIONS, PREFERENCES & ADMIN ORDER ALERTS
+  // =========================================================================
+
+  router.get('/push/public-key', async (_req, res) => {
+    try {
+      const db = await getAppDatabase();
+      const vapid = await getOrCreateVapidConfig(db);
+      res.json({ ok: true, publicKey: vapid.publicKey });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load push public key.');
+    }
+  });
+
+  router.post('/push/subscribe', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'পুশ নোটিফিকেশন চালু করতে আগে লগইন করুন।' });
+        return;
+      }
+      const { db, user } = resolved;
+      const body = (req.body || {}) as {
+        endpoint?: string;
+        keys?: { p256dh?: string; auth?: string };
+        fcmToken?: string;
+        isAdminDevice?: boolean;
+        deviceLabel?: string;
+        platform?: string;
+      };
+
+      const endpoint = String(body.endpoint || '').trim().slice(0, 1200);
+      const p256dh = String(body.keys?.p256dh || '').trim().slice(0, 500);
+      const auth = String(body.keys?.auth || '').trim().slice(0, 300);
+      const fcmToken = String(body.fcmToken || '').trim().slice(0, 1000);
+
+      if (!endpoint || (!fcmToken && (!p256dh || !auth))) {
+        res.status(400).json({ ok: false, error: 'Valid browser push subscription keys are required.' });
+        return;
+      }
+      if (!endpoint.startsWith('https://')) {
+        res.status(400).json({ ok: false, error: 'Push endpoint must use HTTPS.' });
+        return;
+      }
+
+      const callerIsAdmin = user.role === 'admin' || user.role === 'super_admin';
+      const isAdminDevice = callerIsAdmin && Boolean(body.isAdminDevice) ? 1 : 0;
+      const userAgent = String(req.headers['user-agent'] || '').slice(0, 300);
+      const deviceLabel =
+        String(body.deviceLabel || '').trim().slice(0, 120) ||
+        (/Android|iPhone|iPad|Mobile/i.test(userAgent) ? 'Mobile Browser / PWA' : 'Desktop Browser');
+      const platform = String(body.platform || '').trim().slice(0, 40) || (/Android/i.test(userAgent) ? 'android' : 'web');
+
+      const now = Date.now();
+      const id = generateSecureId('push', 10);
+      await db.run(
+        `INSERT INTO push_subscriptions (
+           id, user_id, role, is_admin_device, device_label, platform,
+           endpoint, p256dh, auth, fcm_token, user_agent, active,
+           last_success_at, last_error, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, '', ?, ?)
+         ON CONFLICT(endpoint) DO UPDATE SET
+           user_id = excluded.user_id,
+           role = excluded.role,
+           is_admin_device = excluded.is_admin_device,
+           device_label = excluded.device_label,
+           platform = excluded.platform,
+           p256dh = excluded.p256dh,
+           auth = excluded.auth,
+           fcm_token = excluded.fcm_token,
+           user_agent = excluded.user_agent,
+           active = 1,
+           last_error = '',
+           updated_at = excluded.updated_at`,
+        [id, user.uid, user.role, isAdminDevice, deviceLabel, platform, endpoint, p256dh, auth, fcmToken, userAgent, now, now]
+      );
+
+      res.json({ ok: true, isAdminDevice: isAdminDevice === 1 });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to save push subscription.');
+    }
+  });
+
+  router.delete('/push/subscribe', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'লগইন প্রয়োজন।' });
+        return;
+      }
+      const { db, user } = resolved;
+      const body = (req.body || {}) as { endpoint?: string };
+      const endpoint = String(body.endpoint || '').trim();
+      const now = Date.now();
+      if (endpoint) {
+        await db.run(
+          'UPDATE push_subscriptions SET active = 0, updated_at = ? WHERE user_id = ? AND endpoint = ?',
+          [now, user.uid, endpoint]
+        );
+      } else {
+        await db.run('UPDATE push_subscriptions SET active = 0, updated_at = ? WHERE user_id = ?', [now, user.uid]);
+      }
+      res.json({ ok: true });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to remove push subscription.');
+    }
+  });
+
+  router.get('/push/preferences', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'লগইন প্রয়োজন।' });
+        return;
+      }
+      const preferences = await getUserNotificationPreferences(resolved.db, resolved.user.uid);
+      res.json({ ok: true, preferences });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load notification preferences.');
+    }
+  });
+
+  router.post('/push/preferences', async (req, res) => {
+    try {
+      const resolved = await resolveSessionFromRequest(req);
+      if (!resolved) {
+        res.status(401).json({ ok: false, error: 'লগইন প্রয়োজন।' });
+        return;
+      }
+      const body = (req.body || {}) as {
+        newOffers?: boolean;
+        importantAnnouncements?: boolean;
+        serviceUpdates?: boolean;
+        orderNotifications?: boolean;
+        paymentNotifications?: boolean;
+        accountNotifications?: boolean;
+      };
+      const preferences = await saveUserNotificationPreferences(resolved.db, resolved.user.uid, body);
+      res.json({ ok: true, preferences });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to save notification preferences.');
+    }
+  });
+
+  router.get('/admin/push/devices', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const rows = await admin.db.all<PushSubscriptionRow>(
+        `SELECT * FROM push_subscriptions WHERE is_admin_device = 1 ORDER BY active DESC, updated_at DESC LIMIT 100`
+      );
+      res.json({
+        ok: true,
+        devices: rows.map((r) => ({
+          id: r.id,
+          userId: r.user_id,
+          role: r.role,
+          isAdminDevice: r.is_admin_device === 1,
+          deviceLabel: r.device_label,
+          platform: r.platform,
+          endpointPreview: r.endpoint.slice(0, 64),
+          active: r.active === 1,
+          lastSuccessAt: Number(r.last_success_at || 0),
+          lastError: r.last_error || '',
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        })),
+      });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to load admin push devices.');
+    }
+  });
+
+  router.post('/admin/push/test', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const { db, user } = admin;
+      const result = await dispatchAdminDevicesPush(db, {
+        title: 'DIGITAL HUB — NEW ORDER! (Test Alert)',
+        body: `Test Customer (${user.uid}) • #DH-TEST99 • Instant Order Push Active • ৳499 via bKash`,
+        url: '/?route=admin&section=orders',
+        tag: `admin-test-${Date.now()}`,
+        category: 'order',
+        requireInteraction: true,
+      });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to send test push notification.');
+    }
+  });
+
+  router.delete('/admin/push/devices/:id', async (req, res) => {
+    try {
+      const admin = await requireAdminSession(req, res);
+      if (!admin) return;
+      const id = String(req.params.id || '').trim();
+      await admin.db.run('DELETE FROM push_subscriptions WHERE id = ? AND is_admin_device = 1', [id]);
+      res.json({ ok: true });
+    } catch (err) {
+      handleRouteError(res, err, 'Failed to remove admin device.');
     }
   });
 

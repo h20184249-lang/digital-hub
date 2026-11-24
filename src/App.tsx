@@ -1,6 +1,7 @@
 import { FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Award,
+  Bell,
   CheckCircle2,
   ChevronRight,
   Clock,
@@ -11,6 +12,7 @@ import {
   HelpCircle,
   LayoutGrid,
   Lock,
+  Megaphone,
   RefreshCw,
   Search,
   Send,
@@ -63,6 +65,9 @@ import {
 } from './types/marketplace';
 import {
   fetchCustomerDashboardServer,
+  formatDateShort,
+  markAllNotificationsRead,
+  markNotificationRead,
   subscribeAdNetworks,
   subscribeAdvertisements,
   subscribeAnnouncements,
@@ -287,6 +292,130 @@ export default function App() {
   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
   const [catalogSectionFilter, setCatalogSectionFilter] = useState('');
   const [toast, setToast] = useState('');
+  const [accountTabRequest, setAccountTabRequest] = useState<
+    | {
+        tab:
+          | 'overview'
+          | 'orders'
+          | 'payments'
+          | 'referrals'
+          | 'rewards'
+          | 'favorites'
+          | 'downloads'
+          | 'coupons'
+          | 'notifications'
+          | 'support'
+          | 'profile';
+        subFilter?: 'active' | 'history' | 'all';
+        scrollTarget?: string;
+        nonce: number;
+      }
+    | undefined
+  >(undefined);
+  const [adminDeepLink, setAdminDeepLink] = useState<
+    { section: string; orderId?: string; nonce: number } | undefined
+  >(undefined);
+
+  const applyUrlDeepLink = useCallback((rawUrlOrSearch: string) => {
+    try {
+      const parsed = new URL(rawUrlOrSearch, window.location.origin);
+      const params = parsed.searchParams;
+      const routeParam = (params.get('route') || '').trim();
+      const sectionParam = (params.get('section') || '').trim();
+      const orderIdParam = (params.get('orderId') || '').trim();
+      const tabParam = (params.get('tab') || '').trim();
+      const productParam = (params.get('product') || '').trim();
+
+      if (productParam) {
+        setDetailProductId(productParam);
+        setRoute('product-detail');
+        return;
+      }
+
+      if (routeParam === 'admin') {
+        setAdminDeepLink({
+          section: sectionParam || 'overview',
+          orderId: orderIdParam || undefined,
+          nonce: Date.now(),
+        });
+        setRoute('admin');
+        return;
+      }
+
+      const VALID_ACCOUNT_TABS = new Set([
+        'overview',
+        'orders',
+        'payments',
+        'referrals',
+        'rewards',
+        'favorites',
+        'downloads',
+        'coupons',
+        'notifications',
+        'support',
+        'profile',
+      ]);
+
+      if (routeParam === 'account' || routeParam === 'orders' || VALID_ACCOUNT_TABS.has(tabParam)) {
+        const nextTab = (
+          VALID_ACCOUNT_TABS.has(tabParam)
+            ? tabParam
+            : routeParam === 'orders'
+              ? 'orders'
+              : 'overview'
+        ) as
+          | 'overview'
+          | 'orders'
+          | 'payments'
+          | 'referrals'
+          | 'rewards'
+          | 'favorites'
+          | 'downloads'
+          | 'coupons'
+          | 'notifications'
+          | 'support'
+          | 'profile';
+        setAccountTabRequest({ tab: nextTab, nonce: Date.now() });
+        setRoute(routeParam === 'orders' ? 'orders' : 'account');
+        return;
+      }
+
+      if (routeParam) {
+        setRoute(routeParam as AppRoute);
+      }
+    } catch {
+      // Non-fatal malformed link
+    }
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (
+      params.get('route') ||
+      params.get('section') ||
+      params.get('tab') ||
+      params.get('orderId')
+    ) {
+      applyUrlDeepLink(window.location.href);
+    }
+    const onPopState = () => {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('route') || p.get('section') || p.get('tab') || p.get('orderId') || p.get('product')) {
+        applyUrlDeepLink(window.location.href);
+      }
+    };
+    const onSwMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'DIGITAL_HUB_PUSH_NAVIGATE' && typeof event.data?.url === 'string') {
+        applyUrlDeepLink(event.data.url);
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    navigator.serviceWorker?.addEventListener('message', onSwMessage);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+      navigator.serviceWorker?.removeEventListener('message', onSwMessage);
+    };
+  }, [applyUrlDeepLink]);
 
   const managedAdUnits = useMemo(
     () => mergeAdUnitsWithOverrides(adUnitOverrides),
@@ -817,6 +946,25 @@ export default function App() {
           onOpenCart={() => setCartOpen(true)}
           isAdmin={isAdmin}
           unreadNotifications={unreadNotifications}
+          notifications={notifications}
+          onMarkNotificationRead={(id) => {
+            void markNotificationRead(id);
+          }}
+          onMarkAllNotificationsRead={() => {
+            if (user?.uid) void markAllNotificationsRead();
+          }}
+          onOpenNotificationCenter={() => {
+            setAccountTabRequest({ tab: 'notifications', nonce: Date.now() });
+            setRoute('account');
+          }}
+          onNotificationClick={(n) => {
+            if (n.link) {
+              applyUrlDeepLink(n.link);
+            } else {
+              setAccountTabRequest({ tab: 'notifications', nonce: Date.now() });
+              setRoute('account');
+            }
+          }}
           onOpenAuth={() => {
             setAuthInitialMode('login');
             setAuthModalOpen(true);
@@ -877,8 +1025,20 @@ export default function App() {
       <main className="flex-1 w-full min-w-0">
         <Suspense
           fallback={
-            <div className="min-h-[60vh] flex items-center justify-center p-8">
-              <div className="w-8 h-8 rounded-full border-2 border-[#FF8500] border-t-transparent animate-spin" />
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6 animate-pulse">
+              <div className="h-44 sm:h-60 rounded-3xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800" />
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                {Array.from({ length: 4 }).map((_, idx) => (
+                  <div
+                    key={idx}
+                    className="h-56 rounded-2xl bg-white dark:bg-slate-900 border border-[#E6ECFA] dark:border-slate-800 p-3 space-y-3"
+                  >
+                    <div className="h-28 rounded-xl bg-[#F3F6FF] dark:bg-slate-800" />
+                    <div className="h-3.5 w-3/4 rounded bg-[#F3F6FF] dark:bg-slate-800" />
+                    <div className="h-3 w-1/2 rounded bg-[#F3F6FF] dark:bg-slate-800" />
+                  </div>
+                ))}
+              </div>
             </div>
           }
         >
@@ -1609,6 +1769,102 @@ export default function App() {
                       return null;
                   }
                 })}
+
+              {/* Latest Updates: Recent Announcements & Newest Digital Services */}
+              {(announcements.length > 0 || products.some((p) => p.active)) && (
+                <section className="dh-card rounded-3xl p-5 sm:p-6 space-y-4 dark:bg-slate-900 dark:border-slate-800">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-[#FFF7EE] dark:bg-orange-950/40 text-[#FF8500] flex items-center justify-center">
+                        <Megaphone className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h2 className="text-base sm:text-lg font-extrabold text-[#172033] dark:text-slate-100">
+                          {lang === 'bn' ? 'সর্বশেষ আপডেট ও নতুন সার্ভিস' : 'Latest Updates & Releases'}
+                        </h2>
+                        <p className="text-[11px] text-[#777777] dark:text-slate-400">
+                          {lang === 'bn'
+                            ? 'প্ল্যাটফর্ম ঘোষণা এবং নতুন যুক্ত হওয়া ডিজিটাল সার্ভিস'
+                            : 'Recent platform announcements and newly added digital services'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRoute('services')}
+                      className="text-xs font-extrabold text-[#FF8500] hover:underline inline-flex items-center gap-1"
+                    >
+                      <span>{t(lang, 'viewAll')}</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                    {announcements.length > 0 && (
+                      <div className="lg:col-span-5 space-y-2.5">
+                        {announcements.slice(0, 3).map((ann) => (
+                          <div
+                            key={ann.id}
+                            className="p-3.5 rounded-2xl bg-[#FFF7EE] dark:bg-slate-800/80 border border-[#FF8500]/25 space-y-1"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="px-2 py-0.5 rounded-md bg-[#172033] dark:bg-[#FF8500] text-white text-[10px] font-bold uppercase">
+                                {ann.type}
+                              </span>
+                              <span className="text-[11px] font-mono-num text-[#777777] dark:text-slate-400">
+                                {formatDateShort(ann.createdAt, lang)}
+                              </span>
+                            </div>
+                            <p className="text-xs font-extrabold text-[#172033] dark:text-slate-100 line-clamp-1">
+                              {lang === 'bn' ? ann.titleBn : ann.titleEn}
+                            </p>
+                            <p className="text-[11px] text-[#64748B] dark:text-slate-400 line-clamp-2">
+                              {lang === 'bn' ? ann.messageBn : ann.messageEn}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div
+                      className={`${
+                        announcements.length > 0 ? 'lg:col-span-7' : 'lg:col-span-12'
+                      } grid grid-cols-1 sm:grid-cols-2 gap-2.5`}
+                    >
+                      {(newArrivalProducts.length > 0
+                        ? newArrivalProducts
+                        : products.filter((p) => p.active)
+                      )
+                        .slice(0, 4)
+                        .map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => openProductDetail(item)}
+                            className="text-left p-3 rounded-2xl bg-[#F8FAFF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500] transition-colors flex items-center gap-3 group"
+                          >
+                            <ServiceBrandLogo
+                              brandKey={item.brandKey}
+                              size={40}
+                              customLogoUrl={item.imageUrl}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-extrabold text-[#172033] dark:text-slate-100 truncate group-hover:text-[#FF8500] transition-colors">
+                                {lang === 'bn' ? item.titleBn : item.titleEn}
+                              </p>
+                              <p className="text-[11px] text-[#777777] dark:text-slate-400 truncate">
+                                {lang === 'bn' ? item.descriptionBn : item.descriptionEn}
+                              </p>
+                              <p className="text-xs font-extrabold font-mono-num text-[#FF8500] mt-0.5">
+                                ৳{item.priceBdt}
+                              </p>
+                            </div>
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                </section>
+              )}
             </div>
           </div>
         )}
@@ -1809,7 +2065,9 @@ export default function App() {
         {(route === 'account' || route === 'orders') && (
           <CustomerDashboard
             key={route}
-            initialTab={route === 'orders' ? 'orders' : 'overview'}
+            initialTab={route === 'orders' ? 'orders' : accountTabRequest?.tab || 'overview'}
+            tabRequest={accountTabRequest}
+            onDeepLink={applyUrlDeepLink}
             lang={lang}
             setLang={setLang}
             user={user}
@@ -1879,6 +2137,9 @@ export default function App() {
             banners={banners}
             paymentMethods={paymentMethods}
             settings={settings}
+            initialSection={adminDeepLink?.section}
+            initialOrderId={adminDeepLink?.orderId}
+            deepLinkNonce={adminDeepLink?.nonce}
             onBackToStore={() => setRoute('home')}
             onLogout={handleLogout}
           />

@@ -1,9 +1,10 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ArrowDownToLine,
   ArrowUpRight,
   Bell,
+  BellRing,
   CheckCheck,
   CheckCircle2,
   Clock,
@@ -11,11 +12,14 @@ import {
   Copy,
   CreditCard,
   Download,
+  Edit3,
   Eye,
   FileText,
   Film,
   Gift,
   Heart,
+  HelpCircle,
+  History,
   Image as ImageIcon,
   KeyRound,
   LayoutDashboard,
@@ -27,8 +31,10 @@ import {
   Phone,
   PlusCircle,
   RefreshCw,
+  Settings,
   Share2,
   Shield,
+  ShieldCheck,
   Star,
   Tag,
   Trash2,
@@ -59,6 +65,7 @@ import {
   ManagedAdUnitConfig,
   Order,
   Payment,
+  PushNotificationPreferences,
   Referral,
   RewardedAdClaim,
   SiteSettings,
@@ -87,6 +94,15 @@ import {
   triggerLogoutAllDevicesServer,
   updateUserProfileFields,
 } from '../lib/firestoreService';
+import {
+  fetchPushPreferences,
+  getExistingSubscription,
+  getNotificationPermission,
+  isPushSupported,
+  requestAndSubscribePush,
+  savePushPreferences,
+  unsubscribePush,
+} from '../lib/pushClient';
 import { BannerSlotView } from './BannerSlotView';
 import { NativeAdRow } from './AutomaticAdEngine';
 import { ManagedPlacementSlot } from './AdUnitFrame';
@@ -137,6 +153,13 @@ interface CustomerDashboardProps {
   onNavigate: (r: AppRoute) => void;
   onOpenAuth: () => void;
   onLogout: () => Promise<void>;
+  tabRequest?: {
+    tab: NonNullable<CustomerDashboardProps['initialTab']>;
+    subFilter?: 'active' | 'history' | 'all';
+    scrollTarget?: string;
+    nonce: number;
+  };
+  onDeepLink?: (url: string) => void;
 }
 
 const EMPTY_WALLET_TXS: WalletTransaction[] = [];
@@ -151,6 +174,17 @@ const EMPTY_ANNOUNCEMENTS: Announcement[] = [];
 const EMPTY_ADVERTISEMENTS: Advertisement[] = [];
 const EMPTY_AD_NETWORKS: AdNetworkConfig[] = [];
 const EMPTY_MANAGED_AD_UNITS: ManagedAdUnitConfig[] = [];
+
+const DEFAULT_PUSH_PREFS: PushNotificationPreferences = {
+  userId: '',
+  newOffers: true,
+  importantAnnouncements: true,
+  serviceUpdates: true,
+  orderNotifications: true,
+  paymentNotifications: true,
+  accountNotifications: true,
+  updatedAt: 0,
+};
 
 export function CustomerDashboard({
   initialTab = 'overview',
@@ -184,8 +218,12 @@ export function CustomerDashboard({
   onNavigate,
   onOpenAuth,
   onLogout,
+  tabRequest,
+  onDeepLink,
 }: CustomerDashboardProps) {
   const [tab, setTab] = useState(initialTab);
+  const [ordersFilter, setOrdersFilter] = useState<'all' | 'active' | 'history'>('all');
+  const appliedTabReqRef = useRef(0);
   const [copiedRef, setCopiedRef] = useState(false);
   const [copiedUid, setCopiedUid] = useState(false);
   const [notifFilter, setNotifFilter] = useState<'all' | 'new_app' | 'app_update' | 'announcement' | 'download' | 'payment' | 'support' | 'reward'>('all');
@@ -194,6 +232,55 @@ export function CustomerDashboard({
   const [liveCoinBalance, setLiveCoinBalance] = useState<number | null>(null);
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const [unfavoritingId, setUnfavoritingId] = useState('');
+
+  // Push Notification Opt-In & Category Preferences state
+  const pushSupported = isPushSupported();
+  const [pushPermission, setPushPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+    getNotificationPermission()
+  );
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushError, setPushError] = useState('');
+  const [pushPrefs, setPushPrefs] = useState<PushNotificationPreferences>(DEFAULT_PUSH_PREFS);
+
+  useEffect(() => {
+    if (!tabRequest?.nonce || appliedTabReqRef.current === tabRequest.nonce) return;
+    appliedTabReqRef.current = tabRequest.nonce;
+    setTab(tabRequest.tab);
+    if (tabRequest.subFilter) {
+      setOrdersFilter(tabRequest.subFilter);
+    }
+    if (tabRequest.scrollTarget) {
+      setTimeout(() => {
+        document.getElementById(tabRequest.scrollTarget!)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  }, [tabRequest]);
+
+  useEffect(() => {
+    if (tab !== 'notifications' || !user?.uid) return;
+    let cancelled = false;
+    setPushLoading(true);
+    setPushError('');
+    setPushPermission(getNotificationPermission());
+    Promise.all([
+      pushSupported ? getExistingSubscription() : Promise.resolve(null),
+      fetchPushPreferences(),
+    ])
+      .then(([sub, prefs]) => {
+        if (cancelled) return;
+        setPushSubscribed(Boolean(sub));
+        setPushPrefs(prefs);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setPushLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, user?.uid, pushSupported]);
 
   useEffect(() => {
     if (tab !== 'rewards' || !user) return;
@@ -724,6 +811,12 @@ export function CustomerDashboard({
               <h1 className="text-lg sm:text-xl font-extrabold text-[#172033] dark:text-slate-100 truncate">
                 {profile?.displayName || user.displayName || 'DIGITAL HUB Customer'}
               </h1>
+              {(profile?.verified === true || user.verified === true) && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-[#16A34A] text-[10px] font-extrabold uppercase tracking-wider">
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>{lang === 'bn' ? 'ভেরিফাইড' : 'Verified'}</span>
+                </span>
+              )}
               {user.role === 'super_admin' && (
                 <span className="px-2 py-0.5 rounded-md bg-[#172033] dark:bg-[#FF8500] text-white text-[10px] font-extrabold uppercase tracking-wider">
                   Super Admin
@@ -784,6 +877,14 @@ export function CustomerDashboard({
           >
             <Wallet className="w-4 h-4 text-[#FF8500]" />
             <span className="font-mono-num">৳{(wallet?.availableBalanceBdt || 0).toFixed(2)}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('profile')}
+            className="px-3.5 py-2 rounded-xl bg-white dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-[#172033] dark:text-slate-100 text-xs font-bold flex items-center gap-1.5 hover:border-[#FF8500]"
+          >
+            <Edit3 className="w-3.5 h-3.5 text-[#FF8500]" />
+            <span>{lang === 'bn' ? 'প্রোফাইল এডিট' : 'Edit Profile'}</span>
           </button>
           {isAdmin && (
             <button
@@ -939,6 +1040,160 @@ export function CustomerDashboard({
                 </div>
               );
             })}
+          </div>
+
+          {/* 10 Clean Quick Account Menu Cards */}
+          <div className="dh-card rounded-3xl p-4 sm:p-5 space-y-3 dark:bg-slate-900 dark:border-slate-800">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-extrabold text-[#172033] dark:text-slate-100">
+                {lang === 'bn' ? 'কুইক অ্যাকাউন্ট মেনু' : 'Quick Account Menu'}
+              </h3>
+              <span className="text-[11px] font-semibold text-[#777777] dark:text-slate-400">
+                {lang === 'bn' ? 'সহজ নেভিগেশন' : 'Account Shortcuts'}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+              {(
+                [
+                  {
+                    id: 'my-orders',
+                    title: lang === 'bn' ? 'আমার অর্ডার' : 'My Orders',
+                    sub: lang === 'bn' ? `${orderStats.pending} চলমান` : `${orderStats.pending} active`,
+                    icon: Package,
+                    tone: 'text-[#FF8500] bg-[#FFF7EE] dark:bg-orange-950/40',
+                    onClick: () => {
+                      setOrdersFilter('active');
+                      setTab('orders');
+                    },
+                  },
+                  {
+                    id: 'order-history',
+                    title: lang === 'bn' ? 'অর্ডার হিস্টোরি' : 'Order History',
+                    sub: lang === 'bn' ? `${orderStats.completed} সম্পন্ন` : `${orderStats.completed} completed`,
+                    icon: History,
+                    tone: 'text-[#16A34A] bg-emerald-50 dark:bg-emerald-950/40',
+                    onClick: () => {
+                      setOrdersFilter('history');
+                      setTab('orders');
+                    },
+                  },
+                  {
+                    id: 'add-money',
+                    title: lang === 'bn' ? 'অ্যাড মানি' : 'Add Money',
+                    sub: lang === 'bn' ? 'bKash / Nagad / Rocket' : 'Deposit balance',
+                    icon: PlusCircle,
+                    tone: 'text-[#FF8500] bg-[#FFF7EE] dark:bg-orange-950/40',
+                    onClick: () => onNavigate('add-money'),
+                  },
+                  {
+                    id: 'wallet-tx',
+                    title: lang === 'bn' ? 'ওয়ালেট লেনদেন' : 'Wallet Transactions',
+                    sub: `${walletTxs.length} ${lang === 'bn' ? 'রেকর্ড' : 'records'}`,
+                    icon: Wallet,
+                    tone: 'text-[#0EA5E9] bg-sky-50 dark:bg-sky-950/40',
+                    onClick: () => onNavigate('wallet'),
+                  },
+                  {
+                    id: 'referrals',
+                    title: lang === 'bn' ? 'রেফারেল প্রোগ্রাম' : 'Referral Program',
+                    sub: `${referrals.length} ${lang === 'bn' ? 'বন্ধু' : 'friends'}`,
+                    icon: Users,
+                    tone: 'text-purple-600 bg-purple-50 dark:bg-purple-950/40',
+                    onClick: () => setTab('referrals'),
+                  },
+                  {
+                    id: 'notif-center',
+                    title: lang === 'bn' ? 'নোটিফিকেশন সেন্টার' : 'Notification Center',
+                    sub:
+                      unreadCount > 0
+                        ? lang === 'bn'
+                          ? `${unreadCount} অপঠিত`
+                          : `${unreadCount} unread`
+                        : lang === 'bn'
+                          ? 'সব পঠিত'
+                          : 'All caught up',
+                    badge: unreadCount > 0 ? unreadCount : undefined,
+                    icon: BellRing,
+                    tone: 'text-[#FF8500] bg-[#FFF7EE] dark:bg-orange-950/40',
+                    onClick: () => setTab('notifications'),
+                  },
+                  {
+                    id: 'account-settings',
+                    title: lang === 'bn' ? 'অ্যাকাউন্ট সেটিংস' : 'Account Settings',
+                    sub: lang === 'bn' ? 'নাম, ছবি ও তথ্য' : 'Profile & details',
+                    icon: Settings,
+                    tone: 'text-[#172033] dark:text-slate-200 bg-[#F3F6FF] dark:bg-slate-800',
+                    onClick: () => setTab('profile'),
+                  },
+                  {
+                    id: 'security-settings',
+                    title: lang === 'bn' ? 'সিকিউরিটি সেটিংস' : 'Security Settings',
+                    sub: lang === 'bn' ? 'পাসওয়ার্ড ও সেশন' : 'Password & sessions',
+                    icon: Shield,
+                    tone: 'text-[#16A34A] bg-emerald-50 dark:bg-emerald-950/40',
+                    onClick: () => {
+                      setTab('profile');
+                      setTimeout(() => {
+                        document
+                          .getElementById('customer-security-section')
+                          ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }, 80);
+                    },
+                  },
+                  {
+                    id: 'help-support',
+                    title: lang === 'bn' ? 'হেল্প ও সাপোর্ট' : 'Help & Support',
+                    sub: `${tickets.length} ${lang === 'bn' ? 'টিকেট' : 'tickets'}`,
+                    icon: HelpCircle,
+                    tone: 'text-[#0EA5E9] bg-sky-50 dark:bg-sky-950/40',
+                    onClick: () => setTab('support'),
+                  },
+                  {
+                    id: 'logout',
+                    title: lang === 'bn' ? 'লগআউট' : 'Logout',
+                    sub: lang === 'bn' ? 'সেশন থেকে বের হন' : 'Sign out safely',
+                    icon: LogOut,
+                    tone: 'text-[#DC2626] bg-red-50 dark:bg-red-950/40',
+                    onClick: () => {
+                      onLogout().catch(() => {});
+                    },
+                  },
+                ] as {
+                  id: string;
+                  title: string;
+                  sub: string;
+                  badge?: number;
+                  icon: typeof Package;
+                  tone: string;
+                  onClick: () => void;
+                }[]
+              ).map((item) => {
+                const ItemIcon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={item.onClick}
+                    className="relative text-left p-3 rounded-2xl bg-[#F8FAFF] dark:bg-slate-800/80 border border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500] hover:shadow-xs transition-all flex items-center gap-2.5 group"
+                  >
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${item.tone}`}>
+                      <ItemIcon className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-extrabold text-[#172033] dark:text-slate-100 truncate group-hover:text-[#FF8500] transition-colors">
+                        {item.title}
+                      </p>
+                      <p className="text-[10px] text-[#777777] dark:text-slate-400 truncate">{item.sub}</p>
+                    </div>
+                    {item.badge ? (
+                      <span className="px-1.5 py-0.5 rounded-full bg-[#FF8500] text-white text-[10px] font-extrabold font-mono-num shrink-0">
+                        {item.badge}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Quick Referral Invite & Wallet Actions Bar */}
@@ -1321,97 +1576,136 @@ export function CustomerDashboard({
         </div>
       )}
 
-      {tab === 'orders' && (
-        <div className="dh-card rounded-3xl p-5 space-y-3">
-          <h2 className="text-lg font-bold text-[#172033]">{t(lang, 'navOrders')}</h2>
-          {orders.length === 0 ? (
-            <p className="text-sm text-[#777777] py-8 text-center">
-              {lang === 'bn' ? 'কোনো অর্ডার পাওয়া যায়নি।' : 'No orders found.'}
-            </p>
-          ) : (
-            orders.map((ord) => (
-              <div
-                key={ord.id}
-                className="p-4 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex flex-col md:flex-row md:items-center justify-between gap-3"
-              >
-                <div className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-mono-num font-bold text-[#FF8500]">#{ord.orderNumber}</span>
-                    <span className="px-2.5 py-0.5 rounded-md bg-white border border-[#E6ECFA] text-[11px] font-bold">
-                      {ord.status}
-                    </span>
-                    <span className="text-xs text-[#777777]">{formatDateShort(ord.createdAt, lang)}</span>
-                  </div>
-                  <p className="text-sm font-bold text-[#172033]">
-                    {lang === 'bn' ? ord.productTitleBn || ord.productTitleEn : ord.productTitleEn}
-                    {ord.selectedPackageName ? (
-                      <span className="ml-1.5 text-xs font-semibold text-[#FF8500]">
-                        [{ord.selectedPackageName}]
-                      </span>
-                    ) : null}
-                  </p>
-                  {ord.itemsSummary && <p className="text-xs text-[#777777]">{ord.itemsSummary}</p>}
-                  {ord.adminNote && (
-                    <p className="text-xs font-semibold text-[#16A34A]">
-                      {lang === 'bn' ? 'ডেলিভারি নোট:' : 'Delivery Note:'} {ord.adminNote}
-                    </p>
-                  )}
-                  {ord.rejectionReason && (
-                    <p className="text-xs font-semibold text-[#DC2626]">
-                      {lang === 'bn' ? 'বাতিলের কারণ:' : 'Reason:'} {ord.rejectionReason}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <span className="text-base font-extrabold font-mono-num text-[#172033] mr-2">
-                    ৳{ord.totalPriceBdt}
-                  </span>
+      {tab === 'orders' && (() => {
+        const ACTIVE_STATUSES = new Set([
+          'New',
+          'Pending Payment',
+          'Verification Pending',
+          'Paid',
+          'Payment Approved',
+          'Processing',
+        ]);
+        const filteredOrders = orders.filter((ord) => {
+          if (ordersFilter === 'active') return ACTIVE_STATUSES.has(ord.status);
+          if (ordersFilter === 'history') return !ACTIVE_STATUSES.has(ord.status);
+          return true;
+        });
+        return (
+          <div className="dh-card rounded-3xl p-5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-bold text-[#172033]">{t(lang, 'navOrders')}</h2>
+              <div className="flex items-center gap-1.5">
+                {(
+                  [
+                    { id: 'all', bn: 'সব অর্ডার', en: 'All Orders' },
+                    { id: 'active', bn: 'চলমান অর্ডার', en: 'Active Orders' },
+                    { id: 'history', bn: 'অর্ডার হিস্টোরি', en: 'Order History' },
+                  ] as const
+                ).map((pill) => (
                   <button
+                    key={pill.id}
                     type="button"
-                    onClick={() => setSelectedOrder(ord)}
-                    className="px-3 py-1.5 rounded-xl bg-white border border-[#E6ECFA] text-[#172033] text-xs font-bold flex items-center gap-1 hover:border-[#FF8500]"
+                    onClick={() => setOrdersFilter(pill.id)}
+                    className={`px-3 py-1 rounded-xl text-xs font-bold transition-colors ${
+                      ordersFilter === pill.id
+                        ? 'bg-[#FF8500] text-white'
+                        : 'bg-[#F3F6FF] border border-[#E6ECFA] text-[#475569] hover:border-[#FF8500]'
+                    }`}
                   >
-                    <Eye className="w-3.5 h-3.5 text-[#FF8500]" />
-                    {lang === 'bn' ? 'ট্র্যাক / বিস্তারিত' : 'Track / Details'}
+                    {lang === 'bn' ? pill.bn : pill.en}
                   </button>
-                  {(ord.status === 'Pending Payment' || ord.status === 'Verification Pending') && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        cancelCustomerOrder(ord.id, {
-                          customerId: ord.customerId,
-                          orderNumber: ord.orderNumber,
-                        }).then(() =>
-                          setFeedback(
-                            lang === 'bn'
-                              ? `অর্ডার #${ord.orderNumber} বাতিল করা হয়েছে।`
-                              : `Order #${ord.orderNumber} cancelled.`
-                          )
-                        )
-                      }
-                      className="px-3 py-1.5 rounded-xl bg-red-50 text-[#DC2626] text-xs font-bold flex items-center gap-1 hover:bg-red-100"
-                    >
-                      <XCircle className="w-3.5 h-3.5" />
-                      {lang === 'bn' ? 'বাতিল করুন' : 'Cancel'}
-                    </button>
-                  )}
-                  {ord.status === 'Completed' && (
-                    <button
-                      type="button"
-                      onClick={() => setReviewOrder(ord)}
-                      className="px-3 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold flex items-center gap-1"
-                    >
-                      <Star className="w-3.5 h-3.5" />
-                      {lang === 'bn' ? 'রিভিউ লিখুন' : 'Write Review'}
-                    </button>
-                  )}
-                </div>
+                ))}
               </div>
-            ))
-          )}
-        </div>
-      )}
+            </div>
+            {filteredOrders.length === 0 ? (
+              <p className="text-sm text-[#777777] py-8 text-center">
+                {lang === 'bn' ? 'এই তালিকায় কোনো অর্ডার পাওয়া যায়নি।' : 'No orders found in this view.'}
+              </p>
+            ) : (
+              filteredOrders.map((ord) => (
+                <div
+                  key={ord.id}
+                  className="p-4 rounded-2xl bg-[#F3F6FF] border border-[#E6ECFA] flex flex-col md:flex-row md:items-center justify-between gap-3"
+                >
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-mono-num font-bold text-[#FF8500]">#{ord.orderNumber}</span>
+                      <span className="px-2.5 py-0.5 rounded-md bg-white border border-[#E6ECFA] text-[11px] font-bold">
+                        {ord.status}
+                      </span>
+                      <span className="text-xs text-[#777777]">{formatDateShort(ord.createdAt, lang)}</span>
+                    </div>
+                    <p className="text-sm font-bold text-[#172033]">
+                      {lang === 'bn' ? ord.productTitleBn || ord.productTitleEn : ord.productTitleEn}
+                      {ord.selectedPackageName ? (
+                        <span className="ml-1.5 text-xs font-semibold text-[#FF8500]">
+                          [{ord.selectedPackageName}]
+                        </span>
+                      ) : null}
+                    </p>
+                    {ord.itemsSummary && <p className="text-xs text-[#777777]">{ord.itemsSummary}</p>}
+                    {ord.adminNote && (
+                      <p className="text-xs font-semibold text-[#16A34A]">
+                        {lang === 'bn' ? 'ডেলিভারি নোট:' : 'Delivery Note:'} {ord.adminNote}
+                      </p>
+                    )}
+                    {ord.rejectionReason && (
+                      <p className="text-xs font-semibold text-[#DC2626]">
+                        {lang === 'bn' ? 'বাতিলের কারণ:' : 'Reason:'} {ord.rejectionReason}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <span className="text-base font-extrabold font-mono-num text-[#172033] mr-2">
+                      ৳{ord.totalPriceBdt}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOrder(ord)}
+                      className="px-3 py-1.5 rounded-xl bg-white border border-[#E6ECFA] text-[#172033] text-xs font-bold flex items-center gap-1 hover:border-[#FF8500]"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-[#FF8500]" />
+                      {lang === 'bn' ? 'ট্র্যাক / বিস্তারিত' : 'Track / Details'}
+                    </button>
+                    {(ord.status === 'Pending Payment' || ord.status === 'Verification Pending') && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          cancelCustomerOrder(ord.id, {
+                            customerId: ord.customerId,
+                            orderNumber: ord.orderNumber,
+                          }).then(() =>
+                            setFeedback(
+                              lang === 'bn'
+                                ? `অর্ডার #${ord.orderNumber} বাতিল করা হয়েছে।`
+                                : `Order #${ord.orderNumber} cancelled.`
+                            )
+                          )
+                        }
+                        className="px-3 py-1.5 rounded-xl bg-red-50 text-[#DC2626] text-xs font-bold flex items-center gap-1 hover:bg-red-100"
+                      >
+                        <XCircle className="w-3.5 h-3.5" />
+                        {lang === 'bn' ? 'বাতিল করুন' : 'Cancel'}
+                      </button>
+                    )}
+                    {ord.status === 'Completed' && (
+                      <button
+                        type="button"
+                        onClick={() => setReviewOrder(ord)}
+                        className="px-3 py-1.5 rounded-xl dh-orange-gradient text-white text-xs font-bold flex items-center gap-1"
+                      >
+                        <Star className="w-3.5 h-3.5" />
+                        {lang === 'bn' ? 'রিভিউ লিখুন' : 'Write Review'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        );
+      })()}
 
       {tab === 'payments' && (
         <div className="dh-card rounded-3xl p-5 space-y-3">
@@ -2154,6 +2448,190 @@ export function CustomerDashboard({
 
       {tab === 'notifications' && (
         <div className="space-y-5">
+          {/* Web Push Notification Opt-In & 6 Category Preferences */}
+          <div className="dh-card rounded-3xl p-5 space-y-4 border border-[#E6ECFA] dark:bg-slate-900 dark:border-slate-800">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <h2 className="text-base sm:text-lg font-extrabold text-[#172033] dark:text-slate-100 flex items-center gap-2">
+                  <BellRing className="w-5 h-5 text-[#FF8500]" />
+                  <span>{lang === 'bn' ? 'পুশ নোটিফিকেশন ও অ্যালার্ট সেটিংস' : 'Push Notifications & Alert Preferences'}</span>
+                </h2>
+                <p className="text-xs text-[#777777] dark:text-slate-400">
+                  {lang === 'bn'
+                    ? 'অ্যাপ বন্ধ থাকলেও সরাসরি ব্রাউজার বা মোবাইলে তাৎক্ষণিক অর্ডার ও অফার আপডেট পান।'
+                    : 'Receive instant browser & mobile alerts for orders, payments, and offers even when the app is closed.'}
+                </p>
+              </div>
+              {pushSupported ? (
+                <button
+                  type="button"
+                  disabled={pushBusy}
+                  onClick={async () => {
+                    setPushBusy(true);
+                    setPushError('');
+                    try {
+                      if (pushSubscribed) {
+                        await unsubscribePush();
+                        setPushSubscribed(false);
+                        setFeedback(lang === 'bn' ? 'পুশ নোটিফিকেশন বন্ধ করা হয়েছে।' : 'Push notifications disabled.');
+                      } else {
+                        await requestAndSubscribePush();
+                        setPushPermission(getNotificationPermission());
+                        setPushSubscribed(true);
+                        setFeedback(lang === 'bn' ? 'পুশ নোটিফিকেশন চালু হয়েছে!' : 'Push notifications enabled!');
+                      }
+                    } catch (err) {
+                      const nextPerm = getNotificationPermission();
+                      setPushPermission(nextPerm);
+                      setPushError(
+                        nextPerm === 'denied'
+                          ? lang === 'bn'
+                            ? 'ব্রাউজার থেকে নোটিফিকেশন অনুমতি ব্লক করা আছে। সেটিংস থেকে Allow করুন।'
+                            : 'Notification permission is blocked in browser settings.'
+                          : err instanceof Error
+                            ? err.message
+                            : lang === 'bn'
+                              ? 'পুশ নোটিফিকেশন চালু করা যায়নি।'
+                              : 'Could not enable push notifications.'
+                      );
+                    } finally {
+                      setPushBusy(false);
+                    }
+                  }}
+                  className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-colors disabled:opacity-60 ${
+                    pushSubscribed
+                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-[#16A34A] border border-emerald-200 dark:border-emerald-800 hover:bg-red-50 hover:text-[#DC2626] hover:border-red-200'
+                      : 'dh-orange-gradient text-white'
+                  }`}
+                >
+                  {pushBusy
+                    ? '...'
+                    : pushSubscribed
+                      ? lang === 'bn'
+                        ? 'পুশ চালু আছে (বন্ধ করুন)'
+                        : 'Push Active (Disable)'
+                      : lang === 'bn'
+                        ? 'পুশ নোটিফিকেশন চালু করুন'
+                        : 'Enable Push Alerts'}
+                </button>
+              ) : (
+                <span className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-[#777777]">
+                  {lang === 'bn' ? 'এই ব্রাউজারে পুশ সমর্থিত নয়' : 'Push unsupported on this browser'}
+                </span>
+              )}
+            </div>
+
+            {pushPermission === 'denied' && (
+              <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-300 font-semibold">
+                {lang === 'bn'
+                  ? 'আপনার ব্রাউজারে নোটিফিকেশন পারমিশন ব্লক করা আছে। অ্যাড্রেস বারের লক আইকন থেকে Notifications -> Allow নির্বাচন করুন।'
+                  : 'Browser notification permission is denied. Click the lock icon in your address bar and set Notifications to Allow.'}
+              </div>
+            )}
+
+            {pushError && (
+              <p className="text-xs font-semibold text-[#DC2626]">{pushError}</p>
+            )}
+
+            {pushLoading ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 animate-pulse">
+                {Array.from({ length: 6 }).map((_, idx) => (
+                  <div key={idx} className="h-14 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800" />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                {(
+                  [
+                    {
+                      key: 'orderNotifications',
+                      bn: 'অর্ডার নোটিফিকেশন',
+                      en: 'Order Notifications',
+                      descBn: 'অর্ডার কনফার্ম, প্রসেসিং ও ডেলিভারি',
+                      descEn: 'Order confirmations & delivery',
+                    },
+                    {
+                      key: 'paymentNotifications',
+                      bn: 'পেমেন্ট নোটিফিকেশন',
+                      en: 'Payment Notifications',
+                      descBn: 'ডিপোজিট ও ট্রানজেকশন আপডেট',
+                      descEn: 'Deposits, payouts & TrxID updates',
+                    },
+                    {
+                      key: 'newOffers',
+                      bn: 'নতুন অফার ও ডিসকাউন্ট',
+                      en: 'New Offers',
+                      descBn: 'স্পেশাল ডিল ও কুপন কোড',
+                      descEn: 'Special deals & promo coupons',
+                    },
+                    {
+                      key: 'importantAnnouncements',
+                      bn: 'গুরুত্বপূর্ণ ঘোষণা',
+                      en: 'Important Announcements',
+                      descBn: 'প্ল্যাটফর্মের জরুরি নোটিশ',
+                      descEn: 'Official platform notices',
+                    },
+                    {
+                      key: 'serviceUpdates',
+                      bn: 'সার্ভিস আপডেট',
+                      en: 'Service Updates',
+                      descBn: 'নতুন সার্ভিস, অ্যাপ ও প্যাকেজ',
+                      descEn: 'New digital services & releases',
+                    },
+                    {
+                      key: 'accountNotifications',
+                      bn: 'অ্যাকাউন্ট নোটিফিকেশন',
+                      en: 'Account Notifications',
+                      descBn: 'সিকিউরিটি, লগইন ও প্রোফাইল আপডেট',
+                      descEn: 'Security, recovery & verification',
+                    },
+                  ] as {
+                    key: keyof PushNotificationPreferences;
+                    bn: string;
+                    en: string;
+                    descBn: string;
+                    descEn: string;
+                  }[]
+                ).map((item) => {
+                  const enabled = pushPrefs[item.key] !== false;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => {
+                        const next: PushNotificationPreferences = {
+                          ...pushPrefs,
+                          [item.key]: !enabled,
+                        };
+                        setPushPrefs(next);
+                        savePushPreferences(next)
+                          .then((saved) => setPushPrefs(saved))
+                          .catch(() => {});
+                      }}
+                      className="text-left p-3 rounded-2xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 hover:border-[#FF8500] transition-colors flex items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-xs font-extrabold text-[#172033] dark:text-slate-100 truncate">
+                          {lang === 'bn' ? item.bn : item.en}
+                        </p>
+                        <p className="text-[10px] text-[#777777] dark:text-slate-400 truncate">
+                          {lang === 'bn' ? item.descBn : item.descEn}
+                        </p>
+                      </div>
+                      <span
+                        className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${
+                          enabled ? 'bg-[#FF8500] justify-end' : 'bg-slate-300 dark:bg-slate-600 justify-start'
+                        }`}
+                      >
+                        <span className="w-4 h-4 rounded-full bg-white shadow-xs" />
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {announcements.length > 0 && (
             <div className="dh-card rounded-3xl p-5 space-y-3 border border-[#FF8500]/30">
               <h2 className="text-lg font-bold text-[#172033]">
@@ -2249,9 +2727,12 @@ export function CustomerDashboard({
               filteredNotifications.map((n) => (
                 <div
                   key={n.id}
-                  onClick={() => !n.read && markNotificationRead(n.id)}
+                  onClick={() => {
+                    if (!n.read) void markNotificationRead(n.id);
+                    if (n.link && onDeepLink) onDeepLink(n.link);
+                  }}
                   className={`p-3.5 rounded-2xl border cursor-pointer transition-colors ${
-                    n.read ? 'bg-white border-[#E6ECFA]' : 'bg-[#FFF7EE] border-[#FF8500]/40'
+                    n.read ? 'bg-white border-[#E6ECFA] hover:border-[#FF8500]/50' : 'bg-[#FFF7EE] border-[#FF8500]/40 hover:border-[#FF8500]'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -2501,7 +2982,7 @@ export function CustomerDashboard({
           </form>
 
           {/* Account Security & Deletion Requests */}
-          <div className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
+          <div id="customer-security-section" className="dh-card rounded-3xl p-5 sm:p-6 space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-base font-bold text-[#172033] flex items-center gap-2">

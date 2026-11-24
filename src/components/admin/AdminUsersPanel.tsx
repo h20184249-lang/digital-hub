@@ -62,6 +62,7 @@ export function AdminUsersPanel({
   const [editPhone, setEditPhone] = useState('');
   const [editLang, setEditLang] = useState<'bn' | 'en'>('bn');
   const [editNotes, setEditNotes] = useState('');
+  const [editVerified, setEditVerified] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
 
   // Quick wallet adjust form inside drawer
@@ -116,6 +117,7 @@ export function AdminUsersPanel({
       setEditPhone(data.profile.phone || '');
       setEditLang(data.profile.language === 'en' ? 'en' : 'bn');
       setEditNotes(data.profile.adminNotes || '');
+      setEditVerified(Boolean(data.profile.verified));
       setAdjAmount('');
       setAdjReason('');
     } catch (err) {
@@ -195,6 +197,7 @@ export function AdminUsersPanel({
         phone: editPhone.trim(),
         language: editLang,
         adminNotes: editNotes.trim(),
+        verified: editVerified,
       });
       onSuccess(lang === 'bn' ? 'ইউজার প্রোফাইল ও অ্যাডমিন নোট সংরক্ষিত হয়েছে।' : 'User profile & admin notes saved.');
       await loadUserDetail(detail.profile.uid);
@@ -632,15 +635,27 @@ export function AdminUsersPanel({
                           className="w-full px-3 py-2 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs text-[#172033] dark:text-slate-100"
                         />
                       </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <select
-                          value={editLang}
-                          onChange={(e) => setEditLang(e.target.value as 'bn' | 'en')}
-                          className="px-3 py-1.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs"
-                        >
-                          <option value="bn">Language: বাংলা (bn)</option>
-                          <option value="en">Language: English (en)</option>
-                        </select>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <select
+                            value={editLang}
+                            onChange={(e) => setEditLang(e.target.value as 'bn' | 'en')}
+                            className="px-3 py-1.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs"
+                          >
+                            <option value="bn">Language: বাংলা (bn)</option>
+                            <option value="en">Language: English (en)</option>
+                          </select>
+                          <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#F3F6FF] dark:bg-slate-800 border border-[#E6ECFA] dark:border-slate-700 text-xs font-bold cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={editVerified}
+                              onChange={(e) => setEditVerified(e.target.checked)}
+                              className="accent-[#FF8500] w-3.5 h-3.5"
+                            />
+                            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>{lang === 'bn' ? 'ভেরিফায়েড ব্যাজ' : 'Verified Account Badge'}</span>
+                          </label>
+                        </div>
                         <button
                           type="submit"
                           disabled={savingProfile}

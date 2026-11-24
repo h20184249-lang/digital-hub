@@ -1145,6 +1145,7 @@ export function ProductVisualArtwork({
           }}
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
           loading="lazy"
+          decoding="async"
         />
         {!isGeneratedProductCard && (
           <div className="absolute inset-0 bg-gradient-to-t from-[#0F172A]/85 via-[#0F172A]/25 to-transparent pointer-events-none" />
@@ -1182,6 +1183,7 @@ export function ProductVisualArtwork({
         }}
         className="w-full h-full object-cover opacity-75 group-hover:scale-105 transition-transform duration-300"
         loading="lazy"
+        decoding="async"
       />
       <div
         className="absolute inset-0 pointer-events-none"

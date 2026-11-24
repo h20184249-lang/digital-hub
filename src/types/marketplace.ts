@@ -4,6 +4,7 @@ export type PaymentMethod = 'bkash' | 'nagad' | 'rocket' | (string & {});
 export type CheckoutPaymentMethod = PaymentMethod | 'wallet';
 
 export type OrderStatus =
+  | 'New'
   | 'Pending Payment'
   | 'Verification Pending'
   | 'Paid'
@@ -101,6 +102,7 @@ export interface AuthUser {
   photoURL?: string;
   role: 'super_admin' | 'admin' | 'user';
   status: 'active' | 'suspended';
+  verified?: boolean;
   referralCode: string;
   createdAt?: number;
 }
@@ -118,6 +120,7 @@ export interface UserProfile {
   promotionalCredits: number;
   language?: Language;
   status: 'active' | 'suspended';
+  verified?: boolean;
   adminNotes?: string;
   lastLoginAt?: number;
   lastLoginIp?: string;
@@ -682,8 +685,36 @@ export interface AppNotification {
     | 'announcement'
     | 'download'
     | 'reward';
+  link?: string;
+  meta?: Record<string, unknown>;
   read: boolean;
   createdAt?: unknown;
+}
+
+export interface PushNotificationPreferences {
+  userId: string;
+  newOffers: boolean;
+  importantAnnouncements: boolean;
+  serviceUpdates: boolean;
+  orderNotifications: boolean;
+  paymentNotifications: boolean;
+  accountNotifications: boolean;
+  updatedAt: number;
+}
+
+export interface PushDeviceRecord {
+  id: string;
+  userId: string;
+  role: string;
+  isAdminDevice: boolean;
+  deviceLabel: string;
+  platform: string;
+  endpointPreview: string;
+  active: boolean;
+  lastSuccessAt: number;
+  lastError: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface SupportTicket {

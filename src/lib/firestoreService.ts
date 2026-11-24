@@ -149,6 +149,8 @@ export function subscribeDashboardInvalidation(cb: () => void): () => void {
 
 export function notifyDashboardInvalidation(): void {
   adminSnapshotCache = null;
+  customerDashboardCache = null;
+  customerDashboardInFlight = null;
   dashboardListeners.forEach((fn) => {
     try {
       fn();
@@ -902,15 +904,32 @@ export interface CustomerDashboardPayload {
   downloadHistory?: DownloadHistoryItem[];
 }
 
-export async function fetchCustomerDashboardServer(): Promise<CustomerDashboardPayload | null> {
-  try {
-    const data = await apiJson<CustomerDashboardPayload & { ok: true }>('/api/me/dashboard', {
-      method: 'GET',
-    });
-    return data;
-  } catch {
-    return null;
+let customerDashboardCache: { fetchedAt: number; data: CustomerDashboardPayload } | null = null;
+let customerDashboardInFlight: Promise<CustomerDashboardPayload | null> | null = null;
+const CUSTOMER_DASHBOARD_CACHE_TTL_MS = 12000;
+
+export async function fetchCustomerDashboardServer(force = false): Promise<CustomerDashboardPayload | null> {
+  const now = Date.now();
+  if (!force && customerDashboardCache && now - customerDashboardCache.fetchedAt < CUSTOMER_DASHBOARD_CACHE_TTL_MS) {
+    return customerDashboardCache.data;
   }
+  if (!force && customerDashboardInFlight) {
+    return customerDashboardInFlight;
+  }
+  customerDashboardInFlight = (async () => {
+    try {
+      const data = await apiJson<CustomerDashboardPayload & { ok: true }>('/api/me/dashboard', {
+        method: 'GET',
+      });
+      customerDashboardCache = { fetchedAt: Date.now(), data };
+      return data;
+    } catch {
+      return null;
+    } finally {
+      customerDashboardInFlight = null;
+    }
+  })();
+  return customerDashboardInFlight;
 }
 
 export async function verifyOwnerAdminServer(): Promise<boolean> {
@@ -1869,7 +1888,14 @@ export async function adminFetchUserDetail(uid: string): Promise<AdminUserDetail
 
 export async function adminUpdateUserProfile(
   uid: string,
-  updates: { displayName?: string; phone?: string; language?: 'bn' | 'en'; adminNotes?: string; reason?: string }
+  updates: {
+    displayName?: string;
+    phone?: string;
+    language?: 'bn' | 'en';
+    adminNotes?: string;
+    verified?: boolean;
+    reason?: string;
+  }
 ): Promise<UserProfile> {
   const res = await apiJson<{ ok: true; profile: UserProfile }>(
     `/api/admin/users/${encodeURIComponent(uid)}`,
@@ -2264,8 +2290,8 @@ export async function optimizePackageLogoFile(file: File, maxDim = 512): Promise
   if (!allowedMimes.has(mime) && !extMatch) {
     throw new Error('Only PNG, JPG, JPEG, or WebP images are supported.');
   }
-  if (file.size > 5 * 1024 * 1024) {
-    throw new Error('Selected image must be 5MB or smaller.');
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error('Selected image must be 10MB or smaller.');
   }
 
   return new Promise((resolve, reject) => {
@@ -2303,12 +2329,180 @@ export async function optimizePackageLogoFile(file: File, maxDim = 512): Promise
   });
 }
 
-export async function adminUploadMediaAsset(dataUrl: string): Promise<{
+export async function prepareBannerImageForUpload(
+  file: File,
+  options?: {
+    preset?: 'hero' | 'ad_small' | 'square';
+    onProgress?: (percent: number, stageLabel?: string) => void;
+  }
+): Promise<{ dataUrl: string; width: number; height: number; originalSizeBytes: number }> {
+  const allowedMimes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']);
+  const mime = (file.type || '').toLowerCase();
+  const extMatch = /\.(png|jpe?g|webp)$/i.test(file.name || '');
+  if (!allowedMimes.has(mime) && !extMatch) {
+    throw new Error('Only PNG, JPG, JPEG, or WebP images are supported.');
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    throw new Error('Selected banner image exceeds the maximum 10MB size limit.');
+  }
+
+  const preset = options?.preset || 'hero';
+  const onProgress = options?.onProgress;
+  onProgress?.(10, 'Reading image...');
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      onProgress?.(30, 'Optimizing aspect ratio & resolution...');
+      const rawDataUrl = String(reader.result || '');
+      const img = new Image();
+      img.onload = () => {
+        const srcW = Math.max(1, img.width || 1);
+        const srcH = Math.max(1, img.height || 1);
+
+        let targetW = srcW;
+        let targetH = srcH;
+        if (preset === 'ad_small') {
+          // Exact 320x50 leaderboard aspect ratio (2x Retina 640x100 for razor-sharp rendering)
+          targetW = 640;
+          targetH = 100;
+        } else if (preset === 'square') {
+          const ratio = Math.min(1, 512 / Math.max(srcW, srcH));
+          targetW = Math.max(1, Math.round(srcW * ratio));
+          targetH = Math.max(1, Math.round(srcH * ratio));
+        } else {
+          // Main hero banner: preserve natural aspect ratio bounded inside 1536x1024
+          const ratio = Math.min(1, 1536 / srcW, 1024 / srcH);
+          targetW = Math.max(1, Math.round(srcW * ratio));
+          targetH = Math.max(1, Math.round(srcH * ratio));
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          onProgress?.(60, 'Prepared image...');
+          resolve({ dataUrl: rawDataUrl, width: srcW, height: srcH, originalSizeBytes: file.size });
+          return;
+        }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.clearRect(0, 0, targetW, targetH);
+
+        if (preset === 'ad_small') {
+          // Center-crop cleanly to 320:50 ratio without stretching
+          const targetRatio = targetW / targetH;
+          const srcRatio = srcW / srcH;
+          let drawW = srcW;
+          let drawH = srcH;
+          let sx = 0;
+          let sy = 0;
+          if (srcRatio > targetRatio) {
+            drawW = srcH * targetRatio;
+            sx = (srcW - drawW) / 2;
+          } else if (srcRatio < targetRatio) {
+            drawH = srcW / targetRatio;
+            sy = (srcH - drawH) / 2;
+          }
+          ctx.drawImage(img, sx, sy, drawW, drawH, 0, 0, targetW, targetH);
+        } else {
+          ctx.drawImage(img, 0, 0, targetW, targetH);
+        }
+
+        // Auto-encode to clean WebP and keep byte size fast for D1 / SQLite while preserving crisp quality
+        let quality = 0.9;
+        let output = canvas.toDataURL('image/webp', quality);
+        if (!output.startsWith('data:image/webp')) {
+          output = canvas.toDataURL('image/jpeg', 0.88);
+        } else {
+          while (output.length > 950_000 && quality > 0.56) {
+            quality = Number((quality - 0.08).toFixed(2));
+            output = canvas.toDataURL('image/webp', quality);
+          }
+        }
+        onProgress?.(60, 'Uploading optimized banner...');
+        resolve({
+          dataUrl: output,
+          width: targetW,
+          height: targetH,
+          originalSizeBytes: file.size,
+        });
+      };
+      img.onerror = () => reject(new Error('Failed to decode selected image file.'));
+      img.src = rawDataUrl;
+    };
+    reader.onerror = () => reject(new Error('Failed to read selected image file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export async function adminUploadMediaAsset(
+  dataUrl: string,
+  onProgress?: (percent: number) => void
+): Promise<{
   id: string;
   url: string;
   mimeType: string;
   byteSize: number;
 }> {
+  if (typeof XMLHttpRequest !== 'undefined' && onProgress) {
+    const res = await new Promise<{
+      ok: true;
+      id: string;
+      url: string;
+      mimeType: string;
+      byteSize: number;
+    }>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', apiUrl('/api/admin/media/upload'), true);
+      xhr.withCredentials = true;
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('Accept', 'application/json');
+      xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable && evt.total > 0) {
+          const pct = Math.min(96, Math.round(60 + (evt.loaded / evt.total) * 36));
+          onProgress(pct);
+        }
+      };
+      xhr.onload = () => {
+        try {
+          const parsed = JSON.parse(xhr.responseText || '{}') as {
+            ok?: boolean;
+            id?: string;
+            url?: string;
+            mimeType?: string;
+            byteSize?: number;
+            error?: string;
+          };
+          if (xhr.status >= 200 && xhr.status < 300 && parsed.ok && parsed.id && parsed.url) {
+            onProgress(100);
+            resolve({
+              ok: true,
+              id: parsed.id,
+              url: parsed.url,
+              mimeType: parsed.mimeType || 'image/webp',
+              byteSize: Number(parsed.byteSize || 0),
+            });
+          } else {
+            reject(new Error(parsed.error || `Upload failed (${xhr.status})`));
+          }
+        } catch {
+          reject(new Error(`Upload failed (${xhr.status})`));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Network error during media upload.'));
+      xhr.send(JSON.stringify({ dataUrl }));
+    });
+    notifyDashboardInvalidation();
+    return {
+      id: res.id,
+      url: res.url,
+      mimeType: res.mimeType,
+      byteSize: res.byteSize,
+    };
+  }
+
   const res = await apiJson<{
     ok: true;
     id: string;

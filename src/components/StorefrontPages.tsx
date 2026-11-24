@@ -145,11 +145,16 @@ export function ProductCard({
           <button
             type="button"
             onClick={() => onSelect(product)}
-            className="text-xs sm:text-sm font-bold text-[#172033] hover:text-[#FF8500] line-clamp-2 leading-snug"
+            className="text-xs sm:text-sm font-bold text-[#172033] dark:text-slate-100 hover:text-[#FF8500] line-clamp-2 leading-snug"
           >
             {title}
           </button>
-          <p className="text-[11px] text-[#777777] mt-0.5 truncate">
+          {(lang === 'bn' ? product.descriptionBn : product.descriptionEn) && (
+            <p className="text-[11px] text-[#5C6B84] dark:text-slate-400 mt-0.5 line-clamp-1">
+              {lang === 'bn' ? product.descriptionBn : product.descriptionEn}
+            </p>
+          )}
+          <p className="text-[11px] text-[#777777] dark:text-slate-400 mt-0.5 truncate">
             {durationLabel || delivery}
             {' · '}
             <span
